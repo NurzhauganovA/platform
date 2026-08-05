@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from pydantic import BaseModel, Field
 
 
@@ -62,9 +64,17 @@ class FileVerdict(BaseModel):
 
     relative_path: str
     supported: bool
+
     known: bool = False
-    """Файл с таким содержимым уже разбирали. Загружать его повторно не нужно,
-    и платить за разбор — тем более."""
+    """Файл с таким содержимым уже загружен **этой организацией**.
+
+    Проверка идёт по своим файлам, а не по всем: иначе достаточно заявить
+    чужой хэш, получить в ответ «загружать не нужно» — и чужой документ
+    оказался бы прикреплён к своей закупке."""
+
+    analysis_cached: bool = False
+    """Разбор такого содержимого уже оплачен. Загрузить файл всё равно надо,
+    но денег он не будет стоить — это видно в оценке до запуска."""
 
     reason: str = ""
 
@@ -82,6 +92,21 @@ class UploadPlan(BaseModel):
     upload_bytes: int
     skipped_known: int
     skipped_unsupported: int
+
+    already_analyzed: int = 0
+    """Сколько из загружаемых файлов не потребуют платного разбора."""
+
+
+class UploadedFileOut(BaseModel):
+    """Принятый файл."""
+
+    id: uuid.UUID
+    sha256: str
+    size_bytes: int
+    relative_path: str
+
+    deduplicated: bool = False
+    """Содержимое уже лежало в хранилище — на диске оно осталось одно."""
 
 
 class ModuleHealth(BaseModel):

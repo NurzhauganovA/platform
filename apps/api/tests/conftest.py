@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -16,6 +17,7 @@ from fastapi.testclient import TestClient
 from platform_api.app import create_app
 from platform_api.config import Settings
 from platform_api.db.base import Base
+from platform_api.db.models import Membership, Organization, Role, User
 from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session as DbSession
@@ -117,6 +119,33 @@ def app_client(app: FastAPI) -> Iterator[TestClient]:
 @pytest.fixture
 def client(app_client: TestClient) -> TestClient:
     return app_client
+
+
+def sign_in(db: DbSession, client: TestClient, role: Role = Role.ANALYST) -> Organization:
+    """Заводит человека с ролью и кладёт его сессию в куки клиента."""
+    from platform_api.auth import passwords
+    from platform_api.auth.service import open_session
+
+    org = Organization(name="Fintend", slug=f"fintend-{uuid.uuid4().hex[:6]}")
+    user = User(
+        email=f"{uuid.uuid4().hex[:8]}@fintend.kz",
+        password_hash=passwords.hash_password("закупки-2026-каратау"),
+    )
+    db.add_all([org, user])
+    db.flush()
+    db.add(Membership(user_id=user.id, organization_id=org.id, role=role))
+    db.flush()
+
+    _, token = open_session(db, user, org, ttl_hours=12)
+    db.commit()
+    client.cookies.set(Settings().auth.session_cookie, token)
+    return org
+
+
+@pytest.fixture
+def signed_in(db: DbSession, app_client: TestClient) -> Organization:
+    """Клиент с сессией тендерщика — самая частая роль в тестах."""
+    return sign_in(db, app_client)
 
 
 @pytest.fixture

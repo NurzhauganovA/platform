@@ -47,31 +47,8 @@ def test_formats_tell_what_will_be_read(client: TestClient) -> None:
     assert formats[".zip"]["is_container"] is True
 
 
-def test_known_files_are_not_uploaded_again(
-    client: TestClient, offline_core: dict[str, Any]
-) -> None:
-    """Ради этого план и считается.
-
-    Файл с уже разобранным содержимым не нужно ни передавать, ни разбирать:
-    за него заплачено в прошлый раз.
-    """
-    old = _probe("КП Примеро.pdf", size=997_536)
-    new = _probe("новое КП.pdf", size=12_345)
-    offline_core["known"].add(old["sha256"])
-
-    plan = client.post("/api/tender/upload-plan", json=[old, new]).json()
-
-    assert plan["total"] == 2
-    assert plan["to_upload"] == 1
-    assert plan["skipped_known"] == 1
-    assert plan["upload_bytes"] == 12_345
-    verdicts = {item["relative_path"]: item for item in plan["files"]}
-    assert verdicts["КП Примеро.pdf"]["known"] is True
-    assert verdicts["новое КП.pdf"]["known"] is False
-
-
 def test_unreadable_formats_are_filtered_out(
-    client: TestClient, offline_core: dict[str, Any]
+    client: TestClient, signed_in: object, offline_core: dict[str, Any]
 ) -> None:
     """В тендерных папках лежат и видео, и служебный мусор macOS."""
     plan = client.post(
@@ -85,7 +62,9 @@ def test_unreadable_formats_are_filtered_out(
     assert plan["upload_bytes"] == 1024
 
 
-def test_subfolders_survive_the_plan(client: TestClient, offline_core: dict[str, Any]) -> None:
+def test_subfolders_survive_the_plan(
+    client: TestClient, signed_in: object, offline_core: dict[str, Any]
+) -> None:
     """«обновленные кп» — отдельная папка внутри закупки, и это важно.
 
     Структура каталога определяет состав закупок, и если сложить всё в одну
@@ -101,7 +80,9 @@ def test_subfolders_survive_the_plan(client: TestClient, offline_core: dict[str,
     assert plan["to_upload"] == 2
 
 
-def test_empty_plan_is_not_an_error(client: TestClient, offline_core: dict[str, Any]) -> None:
+def test_empty_plan_is_not_an_error(
+    client: TestClient, signed_in: object, offline_core: dict[str, Any]
+) -> None:
     """Выбрали пустую папку — это ответ, а не пятисотка."""
     plan = client.post("/api/tender/upload-plan", json=[]).json()
 
@@ -112,10 +93,11 @@ def test_empty_plan_is_not_an_error(client: TestClient, offline_core: dict[str, 
         "upload_bytes": 0,
         "skipped_known": 0,
         "skipped_unsupported": 0,
+        "already_analyzed": 0,
     }
 
 
-def test_broken_hash_is_refused(client: TestClient) -> None:
+def test_broken_hash_is_refused(client: TestClient, signed_in: object) -> None:
     """Хэш считает браузер, и присланному значению верить нельзя."""
     response = client.post(
         "/api/tender/upload-plan",

@@ -14,12 +14,15 @@ from typing import Any
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from redis import Redis
 
 from platform_api.auth.router import router as auth_router
 from platform_api.config import Settings, get_settings
 from platform_api.db.session import create_db_engine, create_session_factory
+from platform_api.jobs.router import router as jobs_router
 from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
+from platform_api.storage import FileStorage
 
 logger = get_logger(__name__)
 
@@ -46,6 +49,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     engine = create_db_engine(settings.db)
     session_factory = create_session_factory(engine)
+    storage = FileStorage(settings.storage.root, int(settings.storage.max_upload_mb * 1024 * 1024))
+    redis = Redis.from_url(settings.redis.url)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -56,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         yield
         app.state.engine.dispose()
+        app.state.redis.close()
         logger.info("Платформа остановлена")
 
     app = FastAPI(
@@ -114,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
 
     api.include_router(auth_router)
+    api.include_router(jobs_router)
     for module in registry.all():
         api.include_router(module.router)
 
@@ -122,4 +129,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
+    app.state.storage = storage
+    app.state.redis = redis
     return app
