@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* Токены оформления.
+ *
+ * Значения не подбирались на глаз: палитра проверена на различимость при
+ * дальтонизме и на контраст с поверхностью, в обеих темах. Тёмная — не
+ * автоматическая инверсия светлой, а свои шаги тех же оттенков.
+ *
+ * Всё в интерфейсе ссылается на роли, а не на конкретный цвет. Из-за этого
+ * смена темы — одно место, а не поиск по файлам.
+ */
+
+@theme {
+  /* Поверхности и чернила */
+  --color-surface: #fcfcfb;
+  --color-plane: #f9f9f7;
+  --color-ink: #0b0b0b;
+  --color-ink-secondary: #52514e;
+  --color-ink-muted: #898781;
+  --color-hairline: #e1e0d9;
+  --color-baseline: #c3c2b7;
+
+  /* Ряды данных. Порядок — механизм различимости, а не украшение:
+   * соседние слоты проверены на различимость при дальтонизме. */
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+  --color-series-5: #e87ba4;
+
+  /* Состояния. Никогда не используются как цвет ряда и всегда идут
+   * со значком и подписью: цвет сам по себе смысла не несёт. */
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+
+  /* Шкала величины — один оттенок, светлый к тёмному. */
+  --color-scale-100: #cde2fb;
+  --color-scale-250: #86b6ef;
+  --color-scale-400: #3987e5;
+  --color-scale-550: #1c5cab;
+  --color-scale-700: #0d366b;
+
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", monospace;
+
+  --radius-card: 10px;
+  --radius-control: 8px;
+}
+
+/* Тёмная тема: те же оттенки, пересчитанные под тёмную поверхность.
+ * Объявлена дважды — под системную настройку и под переключатель, причём
+ * переключатель должен побеждать в обе стороны. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --color-surface: #1a1a19;
+    --color-plane: #0d0d0d;
+    --color-ink: #ffffff;
+    --color-ink-secondary: #c3c2b7;
+    --color-ink-muted: #898781;
+    --color-hairline: #2c2c2a;
+    --color-baseline: #383835;
+    --color-series-1: #3987e5;
+    --color-series-2: #d95926;
+    --color-series-3: #199e70;
+    --color-series-4: #c98500;
+    --color-series-5: #d55181;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-surface: #1a1a19;
+  --color-plane: #0d0d0d;
+  --color-ink: #ffffff;
+  --color-ink-secondary: #c3c2b7;
+  --color-ink-muted: #898781;
+  --color-hairline: #2c2c2a;
+  --color-baseline: #383835;
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
+}
+
+@layer base {
+  html {
+    background: var(--color-plane);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    /* Числа в таблицах цен должны стоять столбиком: у пропорциональных цифр
+     * единица уже семёрки, и колонка сумм разъезжается. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+  }
+
+  /* Видимая рамка фокуса. Убирать её нельзя: по ней работают с клавиатуры,
+   * а в тендерном отделе это половина ввода данных. */
+  :focus-visible {
+    outline: 2px solid var(--color-series-1);
+    outline-offset: 2px;
+  }
+}

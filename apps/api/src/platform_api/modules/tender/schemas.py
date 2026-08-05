@@ -109,6 +109,14 @@ class UploadedFileOut(BaseModel):
     """Содержимое уже лежало в хранилище — на диске оно осталось одно."""
 
 
+class FileLookupOut(BaseModel):
+    """Уже загруженный файл, найденный по содержимому."""
+
+    id: uuid.UUID
+    sha256: str
+    size_bytes: int
+
+
 class EstimateIn(BaseModel):
     """Что оценивать."""
 

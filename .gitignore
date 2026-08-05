@@ -29,3 +29,7 @@ storage/
 
 # Alembic пишет сюда кэш
 apps/api/migrations/__pycache__/
+
+# Playwright
+apps/web/test-results/
+apps/web/playwright-report/

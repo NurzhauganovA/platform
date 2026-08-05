@@ -18,6 +18,7 @@ from platform_api.modules.tender.health import check as check_health
 from platform_api.modules.tender.schemas import (
     CompanyOut,
     EstimateIn,
+    FileLookupOut,
     FileProbe,
     FileVerdict,
     FormatOut,
@@ -164,6 +165,30 @@ def plan_upload(
         skipped_unsupported=sum(1 for item in verdicts if not item.supported),
         already_analyzed=sum(1 for item in verdicts if item.analysis_cached),
     )
+
+
+@router.post("/files/lookup", summary="Найти свои файлы по содержимому")
+def lookup_files(
+    hashes: list[str],
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_sourcing] = None,
+) -> list[FileLookupOut]:
+    """Отдаёт идентификаторы уже загруженных файлов.
+
+    Без этого экономия плана теряется на самом главном шаге: браузер знает,
+    что файл загружать не надо, но чтобы приложить его к закупке, ему нужен
+    идентификатор — и он передавал бы содержимое повторно только ради него.
+
+    Ищет строго среди своих: чужой хэш не должен возвращать чужой файл.
+    """
+    rows = db.scalars(
+        select(StoredFile).where(
+            StoredFile.organization_id == identity.organization.id,
+            StoredFile.sha256.in_([item.lower() for item in hashes]),
+        )
+    )
+    return [FileLookupOut(id=row.id, sha256=row.sha256, size_bytes=row.size_bytes) for row in rows]
 
 
 @router.post("/files", summary="Загрузить файл", status_code=status.HTTP_201_CREATED)

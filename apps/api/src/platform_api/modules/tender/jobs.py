@@ -183,6 +183,13 @@ def analyze_case(ctx: JobContext, *, case_id: str, force: bool = False, **_: Any
             IngestOptions(workers=settings.workers, force_analyze=force),
             progress,
         )
+    except Exception:
+        # Разбор не удался — закупка возвращается в «готова». Иначе она
+        # навсегда остаётся «разбирается»: человек ждёт результата, которого
+        # не будет, и не видит, что прогон надо повторить.
+        case.status = CaseStatus.READY
+        ctx.db.commit()
+        raise
     finally:
         container.dispose()
 
