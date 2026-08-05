@@ -12,7 +12,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { tender } from "@/api/tender";
-import { Badge, Card, EmptyState, Spinner, StatTile, cx, money } from "@/ui";
+import { Badge, Card, Collapsible, EmptyState, Spinner, StatTile, cx, money } from "@/ui";
+import { SplitBanner } from "./SplitBanner";
 
 export function Comparison({ caseId }: { caseId: string }) {
   const { data, isLoading } = useQuery({
@@ -38,6 +39,27 @@ export function Comparison({ caseId }: { caseId: string }) {
           description="Запустите разбор — после него предложения поставщиков сведутся по позициям и станет видно, чья цена лучше."
         />
       </Card>
+    );
+  }
+
+  // Позиций нет — человек должен понять почему, а не смотреть на пустоту.
+  // Чаще всего причина одна из двух: в папке несколько разных закупок или
+  // поставщики ещё не прислали предложений.
+  if (!data.positions.length) {
+    return (
+      <div className="space-y-4">
+        <SplitBanner caseId={caseId} />
+        <Card>
+          <EmptyState
+            title="Сравнивать пока нечего"
+            description={
+              data.offers === 0
+                ? "В закупке нет коммерческих предложений — только документы заказчика. Сравнение появится, когда поставщики пришлют цены."
+                : "Предложения есть, но их позиции не сошлись по названиям. Откройте документы и проверьте состав."
+            }
+          />
+        </Card>
+      </div>
     );
   }
 
@@ -188,14 +210,14 @@ export function Comparison({ caseId }: { caseId: string }) {
       </Card>
 
       {data.risks.length > 0 && (
-        <Card title="Риски">
-          <ul className="space-y-1.5 px-5 py-4">
+        <Card title="На что обратить внимание">
+          <ul className="divide-y divide-hairline">
             {data.risks.map((risk) => (
-              <li key={risk} className="flex gap-2 text-sm text-ink-secondary">
-                <span aria-hidden className="shrink-0 text-warning">
+              <li key={risk} className="flex gap-2.5 px-5 py-2.5">
+                <span aria-hidden className="mt-0.5 shrink-0 text-warning">
                   ▲
                 </span>
-                <span>{risk}</span>
+                <span className="text-sm text-ink">{risk}</span>
               </li>
             ))}
           </ul>
@@ -203,15 +225,19 @@ export function Comparison({ caseId }: { caseId: string }) {
       )}
 
       {data.requirements.length > 0 && (
-        <Card title={`Требования технического задания (${data.requirements.length})`}>
-          <ul className="max-h-80 space-y-1 overflow-y-auto px-5 py-4">
+        <Collapsible
+          title="Что требует заказчик"
+          count={data.requirements.length}
+          hint="Эти пункты попадут в наше КП как подтверждение соответствия"
+        >
+          <ul className="divide-y divide-hairline">
             {data.requirements.map((item) => (
-              <li key={item} className="text-sm text-ink-secondary">
+              <li key={item} className="px-5 py-2 text-sm text-ink-secondary">
                 {item}
               </li>
             ))}
           </ul>
-        </Card>
+        </Collapsible>
       )}
     </div>
   );

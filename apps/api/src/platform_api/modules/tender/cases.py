@@ -452,4 +452,134 @@ def _queue(
     return job.id
 
 
+class ProposedCaseOut(BaseModel):
+    """Закупка, которую предлагается выделить из папки."""
+
+    title: str
+    subject: str
+    customer: str = ""
+    files: list[str] = []
+    anchors: int = 0
+    offers: int = 0
+
+
+class SplitPlanOut(BaseModel):
+    """Что получится, если разделить папку."""
+
+    can_split: bool
+    cases: list[ProposedCaseOut] = []
+    reason: str = ""
+
+
+@router.get("/{case_id}/split", summary="Предложение разделить папку")
+def preview_split(
+    case_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_sourcing] = None,
+) -> SplitPlanOut:
+    """Смотрит, не лежат ли в папке несколько разных закупок.
+
+    В одной папке тендерщика бывает три десятка маркетинговых заключений —
+    бензин, седельный тягач, ошейник для КРС. Пока они считаются одной
+    закупкой, сравнивать нечего, и человек видит ноль позиций там, где на
+    самом деле два десятка отдельных дел.
+    """
+    from platform_api.modules.tender.core import build_case_view
+    from platform_api.modules.tender.split import propose_split
+
+    case = _require_case(db, case_id, identity)
+    view = build_case_view(case)
+    if view is None:
+        return SplitPlanOut(can_split=False, reason="Закупка ещё не разобрана")
+
+    groups = propose_split(view)
+    if not groups:
+        return SplitPlanOut(can_split=False, reason="В папке одна закупка")
+
+    return SplitPlanOut(
+        can_split=True,
+        cases=[
+            ProposedCaseOut(
+                title=group.title,
+                subject=group.subject,
+                customer=group.customer,
+                files=group.files,
+                anchors=group.anchors,
+                offers=group.offers,
+            )
+            for group in groups
+        ],
+    )
+
+
+@router.post("/{case_id}/split", summary="Разделить папку на закупки")
+def apply_split(
+    case_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_sourcing] = None,
+) -> list[CaseOut]:
+    """Создаёт по закупке на каждый предмет.
+
+    Файлы не копируются: содержимое лежит в хранилище по хэшу, а закупка
+    ссылается на него. Исходная папка уходит в архив, но не удаляется — по ней
+    видно, откуда всё взялось, и разделение можно перепроверить.
+    """
+    from platform_api.modules.tender.core import build_case_view
+    from platform_api.modules.tender.split import propose_split
+
+    case = _require_case(db, case_id, identity)
+    view = build_case_view(case)
+    if view is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Закупка ещё не разобрана"
+        )
+
+    groups = propose_split(view)
+    if not groups:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="В папке одна закупка")
+
+    by_path = {item.relative_path: item for item in case.files}
+    created: list[TenderCaseRow] = []
+
+    for group in groups:
+        child = TenderCaseRow(
+            organization_id=identity.organization.id,
+            created_by_id=identity.user.id,
+            title=group.title[:512],
+            customer=(group.customer or case.customer)[:512],
+            subject=group.subject,
+            status=CaseStatus.READY,
+            note=f"Выделена из «{case.title}»",
+        )
+        db.add(child)
+        db.flush()
+
+        for path in group.files:
+            source = by_path.get(path)
+            if source is None:
+                continue
+            db.add(
+                CaseFileRow(
+                    case_id=child.id,
+                    file_id=source.file_id,
+                    # Внутри своей закупки файл лежит под своим именем: путь
+                    # исходной папки к новой закупке отношения не имеет.
+                    relative_path=path.rsplit("/", 1)[-1],
+                    sha256=source.sha256,
+                    size_bytes=source.size_bytes,
+                )
+            )
+        created.append(child)
+
+    case.status = CaseStatus.ARCHIVED
+    case.note = f"Разделена на {len(created)} закупок"
+    db.flush()
+
+    logger.info("Папка разделена", case_id=str(case.id), created=len(created))
+    return [_to_out(item) for item in created]
+
+
 __all__ = ["router"]

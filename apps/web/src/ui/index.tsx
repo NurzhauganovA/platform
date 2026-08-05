@@ -184,6 +184,43 @@ export function StatTile({
   );
 }
 
+/**
+ * Раздел, свёрнутый по умолчанию.
+ *
+ * Для того, что нужно изредка и целиком: пятьдесят семь требований
+ * технического задания читают один раз при подготовке КП, а на экране они
+ * заслоняют то, ради чего человек сюда пришёл, — цены.
+ */
+export function Collapsible({
+  title,
+  count,
+  hint,
+  children,
+}: {
+  title: string;
+  count?: number;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="group rounded-[10px] border border-hairline bg-surface">
+      <summary className="flex cursor-pointer items-center justify-between gap-3 px-5 py-3 text-sm">
+        <span className="font-semibold text-ink">
+          {title}
+          {count != null && <span className="ml-1.5 font-normal text-ink-muted">{count}</span>}
+        </span>
+        <span className="flex items-center gap-2">
+          {hint && <span className="hidden text-xs text-ink-muted sm:inline">{hint}</span>}
+          <span aria-hidden className="text-ink-muted transition group-open:rotate-90">
+            ›
+          </span>
+        </span>
+      </summary>
+      <div className="border-t border-hairline">{children}</div>
+    </details>
+  );
+}
+
 export function EmptyState({
   title,
   description,

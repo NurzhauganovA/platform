@@ -196,6 +196,20 @@ export const tender = {
     api.post<CaseDetail>(`/api/tender/cases/${id}/files`, files),
   analyze: (id: string, force = false) =>
     api.post<{ job_id: string }>(`/api/tender/cases/${id}/analyze?force=${force}`),
+  splitPreview: (id: string) =>
+    api.get<{
+      can_split: boolean;
+      reason: string;
+      cases: {
+        title: string;
+        subject: string;
+        customer: string;
+        files: string[];
+        anchors: number;
+        offers: number;
+      }[];
+    }>(`/api/tender/cases/${id}/split`),
+  split: (id: string) => api.post<TenderCase[]>(`/api/tender/cases/${id}/split`),
   sourcing: (id: string, force = false) =>
     api.post<{ job_id: string }>(`/api/tender/cases/${id}/sourcing?force=${force}`),
   offer: (id: string, payload: { companies: string[]; number: string | null }) =>
