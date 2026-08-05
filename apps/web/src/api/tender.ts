@@ -196,6 +196,10 @@ export const tender = {
     api.post<CaseDetail>(`/api/tender/cases/${id}/files`, files),
   analyze: (id: string, force = false) =>
     api.post<{ job_id: string }>(`/api/tender/cases/${id}/analyze?force=${force}`),
+  decide: (id: string, withMarket = false) =>
+    api.post<{ job_id: string }>(
+      `/api/tender/cases/${id}/decide?with_market=${withMarket}`,
+    ),
 
   uploadPlan: (probes: FileProbe[]) => api.post<UploadPlan>("/api/tender/upload-plan", probes),
   lookupFiles: (hashes: string[]) =>

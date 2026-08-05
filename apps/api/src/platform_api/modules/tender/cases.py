@@ -249,4 +249,45 @@ def start_analysis(
     return {"job_id": job.id}
 
 
+@router.post("/{case_id}/decide", summary="Решить по закупке", status_code=status.HTTP_202_ACCEPTED)
+def start_decision(
+    case_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    with_market: bool = False,
+    force: bool = False,
+    _guard: Annotated[None, requires_money] = None,
+) -> dict[str, uuid.UUID]:
+    """Ставит в очередь решение: участвовать ли и по какой цене.
+
+    Платная команда и отдельная от разбора: разбор отвечает, что написано в
+    бумагах, решение — что нам с этим делать. Повторный запуск по неизменной
+    закупке денег не стоит, ядро отдаёт прежний вывод из кэша.
+
+    `with_market` включает поиск на рынках: он оплачивается отдельно от токенов
+    и заметно меняет итог, поэтому по умолчанию выключен.
+    """
+    case = _require_case(db, case_id, identity)
+    if case.status not in (CaseStatus.ANALYZED, CaseStatus.ANALYZING):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Сначала разберите документы закупки",
+        )
+
+    settings: Settings = request.app.state.settings
+    service = JobService(db, request.app.state.redis)
+    job = service.create(
+        organization_id=identity.organization.id,
+        created_by_id=identity.user.id,
+        module="tender",
+        kind="decide",
+        params={"case_id": str(case.id), "with_market": with_market, "force": force},
+        total=1,
+    )
+    db.commit()
+    enqueue_sync(settings, job.id)
+    return {"job_id": job.id}
+
+
 __all__ = ["router"]

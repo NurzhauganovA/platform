@@ -207,9 +207,78 @@ def analyze_case(ctx: JobContext, *, case_id: str, force: bool = False, **_: Any
     }
 
 
+def decide_case(
+    ctx: JobContext,
+    *,
+    case_id: str,
+    with_market: bool = False,
+    force: bool = False,
+    **_: Any,
+) -> dict[str, Any]:
+    """Решение по закупке: участвовать ли и по какой цене.
+
+    Отдельно от разбора документов, и это не дробление ради дробления. Разбор
+    отвечает на вопрос «что написано в бумагах», решение — «что нам с этим
+    делать». Первый идёт по каждому документу и на дешёвой модели, второе одно
+    на закупку, но именно оно про деньги — и модель там сильнее.
+
+    Повторный запуск по той же закупке бесплатен: состав не менялся, значит и
+    вывод прежний, ядро отдаёт его из кэша.
+    """
+    from tender_analyze.application.case_analysis import CaseAnalysisOptions, CaseAnalysisService
+    from tender_analyze.application.container import Container
+
+    from platform_api.modules.tender.core import build_case_view, core_settings
+    from platform_api.modules.tender.models import TenderCaseRow
+
+    case = ctx.db.get(TenderCaseRow, uuid.UUID(case_id))
+    if case is None or case.organization_id != ctx.organization_id:
+        raise LookupError(f"Закупки {case_id} нет")
+
+    view = build_case_view(case)
+    if view is None:
+        # Документы ещё не разобраны — решать не по чему. Сказать это прямо
+        # честнее, чем спросить модель наугад за деньги.
+        return {"decided": 0, "reason": "Закупка не разобрана", "cost_usd": 0.0}
+
+    ctx.advance(0, total=1, note="спрашиваем модель")
+
+    settings = core_settings()
+    container = Container(settings)
+    try:
+        service = CaseAnalysisService(
+            uow=container.unit_of_work(ctx.workspace.path_for(case.id, case.title)),
+            analyzer=container.case_analyzer(),
+            analysis_settings=settings.analysis,
+            llm_settings=settings.llm,
+        )
+        analyzed, report = service.run(
+            [view.case],
+            CaseAnalysisOptions(with_market=with_market, force=force, workers=1),
+            lambda folder, status_text: ctx.advance(1, note=f"{folder} — {status_text}"),
+        )
+    finally:
+        container.dispose()
+
+    decision = analyzed[0].analysis if analyzed else None
+    return {
+        "decided": report.analyzed,
+        "cached": report.cached,
+        "failed": report.failed,
+        "recommendation": _plain(decision.recommendation) if decision else None,
+        "recommended_bid": decision.recommended_bid if decision else None,
+        "expected_margin_percent": decision.expected_margin_percent if decision else None,
+    }
+
+
+def _plain(value: Any) -> str | None:
+    return str(getattr(value, "value", value)) if value is not None else None
+
+
 jobs = (
     JobSpec(kind="estimate", handler=estimate_cost, title="Оценка стоимости разбора"),
     JobSpec(kind="analyze", handler=analyze_case, title="Разбор закупки"),
+    JobSpec(kind="decide", handler=decide_case, title="Решение по закупке"),
 )
 
 __all__ = ["jobs"]

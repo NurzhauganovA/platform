@@ -193,3 +193,41 @@ def test_buyer_may_collect_but_not_pay(
 def test_cases_require_a_session(app_client: TestClient) -> None:
     assert app_client.get("/api/tender/cases").status_code == 401
     assert app_client.post("/api/tender/cases", json={"title": "Закупка"}).status_code == 401
+
+
+def test_decision_needs_analyzed_documents(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    """Решать по неразобранной закупке не по чему.
+
+    Спросить модель наугад — это заплатить за ответ, построенный на пустоте.
+    """
+    app.state.redis = redis
+    org = sign_in(db, app_client)
+    stored = _stored(db, org, "КП.pdf", "a" * 64)
+    db.commit()
+    case = _case(app_client)
+    app_client.post(
+        f"/api/tender/cases/{case['id']}/files",
+        json=[{"file_id": str(stored.id), "relative_path": "КП.pdf"}],
+    )
+
+    response = app_client.post(f"/api/tender/cases/{case['id']}/decide")
+
+    assert response.status_code == 400
+    assert "разберите" in response.json()["detail"].lower()
+
+
+def test_buyer_cannot_ask_for_a_decision(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    """Решение — про деньги, и запускает его тот, кто за них отвечает."""
+    from platform_api.modules.tender.models import CaseStatus, TenderCaseRow
+
+    app.state.redis = redis
+    org = sign_in(db, app_client, Role.BUYER)
+    row = TenderCaseRow(organization_id=org.id, title="Закупка", status=CaseStatus.ANALYZED)
+    db.add(row)
+    db.commit()
+
+    assert app_client.post(f"/api/tender/cases/{row.id}/decide").status_code == 403

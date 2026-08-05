@@ -37,6 +37,7 @@ function useJobStream(jobId: string | null) {
           client.invalidateQueries({ queryKey: ["case"] });
           client.invalidateQueries({ queryKey: ["cases"] });
           client.invalidateQueries({ queryKey: ["job", jobId] });
+          client.invalidateQueries({ queryKey: ["comparison"] });
         }
       }
     };
@@ -79,6 +80,14 @@ export function CasePage() {
     },
   });
 
+  const decide = useMutation({
+    mutationFn: () => tender.decide(caseId),
+    onSuccess: (started) => {
+      setJobId(started.job_id);
+      client.invalidateQueries({ queryKey: ["comparison", caseId] });
+    },
+  });
+
   if (isLoading || !item) {
     return (
       <div className="px-8 py-8">
@@ -100,11 +109,19 @@ export function CasePage() {
               <Button variant="ghost">К списку</Button>
             </Link>
             <Button
-              variant="primary"
               onClick={() => analyze.mutate()}
               disabled={running || analyze.isPending || !item.files.length}
             >
-              {running ? "Разбираем…" : "Разобрать"}
+              {running && job?.kind === "analyze" ? "Разбираем…" : "Разобрать документы"}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => decide.mutate()}
+              // Решать по неразобранной закупке не по чему: сначала
+              // документы, потом вывод.
+              disabled={running || decide.isPending || item.status !== "analyzed"}
+            >
+              {running && job?.kind === "decide" ? "Думаем…" : "Решить"}
             </Button>
           </div>
         }
