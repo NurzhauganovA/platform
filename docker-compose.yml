@@ -1,0 +1,44 @@
+# База и очередь для разработки.
+#
+# Только инфраструктура: сам API и фронтенд запускаются с машины, чтобы
+# перезагрузка кода занимала секунду, а не пересборку образа.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: fintend-postgres
+    environment:
+      POSTGRES_USER: fintend
+      POSTGRES_PASSWORD: fintend
+      POSTGRES_DB: fintend
+      # Локаль для сортировки: без неё «Ё» и «ё» встают не туда, а имена
+      # поставщиков и позиций у нас русские.
+      POSTGRES_INITDB_ARGS: "--locale=ru_RU.UTF-8 --encoding=UTF8"
+      LANG: ru_RU.UTF-8
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fintend -d fintend"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: fintend-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

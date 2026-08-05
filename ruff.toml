@@ -1,0 +1,11 @@
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "T20", "SIM", "RUF"]
+# B008 — Depends() в значении по умолчанию: это идиома FastAPI, а не ошибка.
+# RUF001-003 — кириллица в строках и комментариях: проект русскоязычный.
+ignore = ["B008", "RUF001", "RUF002", "RUF003"]
+
+[lint.per-file-ignores]
+"apps/api/tests/*" = ["S101"]

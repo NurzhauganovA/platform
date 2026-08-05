@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Environment / secrets
+.env
+.env.local
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+apps/web/dist/
+
+# macOS
+.DS_Store
+
+# Данные и выгрузки
+data/
+storage/
