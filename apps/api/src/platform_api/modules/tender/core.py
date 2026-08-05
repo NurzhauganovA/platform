@@ -12,8 +12,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from decimal import Decimal
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tender_analyze.config import CompanyDirectory, Settings
@@ -105,6 +108,84 @@ def known_hashes(hashes: Sequence[str]) -> set[str]:
         container.dispose()
 
 
+@dataclass(frozen=True, slots=True)
+class CaseView:
+    """Закупка, собранная ядром из разобранных документов."""
+
+    case: Any
+    vat_rate: Decimal
+    total_min: Decimal | None
+    total_max: Decimal | None
+
+
+def build_case_view(case_row: Any) -> CaseView | None:
+    """Собирает закупку по её каталогу — тем же кодом, что и CLI.
+
+    Ничего не считает сама: сведение цен по позициям, приведение к базе без
+    НДС и разброс живут в ядре. Второй способ сравнивать предложения разошёлся
+    бы с первым ровно на той закупке, где ошибка стоит дороже всего.
+
+    Возвращает `None`, если закупку ещё не разбирали: пустая сводка честнее
+    выдуманной.
+    """
+    from tender_analyze.application.case_analysis import case_fingerprint
+    from tender_analyze.application.cases import CaseBuilder
+    from tender_analyze.application.container import Container
+
+    settings = core_settings()
+    root = _case_root(case_row)
+    if root is None or not root.exists():
+        return None
+
+    container = Container(settings)
+    try:
+        with container.unit_of_work(root) as uow:
+            documents = [
+                item for item in uow.documents.list_analyzed(root) if item.insight is not None
+            ]
+            if not documents:
+                return None
+
+            cases = CaseBuilder(settings.analysis).build(documents)
+            if not cases:
+                return None
+            case = max(cases, key=lambda item: len(item.documents))
+
+            # Сохранённое решение подставляется сюда же: отчёт должен
+            # показывать рекомендации, за которые уже заплачено.
+            model = getattr(container.case_analyzer(), "model_name", "")
+            stored = uow.cases.get_case_analysis(case.folder, model, case_fingerprint(case))
+            if stored is not None:
+                from tender_analyze.domain.models import CaseAnalysis
+
+                payload, notes = stored
+                case = case.model_copy(update={"analysis": CaseAnalysis.model_validate(payload)})
+                del notes
+    finally:
+        container.dispose()
+
+    vat = settings.analysis.vat_rate
+    totals = [offer.total for offer in case.offers if offer.total is not None]
+    return CaseView(
+        case=case,
+        vat_rate=vat,
+        total_min=min(totals) if totals else None,
+        total_max=max(totals) if totals else None,
+    )
+
+
+def _case_root(case_row: Any) -> Path | None:
+    """Каталог закупки на диске."""
+    from platform_api.config import get_settings
+    from platform_api.modules.tender.workspace import CaseWorkspace
+    from platform_api.storage import FileStorage
+
+    settings = get_settings()
+    storage = FileStorage(settings.storage.root, int(settings.storage.max_upload_mb * 1024 * 1024))
+    workspace = CaseWorkspace(settings.storage.cases_root, storage)
+    return workspace.path_for(case_row.id, case_row.title)
+
+
 def core_version() -> str:
     """Версия подключённого ядра — чтобы в сводке было видно, что именно
     работает под платформой."""
@@ -117,6 +198,8 @@ def core_version() -> str:
 
 
 __all__ = [
+    "CaseView",
+    "build_case_view",
     "companies",
     "core_settings",
     "core_version",

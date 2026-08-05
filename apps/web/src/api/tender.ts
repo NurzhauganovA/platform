@@ -88,6 +88,58 @@ export interface Job {
   finished_at: string | null;
 }
 
+export interface Quote {
+  supplier: string | null;
+  document: string;
+  specification: string | null;
+  quantity: number | null;
+  unit: string | null;
+  unit_price: number | null;
+  total_price: number | null;
+  is_cheapest: boolean;
+}
+
+export interface Position {
+  name: string;
+  quotes: Quote[];
+  min_price: number | null;
+  max_price: number | null;
+  median_price: number | null;
+  spread_ratio: number | null;
+  supplier_count: number;
+}
+
+export interface Decision {
+  recommendation: string | null;
+  confidence: string | null;
+  summary: string;
+  comparability: string;
+  best_offer_supplier: string | null;
+  best_offer_reason: string | null;
+  estimated_cost: number | null;
+  recommended_bid: number | null;
+  expected_margin_percent: number | null;
+  margin_reasoning: string;
+  blockers: string[];
+  questions: string[];
+}
+
+export interface CaseComparison {
+  case_id: string;
+  subject: string | null;
+  customer: string | null;
+  documents: number;
+  offers: number;
+  positions: Position[];
+  requirements: string[];
+  risks: string[];
+  total_min: number | null;
+  total_max: number | null;
+  /** Отсутствует у закупщика и наблюдателя: там себестоимость и маржа. */
+  decision: Decision | null;
+  analyzed: boolean;
+}
+
 export interface Company {
   key: string;
   name: string;
@@ -137,6 +189,7 @@ export const tender = {
 
   cases: () => api.get<TenderCase[]>("/api/tender/cases"),
   case: (id: string) => api.get<CaseDetail>(`/api/tender/cases/${id}`),
+  comparison: (id: string) => api.get<CaseComparison>(`/api/tender/cases/${id}/comparison`),
   createCase: (payload: { title: string; customer?: string; subject?: string }) =>
     api.post<TenderCase>("/api/tender/cases", payload),
   attachFiles: (id: string, files: { file_id: string; relative_path: string }[]) =>

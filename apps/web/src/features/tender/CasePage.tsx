@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { jobs, tender, type Job } from "@/api/tender";
 import { PageHeader } from "@/shell/AppShell";
 import { Badge, Button, Card, Progress, Spinner, StatTile, bytes, cx } from "@/ui";
+import { Comparison } from "./Comparison";
 
 /** Подписка на живой прогресс задачи. */
 function useJobStream(jobId: string | null) {
@@ -46,9 +47,12 @@ function useJobStream(jobId: string | null) {
   return job;
 }
 
+type Tab = "comparison" | "documents";
+
 export function CasePage() {
   const { caseId = "" } = useParams();
   const [jobId, setJobId] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("comparison");
   const client = useQueryClient();
 
   const { data: item, isLoading } = useQuery({
@@ -180,6 +184,31 @@ export function CasePage() {
           </Card>
         )}
 
+        <div className="flex gap-1 border-b border-hairline">
+          {(
+            [
+              ["comparison", "Сравнение предложений"],
+              ["documents", `Документы (${item.files.length})`],
+            ] as [Tab, string][]
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cx(
+                "-mb-px border-b-2 px-3 py-2 text-sm transition",
+                tab === key
+                  ? "border-series-1 font-medium text-series-1"
+                  : "border-transparent text-ink-secondary hover:text-ink",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "comparison" && <Comparison caseId={caseId} />}
+
+        {tab === "documents" && (
         <Card title={`Документы (${item.files.length})`}>
           <ul className="divide-y divide-hairline">
             {item.files.map((file) => (
@@ -206,6 +235,7 @@ export function CasePage() {
             ))}
           </ul>
         </Card>
+        )}
       </div>
     </>
   );
