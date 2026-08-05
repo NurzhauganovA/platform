@@ -26,3 +26,6 @@ apps/web/dist/
 # Данные и выгрузки
 data/
 storage/
+
+# Alembic пишет сюда кэш
+apps/api/migrations/__pycache__/

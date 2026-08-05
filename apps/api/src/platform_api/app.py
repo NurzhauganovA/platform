@@ -15,7 +15,9 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from platform_api.auth.router import router as auth_router
 from platform_api.config import Settings, get_settings
+from platform_api.db.session import create_db_engine, create_session_factory
 from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
 
@@ -42,14 +44,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings.log_level, settings.log_format)
     registry = ModuleRegistry(discover_modules())
 
+    engine = create_db_engine(settings.db)
+    session_factory = create_session_factory(engine)
+
     @asynccontextmanager
-    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info(
             "Платформа запущена",
             environment=settings.environment,
             modules=[module.slug for module in registry.all()],
         )
         yield
+        app.state.engine.dispose()
         logger.info("Платформа остановлена")
 
     app = FastAPI(
@@ -107,10 +113,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for module in registry.all()
         ]
 
+    api.include_router(auth_router)
     for module in registry.all():
         api.include_router(module.router)
 
     app.include_router(api)
     app.state.modules = registry
     app.state.settings = settings
+    app.state.engine = engine
+    app.state.session_factory = session_factory
     return app

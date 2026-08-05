@@ -11,10 +11,16 @@ services:
       POSTGRES_USER: fintend
       POSTGRES_PASSWORD: fintend
       POSTGRES_DB: fintend
-      # Локаль для сортировки: без неё «Ё» и «ё» встают не туда, а имена
-      # поставщиков и позиций у нас русские.
-      POSTGRES_INITDB_ARGS: "--locale=ru_RU.UTF-8 --encoding=UTF8"
-      LANG: ru_RU.UTF-8
+      # Сортировка через ICU, а не через libc: базовый образ на musl, и
+      # заявленная ему русская локаль молча превращается в побайтовую.
+      # Проверяется это мгновенно — поставщик «Ёлка» встаёт выше «АСМастер»,
+      # а «ёлка» уезжает в самый конец списка. Имена поставщиков и позиций у
+      # нас русские, и такой список человек читать не станет.
+      POSTGRES_INITDB_ARGS: >-
+        --encoding=UTF8
+        --locale-provider=icu
+        --icu-locale=ru-KZ
+        --locale=C.UTF-8
     ports:
       - "5432:5432"
     volumes:
