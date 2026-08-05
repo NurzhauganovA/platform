@@ -22,6 +22,7 @@ from platform_api.db.session import create_db_engine, create_session_factory
 from platform_api.jobs.router import router as jobs_router
 from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
+from platform_api.modules.tender.workspace import CaseWorkspace
 from platform_api.storage import FileStorage
 
 logger = get_logger(__name__)
@@ -51,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     session_factory = create_session_factory(engine)
     storage = FileStorage(settings.storage.root, int(settings.storage.max_upload_mb * 1024 * 1024))
     redis = Redis.from_url(settings.redis.url)
+    workspace = CaseWorkspace(settings.storage.cases_root, storage)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -131,4 +133,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = session_factory
     app.state.storage = storage
     app.state.redis = redis
+    app.state.workspace = workspace
     return app

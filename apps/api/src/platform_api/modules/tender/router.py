@@ -13,6 +13,7 @@ from platform_api.db.models import StoredFile
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.modules.tender import core
+from platform_api.modules.tender.cases import router as cases_router
 from platform_api.modules.tender.health import check as check_health
 from platform_api.modules.tender.schemas import (
     CompanyOut,
@@ -28,6 +29,7 @@ from platform_api.modules.tender.schemas import (
 from platform_api.storage import ChecksumMismatchError, FileStorage, FileTooLargeError
 
 router = APIRouter(prefix="/tender", tags=["Тендеры"])
+router.include_router(cases_router)
 
 
 @router.get("/health", summary="Готовность модуля к разбору")

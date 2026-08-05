@@ -43,6 +43,7 @@ class RunContext:
     user_id: uuid.UUID | None
     db: DbSession
     storage: FileStorage
+    workspace: Any
     service: JobService = field(repr=False)
 
     def advance(self, done: int, *, total: int | None = None, note: str = "") -> None:
@@ -72,11 +73,13 @@ class JobRunner:
         redis: Any,
         storage: FileStorage,
         handlers: dict[tuple[str, str], JobSpec],
+        workspace: Any = None,
     ) -> None:
         self._session_factory = session_factory
         self._redis = redis
         self._storage = storage
         self._handlers = handlers
+        self._workspace = workspace
 
     def run(self, job_id: uuid.UUID) -> None:
         """Выполняет задачу целиком. Исключения наружу не выпускает.
@@ -107,6 +110,7 @@ class JobRunner:
                 user_id=job.created_by_id,
                 db=session,
                 storage=self._storage,
+                workspace=self._workspace,
                 service=service,
             )
 

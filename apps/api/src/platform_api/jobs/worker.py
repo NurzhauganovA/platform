@@ -77,7 +77,15 @@ async def startup(ctx: dict[str, Any]) -> None:
 
     ctx["engine"] = engine
     ctx["redis"] = redis
-    ctx["runner"] = JobRunner(session_factory, redis, storage, collect_handlers(registry))
+    from platform_api.modules.tender.workspace import CaseWorkspace
+
+    ctx["runner"] = JobRunner(
+        session_factory,
+        redis,
+        storage,
+        collect_handlers(registry),
+        CaseWorkspace(settings.storage.cases_root, storage),
+    )
 
     # Задачи, оставшиеся в «выполняется» от убитого исполнителя, подбираются
     # здесь: иначе они висят в списке как живые, и человек ждёт результата,

@@ -40,6 +40,9 @@ class JobContext(Protocol):
 
     db: DbSession
     storage: FileStorage
+    workspace: Any
+    """Каталоги закупок. Тип не уточняется намеренно: устройство рабочего
+    каталога — дело модуля, а каркас только передаёт его обработчику."""
 
     def advance(self, done: int, *, total: int | None = None, note: str = "") -> None:
         """Двигает прогресс и проверяет, не отменили ли задачу.

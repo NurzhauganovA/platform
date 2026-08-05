@@ -13,6 +13,7 @@ from alembic import context
 from platform_api.config import get_settings
 from platform_api.db import models  # noqa: F401 — регистрация таблиц
 from platform_api.db.base import Base
+from platform_api.modules.tender import models as tender_models  # noqa: F401
 from sqlalchemy import engine_from_config, pool
 
 config = context.config

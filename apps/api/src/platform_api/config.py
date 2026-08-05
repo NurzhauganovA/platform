@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -62,13 +62,24 @@ class StorageSettings(BaseModel):
     хранится один раз. В тендерных папках дубликаты — норма, а не исключение.
     """
 
+    # Значения по умолчанию тоже прогоняются через валидаторы. Без этого
+    # относительный путь остаётся неразвёрнутым, и веб с исполнителем,
+    # запущенные из разных каталогов, работают с разными папками: файл,
+    # загруженный через браузер, при разборе просто не находится.
+    model_config = ConfigDict(validate_default=True)
+
     root: Path = Path("storage")
+
+    cases_root: Path = Path("storage/cases")
+    """Каталоги закупок. Файлы попадают туда жёсткими ссылками на
+    хранилище: содержимое лежит один раз, а в каталоге видно под своим
+    именем — ядру нужна обычная папка, как на диске у тендерщика."""
 
     max_upload_mb: float = Field(default=64.0, gt=0)
     """Потолок на один файл. Совпадает с порогом обхода в тендерном ядре:
     крупнее в тендерных папках лежат архивы и видео, а не документы."""
 
-    @field_validator("root")
+    @field_validator("root", "cases_root")
     @classmethod
     def _absolute(cls, value: Path) -> Path:
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
@@ -110,13 +121,23 @@ def load_dotenv_into_environment() -> None:
     записанный в `.env`, оставался бы для них невидимым.
 
     Уже заданные переменные не перезаписываются: окружение старше файла.
+
+    Пустые значения не выставляются вовсе, и это не мелочь. Подключённые
+    проекты читают свои `.env` следом за нашим, тоже не перезаписывая
+    заданное, — и пустая строка здесь оказывается «уже заданным значением».
+    Ключ, аккуратно прописанный в `.env` ядра, становится невидимым, а разбор
+    падает с «доступ не настроен» при заполненном файле.
     """
+    import os
+
     env_file = PROJECT_ROOT / ".env"
     if not env_file.exists():
         return
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values
 
-    load_dotenv(env_file, override=False)
+    for name, value in dotenv_values(env_file).items():
+        if value and name not in os.environ:
+            os.environ[name] = value
 
 
 @lru_cache(maxsize=1)
