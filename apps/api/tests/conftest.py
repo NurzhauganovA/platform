@@ -89,6 +89,35 @@ def db(connection: Connection) -> Iterator[DbSession]:
         session.close()
 
 
+class FakeRedis:
+    """Redis-заглушка: помнит значения и опубликованное.
+
+    Настоящий Redis для проверки учёта задач не нужен, а заглушка делает
+    видимым то, что иначе пришлось бы вылавливать из живого канала.
+    """
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.published: list[tuple[str, str]] = []
+
+    def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.values[key] = value
+
+    def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    def publish(self, channel: str, message: str) -> None:
+        self.published.append((channel, message))
+
+    def close(self) -> None:
+        """Приложение закрывает соединение при остановке."""
+
+
+@pytest.fixture
+def redis() -> FakeRedis:
+    return FakeRedis()
+
+
 @pytest.fixture
 def settings() -> Settings:
     return Settings(environment="dev")

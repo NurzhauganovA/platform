@@ -20,6 +20,8 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from platform_api.jobs.contract import JobSpec
+
 
 @dataclass(frozen=True, slots=True)
 class NavItem:
@@ -49,7 +51,7 @@ class ModuleSpec:
 
     nav: tuple[NavItem, ...] = ()
 
-    jobs: tuple[Callable[..., Any], ...] = ()
+    jobs: tuple[JobSpec, ...] = ()
     """Фоновые задачи модуля. Разбор идёт минутами и стоит денег, поэтому
     живёт в очереди, а не в обработчике запроса."""
 
@@ -85,7 +87,7 @@ class ModuleRegistry:
         return tuple(self._modules.values())
 
     @property
-    def jobs(self) -> tuple[Callable[..., Any], ...]:
+    def jobs(self) -> tuple[JobSpec, ...]:
         """Все задачи всех модулей — то, что получает исполнитель очереди."""
         return tuple(job for module in self._modules.values() for job in module.jobs)
 

@@ -12,7 +12,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -45,6 +45,10 @@ class JobOut(BaseModel):
     percent: int = 0
     note: str = ""
 
+    result: dict[str, Any] | None = None
+    """Что задача насчитала. Ради этого её и запускали: без результата
+    оценка стоимости остаётся в базе, а спрашивавший её не видит."""
+
     error: str | None = None
     cost_usd: float | None = None
 
@@ -64,6 +68,7 @@ def _to_out(job: Job, service: JobService) -> JobOut:
         total=progress.total,
         percent=progress.percent,
         note=progress.note,
+        result=job.result,
         error=job.error,
         cost_usd=job.cost_usd,
         created_at=job.created_at,

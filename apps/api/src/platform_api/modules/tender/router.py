@@ -7,16 +7,21 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 
-from platform_api.auth.dependencies import CurrentUser, Db, requires_sourcing
+from platform_api.auth.dependencies import CurrentUser, Db, requires_money, requires_sourcing
+from platform_api.config import Settings
 from platform_api.db.models import StoredFile
+from platform_api.jobs import JobService
+from platform_api.jobs.worker import enqueue_sync
 from platform_api.modules.tender import core
 from platform_api.modules.tender.health import check as check_health
 from platform_api.modules.tender.schemas import (
     CompanyOut,
+    EstimateIn,
     FileProbe,
     FileVerdict,
     FormatOut,
     ModuleHealth,
+    StartedJobOut,
     UploadedFileOut,
     UploadPlan,
 )
@@ -218,6 +223,40 @@ def upload_file(
         relative_path=relative_path,
         deduplicated=saved.already_existed,
     )
+
+
+@router.post("/estimate", summary="Оценить стоимость разбора", status_code=status.HTTP_202_ACCEPTED)
+def start_estimate(
+    payload: EstimateIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_money] = None,
+) -> StartedJobOut:
+    """Ставит в очередь подсчёт стоимости будущего разбора.
+
+    Оценка бесплатна, но не мгновенна: чтобы понять, сколько страниц придётся
+    распознавать, файлы надо прочитать. Поэтому она идёт задачей с прогрессом,
+    а не ожиданием в запросе.
+    """
+    settings: Settings = request.app.state.settings
+    service = JobService(db, request.app.state.redis)
+    job = service.create(
+        organization_id=identity.organization.id,
+        created_by_id=identity.user.id,
+        module="tender",
+        kind="estimate",
+        params={
+            "file_ids": [str(item) for item in payload.file_ids],
+            "with_market": payload.with_market,
+        },
+        total=len(payload.file_ids) * 2,
+    )
+    # Фиксируем до постановки в очередь: исполнитель заберёт задачу мгновенно
+    # и не найдёт её в базе, если транзакция ещё не закрыта.
+    db.commit()
+    enqueue_sync(settings, job.id)
+    return StartedJobOut(job_id=job.id)
 
 
 _KNOWN_EXTENSIONS = (

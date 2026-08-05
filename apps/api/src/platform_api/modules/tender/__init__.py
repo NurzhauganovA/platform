@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from platform_api.modules import ModuleSpec, NavItem
 from platform_api.modules.tender import health
+from platform_api.modules.tender.jobs import jobs
 from platform_api.modules.tender.router import router
 
 module = ModuleSpec(
@@ -26,6 +27,7 @@ module = ModuleSpec(
         NavItem(title="История цен", path="/tender/prices", icon="chart"),
         NavItem(title="Конкуренты", path="/tender/competitors", icon="users"),
     ),
+    jobs=jobs,
     health=health.check,
 )
 

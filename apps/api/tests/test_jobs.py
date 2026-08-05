@@ -12,32 +12,12 @@ import uuid
 from typing import Any
 
 import pytest
-from conftest import sign_in
+from conftest import FakeRedis, sign_in
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from platform_api.db.models import Job, JobStatus, Organization, Role
 from platform_api.jobs import JobService, progress_key
 from sqlalchemy.orm import Session as DbSession
-
-
-class FakeRedis:
-    """Redis-заглушка: помнит значения и опубликованное."""
-
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-        self.published: list[tuple[str, str]] = []
-
-    def set(self, key: str, value: str, ex: int | None = None) -> None:
-        self.values[key] = value
-
-    def get(self, key: str) -> str | None:
-        return self.values.get(key)
-
-    def publish(self, channel: str, message: str) -> None:
-        self.published.append((channel, message))
-
-    def close(self) -> None:
-        """Приложение закрывает соединение при остановке."""
 
 
 class BrokenRedis(FakeRedis):
@@ -46,11 +26,6 @@ class BrokenRedis(FakeRedis):
 
     def publish(self, channel: str, message: str) -> None:
         raise ConnectionError("очередь недоступна")
-
-
-@pytest.fixture
-def redis() -> FakeRedis:
-    return FakeRedis()
 
 
 @pytest.fixture
@@ -273,3 +248,24 @@ def test_stream_sends_current_state_first(
     payload: dict[str, Any] = json.loads(first.removeprefix("data: "))
     assert payload["status"] == "succeeded"
     assert payload["percent"] == 100
+
+
+def test_result_is_served(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    """Ради результата задачу и запускали.
+
+    Оценка стоимости, посчитанная в фоне, должна дойти до того, кто её просил,
+    а не остаться в базе.
+    """
+    app.state.redis = redis
+    service = JobService(db, redis)  # type: ignore[arg-type]
+    org = sign_in(db, app_client)
+    job = _job(service, org)
+    service.start(job.id)
+    service.finish(job.id, result={"usd": 0.08, "ocr_pages": 6}, cost_usd=0.0)
+    db.commit()
+
+    body = app_client.get(f"/api/jobs/{job.id}").json()
+
+    assert body["result"] == {"usd": 0.08, "ocr_pages": 6}

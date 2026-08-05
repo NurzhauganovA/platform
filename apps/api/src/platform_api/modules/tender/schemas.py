@@ -109,6 +109,21 @@ class UploadedFileOut(BaseModel):
     """Содержимое уже лежало в хранилище — на диске оно осталось одно."""
 
 
+class EstimateIn(BaseModel):
+    """Что оценивать."""
+
+    file_ids: list[uuid.UUID] = Field(min_length=1)
+    with_market: bool = False
+    """Считать ли вместе с поиском на рынках: он оплачивается отдельно от
+    токенов и заметно меняет итог."""
+
+
+class StartedJobOut(BaseModel):
+    """Задача принята в работу."""
+
+    job_id: uuid.UUID
+
+
 class ModuleHealth(BaseModel):
     """Готовность модуля к работе."""
 
