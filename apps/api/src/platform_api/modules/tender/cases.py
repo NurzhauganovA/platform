@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -22,6 +24,7 @@ from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.logging import get_logger
 from platform_api.modules.tender.models import CaseFileRow, CaseStatus, TenderCaseRow
+from platform_api.modules.tender.workspace import CaseWorkspace
 
 logger = get_logger(__name__)
 
@@ -288,6 +291,165 @@ def start_decision(
     db.commit()
     enqueue_sync(settings, job.id)
     return {"job_id": job.id}
+
+
+class OfferIn(BaseModel):
+    """От чьего имени собирать предложение."""
+
+    companies: list[str] = Field(
+        default_factory=list,
+        description="Ключи компаний. Пусто — та, что помечена по умолчанию",
+    )
+    number: str | None = Field(default=None, description="Исходящий номер КП")
+
+
+@router.post("/{case_id}/sourcing", summary="Найти на рынках", status_code=status.HTTP_202_ACCEPTED)
+def start_sourcing(
+    case_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    force: bool = False,
+    _guard: Annotated[None, requires_money] = None,
+) -> dict[str, uuid.UUID]:
+    """Ставит в очередь поиск позиций на рынках пяти стран.
+
+    Платная команда, и дороже прочих: каждый запрос ходит в интернет. Зато
+    здесь впервые появляется наша собственная цена — та, по которой мы можем
+    купить, — а до неё маржа остаётся догадкой.
+    """
+    case = _require_case(db, case_id, identity)
+    if case.status is not CaseStatus.ANALYZED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Сначала разберите документы закупки",
+        )
+    return {"job_id": _queue(db, request, identity, case, "sourcing", {"force": force}, 1)}
+
+
+@router.post("/{case_id}/offer", summary="Собрать наше КП", status_code=status.HTTP_202_ACCEPTED)
+def start_offer(
+    case_id: uuid.UUID,
+    payload: OfferIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_money] = None,
+) -> dict[str, uuid.UUID]:
+    """Собирает КП для заказчика и задание закупщику.
+
+    Денег не стоит: обращения к модели здесь нет, цена считается кодом по уже
+    известным величинам — предложениям конкурентов, нашей себестоимости и
+    целевой наценке.
+    """
+    case = _require_case(db, case_id, identity)
+    if case.status is not CaseStatus.ANALYZED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Сначала разберите документы закупки",
+        )
+    return {
+        "job_id": _queue(
+            db,
+            request,
+            identity,
+            case,
+            "offer",
+            {"companies": payload.companies, "number": payload.number},
+            max(1, len(payload.companies)),
+        )
+    }
+
+
+@router.get("/{case_id}/documents", summary="Собранные нами документы")
+def list_documents(
+    case_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_sourcing] = None,
+) -> list[dict[str, Any]]:
+    """Что лежит в папке «Наш разбор» этой закупки.
+
+    Задание закупщику здесь тоже: закупщик работает именно с ним, и прятать
+    от него собственный рабочий файл незачем.
+    """
+    case = _require_case(db, case_id, identity)
+    folder = _results_dir(request, case)
+    if not folder.exists():
+        return []
+    return [
+        {
+            "name": item.name,
+            "size_bytes": item.stat().st_size,
+            "kind": "offer" if item.name.startswith("КП") else "worksheet",
+        }
+        for item in sorted(folder.iterdir())
+        if item.is_file()
+    ]
+
+
+@router.get("/{case_id}/documents/{name}", summary="Скачать документ")
+def download_document(
+    case_id: uuid.UUID,
+    name: str,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_sourcing] = None,
+) -> FileResponse:
+    """Отдаёт готовый документ.
+
+    Имя приходит из адреса, поэтому проверяется дважды: в нём не должно быть
+    ни разделителей пути, ни выхода вверх. `../../.env` в этом поле — первое,
+    что пробуют, а рядом с каталогом закупки лежат чужие закупки.
+    """
+    case = _require_case(db, case_id, identity)
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Недопустимое имя")
+
+    folder = _results_dir(request, case)
+    path = (folder / name).resolve()
+    if folder.resolve() not in path.parents or not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Документ не найден")
+
+    return FileResponse(path, filename=name)
+
+
+def _results_dir(request: Request, case: TenderCaseRow) -> Path:
+    from platform_api.modules.tender.core import core_settings
+
+    workspace: CaseWorkspace = request.app.state.workspace
+    return workspace.path_for(case.id, case.title) / core_settings().results_dirname
+
+
+def _queue(
+    db: Db,
+    request: Request,
+    identity: CurrentUser,
+    case: TenderCaseRow,
+    kind: str,
+    params: dict[str, Any],
+    total: int,
+) -> uuid.UUID:
+    """Ставит задачу модуля в очередь и фиксирует её до постановки.
+
+    Фиксация обязательна: исполнитель заберёт задачу мгновенно и не найдёт её
+    в базе, если транзакция ещё не закрыта.
+    """
+    settings: Settings = request.app.state.settings
+    service = JobService(db, request.app.state.redis)
+    job = service.create(
+        organization_id=identity.organization.id,
+        created_by_id=identity.user.id,
+        module="tender",
+        kind=kind,
+        params={"case_id": str(case.id), **params},
+        total=total,
+    )
+    db.commit()
+    enqueue_sync(settings, job.id)
+    return job.id
 
 
 __all__ = ["router"]

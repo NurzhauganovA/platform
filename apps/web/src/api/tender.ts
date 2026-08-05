@@ -196,6 +196,14 @@ export const tender = {
     api.post<CaseDetail>(`/api/tender/cases/${id}/files`, files),
   analyze: (id: string, force = false) =>
     api.post<{ job_id: string }>(`/api/tender/cases/${id}/analyze?force=${force}`),
+  sourcing: (id: string, force = false) =>
+    api.post<{ job_id: string }>(`/api/tender/cases/${id}/sourcing?force=${force}`),
+  offer: (id: string, payload: { companies: string[]; number: string | null }) =>
+    api.post<{ job_id: string }>(`/api/tender/cases/${id}/offer`, payload),
+  documents: (id: string) =>
+    api.get<{ name: string; size_bytes: number; kind: string }[]>(
+      `/api/tender/cases/${id}/documents`,
+    ),
   decide: (id: string, withMarket = false) =>
     api.post<{ job_id: string }>(
       `/api/tender/cases/${id}/decide?with_market=${withMarket}`,

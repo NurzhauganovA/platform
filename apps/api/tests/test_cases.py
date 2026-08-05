@@ -231,3 +231,94 @@ def test_buyer_cannot_ask_for_a_decision(
     db.commit()
 
     assert app_client.post(f"/api/tender/cases/{row.id}/decide").status_code == 403
+
+
+def _analyzed(db: DbSession, org: Organization, title: str = "Закупка") -> Any:
+    from platform_api.modules.tender.models import CaseStatus, TenderCaseRow
+
+    row = TenderCaseRow(organization_id=org.id, title=title, status=CaseStatus.ANALYZED)
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_sourcing_needs_analyzed_documents(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    """Искать на рынках по неразобранной закупке нечего — а запросы платные."""
+    app.state.redis = redis
+    sign_in(db, app_client)
+    case = _case(app_client)
+
+    response = app_client.post(f"/api/tender/cases/{case['id']}/sourcing")
+
+    assert response.status_code == 400
+
+
+def test_buyer_cannot_spend_on_market_search(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    app.state.redis = redis
+    org = sign_in(db, app_client, Role.BUYER)
+    case = _analyzed(db, org)
+
+    assert app_client.post(f"/api/tender/cases/{case.id}/sourcing").status_code == 403
+    assert (
+        app_client.post(f"/api/tender/cases/{case.id}/offer", json={"companies": []}).status_code
+        == 403
+    )
+
+
+def test_documents_of_a_fresh_case_are_empty(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    app.state.redis = redis
+    org = sign_in(db, app_client)
+    case = _analyzed(db, org)
+
+    assert app_client.get(f"/api/tender/cases/{case.id}/documents").json() == []
+
+
+def test_download_refuses_to_leave_the_case(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis
+) -> None:
+    """Главное здесь.
+
+    Имя файла приходит из адреса. `../../.env` в этом поле — первое, что
+    пробуют, а рядом с каталогом закупки лежат чужие закупки и настройки.
+    """
+    app.state.redis = redis
+    org = sign_in(db, app_client)
+    case = _analyzed(db, org)
+
+    for name in ("../.env", "..%2F.env", "../../companies.toml", ".hidden"):
+        response = app_client.get(f"/api/tender/cases/{case.id}/documents/{name}")
+        # Любой отказ годится: 400 — поймали проверкой, 404 — нет такого файла,
+        # 422 — путь вообще не разобрался. Важно, что файла не отдали.
+        assert response.status_code in (400, 404, 422), name
+        assert not response.content.startswith(b"PLATFORM__"), name
+
+
+def test_buyer_may_download_the_worksheet(
+    app: FastAPI, app_client: TestClient, db: DbSession, redis: FakeRedis, tmp_path: Any
+) -> None:
+    """Задание закупщику — его рабочий файл, прятать незачем."""
+    from platform_api.modules.tender.core import core_settings
+    from platform_api.modules.tender.workspace import CaseWorkspace
+    from platform_api.storage import FileStorage
+
+    app.state.redis = redis
+    app.state.workspace = CaseWorkspace(tmp_path, FileStorage(tmp_path / "s", max_bytes=1024))
+    org = sign_in(db, app_client, Role.BUYER)
+    case = _analyzed(db, org)
+
+    folder = app.state.workspace.path_for(case.id, case.title) / core_settings().results_dirname
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "Задание_закупщику.xlsx").write_bytes(b"xlsx")
+
+    listing = app_client.get(f"/api/tender/cases/{case.id}/documents").json()
+    assert [item["kind"] for item in listing] == ["worksheet"]
+
+    download = app_client.get(f"/api/tender/cases/{case.id}/documents/Задание_закупщику.xlsx")
+    assert download.status_code == 200
+    assert download.content == b"xlsx"

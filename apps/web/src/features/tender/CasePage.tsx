@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { jobs, tender, type Job } from "@/api/tender";
 import { PageHeader } from "@/shell/AppShell";
 import { Badge, Button, Card, Progress, Spinner, StatTile, bytes, cx } from "@/ui";
+import { Actions } from "./Actions";
 import { Comparison } from "./Comparison";
 
 /** Подписка на живой прогресс задачи. */
@@ -48,7 +49,7 @@ function useJobStream(jobId: string | null) {
   return job;
 }
 
-type Tab = "comparison" | "documents";
+type Tab = "comparison" | "work" | "documents";
 
 export function CasePage() {
   const { caseId = "" } = useParams();
@@ -205,6 +206,7 @@ export function CasePage() {
           {(
             [
               ["comparison", "Сравнение предложений"],
+              ["work", "Рынок и наше КП"],
               ["documents", `Документы (${item.files.length})`],
             ] as [Tab, string][]
           ).map(([key, label]) => (
@@ -224,6 +226,15 @@ export function CasePage() {
         </div>
 
         {tab === "comparison" && <Comparison caseId={caseId} />}
+
+        {tab === "work" && (
+          <Actions
+            caseId={caseId}
+            status={item.status}
+            onJob={setJobId}
+            busy={Boolean(running)}
+          />
+        )}
 
         {tab === "documents" && (
         <Card title={`Документы (${item.files.length})`}>
