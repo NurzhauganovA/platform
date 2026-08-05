@@ -29,6 +29,7 @@ class FakeCase:
         self.documents = (1, 2, 3)
         self.offers = (1, 2)
         self.groups = ()
+        self.requested = ()
         self.requirements = ("Гарантия 36 месяцев",)
         self.risks = ("Не указаны условия оплаты",)
         self.analysis = FakeAnalysis()
@@ -51,11 +52,13 @@ class FakeAnalysis:
 class FakeView:
     def __init__(self) -> None:
         from decimal import Decimal
+        from pathlib import Path
 
         self.case = FakeCase()
         self.vat_rate = Decimal("0.12")
         self.total_min = Decimal("4370536")
         self.total_max = Decimal("5535000")
+        self.root = Path("/tmp/case")
 
 
 @pytest.fixture
@@ -64,11 +67,13 @@ def analyzed_case(
 ) -> Any:
     """Разобранная закупка, не трогающая ни ядро, ни диск."""
     app.state.redis = redis
-    from platform_api.modules.tender import core
+    from platform_api.modules.tender import comparison, core
 
     # Обработчик импортирует функцию внутри себя, поэтому подмена в модуле
     # ядра доходит до него — и ни база разбора, ни диск не участвуют.
     monkeypatch.setattr(core, "build_case_view", lambda _row: FakeView())
+    # Находки читаются из базы ядра — в этих тестах она не участвует.
+    monkeypatch.setattr(comparison, "_market", lambda _view: None)
     return None
 
 

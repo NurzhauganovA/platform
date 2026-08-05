@@ -15,6 +15,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { tender, type CaseStatus } from "@/api/tender";
 import { Badge, Button, Card, Spinner, bytes, cx } from "@/ui";
+import { Market } from "./Market";
 
 export function Actions({
   caseId,
@@ -64,8 +65,14 @@ export function Actions({
     },
   });
 
+  const { data: comparison } = useQuery({
+    queryKey: ["comparison", caseId],
+    queryFn: () => tender.comparison(caseId),
+  });
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-2">
       <Card title="Поиск на рынках">
         <div className="space-y-3 px-5 py-4">
           <p className="text-sm text-ink-secondary">
@@ -174,6 +181,9 @@ export function Actions({
           )}
         </div>
       </Card>
+      </div>
+
+      {comparison && <Market data={comparison} />}
     </div>
   );
 }

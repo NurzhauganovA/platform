@@ -13,6 +13,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { tender } from "@/api/tender";
 import { Badge, Card, Collapsible, EmptyState, Spinner, StatTile, cx, money } from "@/ui";
+import { Requested } from "./Requested";
 import { SplitBanner } from "./SplitBanner";
 
 export function Comparison({ caseId }: { caseId: string }) {
@@ -42,23 +43,23 @@ export function Comparison({ caseId }: { caseId: string }) {
     );
   }
 
-  // Позиций нет — человек должен понять почему, а не смотреть на пустоту.
-  // Чаще всего причина одна из двух: в папке несколько разных закупок или
-  // поставщики ещё не прислали предложений.
+  // Предложений нет — но работать есть с чем: заказчик перечислил, что ему
+  // нужно, и часто указал свой ориентир цены. Участвовать в такой закупке
+  // выгоднее всего: конкурентов не видно.
   if (!data.positions.length) {
     return (
       <div className="space-y-4">
         <SplitBanner caseId={caseId} />
-        <Card>
-          <EmptyState
-            title="Сравнивать пока нечего"
-            description={
-              data.offers === 0
-                ? "В закупке нет коммерческих предложений — только документы заказчика. Сравнение появится, когда поставщики пришлют цены."
-                : "Предложения есть, но их позиции не сошлись по названиям. Откройте документы и проверьте состав."
-            }
-          />
-        </Card>
+        {data.requested.length > 0 ? (
+          <Requested data={data} />
+        ) : (
+          <Card>
+            <EmptyState
+              title="Позиции не разобрались"
+              description="В документах закупки не нашлось перечня товаров. Откройте вкладку «Документы» и проверьте, всё ли загружено."
+            />
+          </Card>
+        )}
       </div>
     );
   }

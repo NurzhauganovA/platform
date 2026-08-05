@@ -116,6 +116,9 @@ class CaseView:
     vat_rate: Decimal
     total_min: Decimal | None
     total_max: Decimal | None
+    root: Path
+    """Каталог закупки. По нему находятся сохранённые находки и решения:
+    ядро ключует их корнем разбора."""
 
 
 def build_case_view(case_row: Any) -> CaseView | None:
@@ -171,6 +174,7 @@ def build_case_view(case_row: Any) -> CaseView | None:
         vat_rate=vat,
         total_min=min(totals) if totals else None,
         total_max=max(totals) if totals else None,
+        root=root,
     )
 
 

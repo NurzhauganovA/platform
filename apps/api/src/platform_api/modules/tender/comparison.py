@@ -49,6 +49,19 @@ class QuoteOut(BaseModel):
     is_cheapest: bool = False
 
 
+class RequestedOut(BaseModel):
+    """Позиция, которую хочет заказчик, — из его собственных документов."""
+
+    name: str
+    specification: str | None = None
+    quantity: float | None = None
+    unit: str | None = None
+    customer_price: float | None = None
+    """Ориентир заказчика из заключения. Выше него предлагать бессмысленно."""
+
+    source_document: str = ""
+
+
 class PositionOut(BaseModel):
     """Одна позиция закупки со всеми предложениями по ней."""
 
@@ -62,6 +75,43 @@ class PositionOut(BaseModel):
     а несопоставимости: поставщики поняли требование по-разному."""
 
     supplier_count: int
+
+
+class FindingOut(BaseModel):
+    """Где нашли товар и почём.
+
+    То, с чем менеджер идёт работать: площадка, поставщик, цена, ссылка. Всё,
+    чего не хватает для звонка, — это незакрытая работа, а не находка.
+    """
+
+    position: str
+    country: str
+    marketplace: str
+    supplier: str | None = None
+    title: str = ""
+    price_kzt: float | None = None
+    landed_cost: float | None = None
+    """Цена с логистикой и растаможкой — то, во что товар обойдётся нам."""
+
+    unit: str | None = None
+    delivery_days: int | None = None
+    min_order: str | None = None
+    url: str | None = None
+    contact: str | None = None
+    matches_spec: bool = True
+    match_note: str = ""
+
+    margin_percent: float | None = None
+    margin_total: float | None = None
+
+
+class MarketOut(BaseModel):
+    """Что нашлось на рынках по этой закупке."""
+
+    searched: bool = False
+    findings: list[FindingOut] = []
+    total_margin: float | None = None
+    by_country: dict[str, int] = {}
 
 
 class DecisionOut(BaseModel):
@@ -98,6 +148,14 @@ class ComparisonOut(BaseModel):
 
     total_min: float | None = None
     total_max: float | None = None
+
+    requested: list[RequestedOut] = []
+    """Что нужно заказчику. Показывается, когда предложений ещё нет: закупка
+    без КП — не повод её пропускать."""
+
+    market: MarketOut | None = None
+    """Находки на рынках. У закупщика тоже: он с ними и работает — звонит,
+    договаривается, покупает."""
 
     decision: DecisionOut | None = None
     """Отсутствует у закупщика и наблюдателя: там себестоимость и маржа."""
@@ -190,6 +248,18 @@ def _to_out(case: TenderCaseRow, view: Any, *, with_money: bool) -> ComparisonOu
 
     return ComparisonOut(
         case_id=case.id,
+        requested=[
+            RequestedOut(
+                name=item.name,
+                specification=item.specification,
+                quantity=_float(item.quantity),
+                unit=item.unit,
+                customer_price=_float(item.customer_price),
+                source_document=item.source_document,
+            )
+            for item in view.case.requested
+        ],
+        market=_market(view),
         subject=view.case.subject or case.subject or None,
         customer=(view.case.customer.name if view.case.customer else None) or case.customer or None,
         documents=len(view.case.documents),
@@ -200,6 +270,72 @@ def _to_out(case: TenderCaseRow, view: Any, *, with_money: bool) -> ComparisonOu
         total_min=_float(view.total_min),
         total_max=_float(view.total_max),
         decision=decision,
+    )
+
+
+def _market(view: Any) -> MarketOut | None:
+    """Находки прошлого поиска по этой закупке.
+
+    Читаются из базы ядра: поиск платный, и его результат нужен потом — при
+    сборке КП и при звонке поставщику, а не только в момент выполнения.
+    """
+    from pydantic import ValidationError
+    from tender_analyze.application.case_analysis import case_fingerprint
+    from tender_analyze.application.container import Container
+    from tender_analyze.domain.models import Opportunity
+
+    from platform_api.modules.tender.core import core_settings
+
+    settings = core_settings()
+    container = Container(settings)
+    try:
+        with container.unit_of_work(view.root) as uow:
+            payload = uow.cases.get_opportunities(view.case.folder, case_fingerprint(view.case))
+    finally:
+        container.dispose()
+
+    if payload is None:
+        return MarketOut(searched=False)
+
+    try:
+        opportunities = [Opportunity.model_validate(item) for item in payload]
+    except ValidationError:
+        logger.warning("Сохранённые находки не читаются", case=str(view.case.folder))
+        return MarketOut(searched=False)
+
+    by_country: dict[str, int] = {}
+    findings: list[FindingOut] = []
+    for item in opportunities:
+        finding = item.finding
+        country = finding.country.value
+        by_country[country] = by_country.get(country, 0) + 1
+        findings.append(
+            FindingOut(
+                position=item.position,
+                country=country,
+                marketplace=finding.marketplace,
+                supplier=finding.supplier,
+                title=finding.title or "",
+                price_kzt=_float(finding.price_kzt),
+                landed_cost=_float(item.landed_cost),
+                unit=finding.unit,
+                delivery_days=finding.delivery_days,
+                min_order=finding.min_order,
+                url=finding.url,
+                contact=finding.contact,
+                matches_spec=finding.matches_spec,
+                match_note=finding.match_note or "",
+                margin_percent=_float(item.margin_percent),
+                margin_total=_float(item.margin_total),
+            )
+        )
+
+    findings.sort(key=lambda item: item.margin_percent or 0, reverse=True)
+    return MarketOut(
+        searched=True,
+        findings=findings,
+        total_margin=float(sum(item.margin_total for item in opportunities if item.is_viable)),
+        by_country=by_country,
     )
 
 

@@ -124,6 +124,41 @@ export interface Decision {
   questions: string[];
 }
 
+export interface Finding {
+  position: string;
+  country: string;
+  marketplace: string;
+  supplier: string | null;
+  title: string;
+  price_kzt: number | null;
+  landed_cost: number | null;
+  unit: string | null;
+  delivery_days: number | null;
+  min_order: string | null;
+  url: string | null;
+  contact: string | null;
+  matches_spec: boolean;
+  match_note: string;
+  margin_percent: number | null;
+  margin_total: number | null;
+}
+
+export interface Market {
+  searched: boolean;
+  findings: Finding[];
+  total_margin: number | null;
+  by_country: Record<string, number>;
+}
+
+export interface RequestedPosition {
+  name: string;
+  specification: string | null;
+  quantity: number | null;
+  unit: string | null;
+  customer_price: number | null;
+  source_document: string;
+}
+
 export interface CaseComparison {
   case_id: string;
   subject: string | null;
@@ -135,6 +170,9 @@ export interface CaseComparison {
   risks: string[];
   total_min: number | null;
   total_max: number | null;
+  /** Что нужно заказчику — когда предложений ещё нет. */
+  requested: RequestedPosition[];
+  market: Market | null;
   /** Отсутствует у закупщика и наблюдателя: там себестоимость и маржа. */
   decision: Decision | null;
   analyzed: boolean;
