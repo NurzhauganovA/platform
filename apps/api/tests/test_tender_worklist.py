@@ -322,7 +322,10 @@ def test_dokumenty_zakupki_vidny_spiskom(
     assert section["fields"][0]["link"] == f"/api/tender/item/{item_id}/file/{'a' * 64}"
     assert section["fields"][1]["link"] is None
     assert section["fields"][1]["note"] == "нет на диске"
-    assert "подключается к платформе томом" in section["note"]
+    # Сообщение называет путь, по которому искали: «нет на диске» отвечает,
+    # что случилось, но не что чинить.
+    assert "Искали в" in section["note"]
+    assert str(with_files[0].path.parent) in section["note"]
 
 
 def test_dokument_otdaetsya_s_diska(

@@ -32,16 +32,41 @@ fi
 psql() { docker exec -i "$DB_CONTAINER" psql -U fintend -d "$DB" -tAc "$1"; }
 
 if [ -z "$OLD" ]; then
-  # Самый частый корень: в архиве десятки папок, и все они лежат под одним
-  # каталогом — его и надо заменить.
-  OLD="$(psql "
-    select regexp_replace(root, '/[^/]+/[^/]+/?\$', '')
-    from document_locations
-    group by 1 order by count(*) desc limit 1")"
+  # Общее начало всех корней — его и надо заменить.
+  #
+  # Отрезать от корня несколько колен, как было сначала, нельзя: у одной
+  # закупки путь «архив/фирма/дата/закупка», у другой «архив/фирма/дата/
+  # техника/закупка», и любое постоянное число колен верно для части базы.
+  # Переписывалась тогда тоже часть — остальные пути молча оставались вести
+  # на прежнюю машину, а в разборе это выглядит как «файла нет на диске».
+  #
+  # Общее начало таково по построению: корни лежат в одном архиве.
+  OLD="$(psql "select distinct root from document_locations" | awk '
+    NR == 1 { common = $0; next }
+    {
+      limit = length(common); if (length($0) < limit) limit = length($0)
+      same = 0
+      while (same < limit && substr(common, same + 1, 1) == substr($0, same + 1, 1)) same++
+      common = substr(common, 1, same)
+    }
+    # До ближайшей косой черты: общее начало обрывается посреди имени папки
+    # («…/КАМАЗ» и «…/КАМены» дают «…/КАМ»), а у русских имён — и посреди
+    # буквы, потому что awk считает байтами.
+    END { sub(/\/[^\/]*$/, "", common); print common }')"
 fi
 
 if [ -z "$OLD" ]; then
-  echo "Не нашёл, что заменять: в базе нет записей о местах документов." >&2
+  # Общего начала нет — значит, корни в базе от разных архивов. Так выглядит
+  # база после наполовину прошедшего переезда: часть путей уже на сервере,
+  # часть ещё ведёт на машину тендерщика. Угадывать тут нечего, и молча взять
+  # один из двух — это переписать вторые поверх первых.
+  echo "У корней в базе нет общего начала. Вот они:" >&2
+  psql "
+    select count(*) || '  ' || regexp_replace(root, '^(/[^/]+/[^/]+/[^/]+).*', '\\1')
+    from document_locations group by 2 order by 1 desc limit 5" | sed 's/^/  /' >&2
+  echo >&2
+  echo "Позовите со старым корнем вторым доводом — для каждого свой вызов:" >&2
+  echo "  ./infra/repath.sh $NEW '/Users/user/Desktop/тендеры'" >&2
   exit 1
 fi
 
@@ -73,8 +98,23 @@ update price_observations  set root = replace(root, '$OLD', '$NEW');
 commit;
 SQL
 
+MOVED="$(psql "select count(*) from document_locations where root like '$NEW%'")"
+LEFT="$(psql "select count(*) from document_locations where root not like '$NEW%'")"
 echo
-echo "Проверка: путей под новым корнем — $(psql "select count(*) from document_locations where root like '$NEW%'")"
-echo "Осталось под старым — $(psql "select count(*) from document_locations where root like '$OLD%'")"
+echo "Путей под новым корнем: $MOVED"
+if [ "$LEFT" != "0" ]; then
+  echo
+  echo "Осталось в стороне: $LEFT. Это пути, которые под новый корень не попали:"
+  psql "
+    select count(*) || '  ' || regexp_replace(root, '^(/[^/]+/[^/]+/[^/]+).*', '\\1')
+    from document_locations where root not like '$NEW%'
+    group by 2 order by 1 desc limit 5" | sed 's/^/  /'
+  echo
+  echo "Часть из них — разбор распакованных архивов: он читал файлы во"
+  echo "временной папке, и её давно нет ни на одной машине. Остальное —"
+  echo "второй архив; для него скрипт нужно позвать ещё раз со своим старым"
+  echo "корнем вторым доводом."
+fi
 echo
-echo "Дальше проверьте, что файлы на месте: откройте любой разбор и ТЗ в нём."
+echo "Дальше — сверка с диском глазами платформы:"
+echo "  ./infra/check-archive.sh"
