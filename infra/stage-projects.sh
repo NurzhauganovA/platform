@@ -27,9 +27,29 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-TENDER_DIR="${TENDER_DIR:-$here/../tender-analyze}"
-SKSTORE_DIR="${SKSTORE_DIR:-$here/../skstore}"
-OMARKET_DIR="${OMARKET_DIR:-$here/../../github/omarket}"
+# Пути берутся оттуда же, откуда их берёт Compose: сначала окружение, потом
+# `.env`, потом умолчание. Разные источники у скрипта и у Compose означали бы
+# сборку из одного каталога и запуск с томами из другого — и выяснилось бы
+# это не сразу, а на первой странице с пустым списком.
+from_env() {
+  [ -f "$here/.env" ] || return 0
+  sed -n "s/^[[:space:]]*$1=//p" "$here/.env" | tail -1 | tr -d '"'"'"'\r'
+}
+
+TENDER_DIR="${TENDER_DIR:-$(from_env TENDER_DIR)}"
+SKSTORE_DIR="${SKSTORE_DIR:-$(from_env SKSTORE_DIR)}"
+OMARKET_DIR="${OMARKET_DIR:-$(from_env OMARKET_DIR)}"
+
+TENDER_DIR="${TENDER_DIR:-../tender-analyze}"
+SKSTORE_DIR="${SKSTORE_DIR:-../skstore}"
+OMARKET_DIR="${OMARKET_DIR:-../../github/omarket}"
+
+# Относительный путь считается от каталога платформы, а не от того, откуда
+# запустили: Compose считает его так же, и разойтись они не должны.
+absolute() { case "$1" in /*) printf %s "$1" ;; *) printf %s "$here/$1" ;; esac; }
+TENDER_DIR="$(absolute "$TENDER_DIR")"
+SKSTORE_DIR="$(absolute "$SKSTORE_DIR")"
+OMARKET_DIR="$(absolute "$OMARKET_DIR")"
 
 target="$here/.docker/projects"
 
@@ -71,8 +91,13 @@ exclude=(
 copy() {
   local name="$1" source="$2"
   if [ ! -d "$source" ]; then
-    echo "Не найден проект «$name»: $source" >&2
-    echo "Укажите путь переменной ${3}, если каталог лежит в другом месте." >&2
+    # Фигурные скобки обязательны: за именем сразу идёт «»», и bash в UTF-8
+    # прихватывает её первый байт в имя переменной. При `set -u` это падение
+    # с «unbound variable» вместо сообщения — то есть скрипт ломается ровно
+    # там, где должен объяснить, что не так.
+    echo "Не найден проект «${name}»: ${source}" >&2
+    echo "Укажите путь переменной ${3} — в .env или в команде:" >&2
+    echo "    make prod ${3}=../${name}" >&2
     exit 1
   fi
   mkdir -p "$target/$name"

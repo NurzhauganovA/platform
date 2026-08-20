@@ -17,9 +17,24 @@
 COMPOSE ?= docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile full
 # Рабочий режим — тот же набор служб плюс слой отличий сервера.
 PROD = docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full
-export TENDER_DIR  ?= ../tender-analyze
-export SKSTORE_DIR ?= ../skstore
-export OMARKET_DIR ?= ../../github/omarket
+# Пути к подключённым проектам не задаются здесь по умолчанию — умолчания
+# лежат в `docker-compose.yml` и в `infra/stage-projects.sh`. Экспортируется
+# только то, что человек указал сам:
+#
+#   make prod OMARKET_DIR=../omarket
+#
+# Иначе получается ловушка: `export ... ?=` подставляет своё значение всегда,
+# оно попадает в окружение и перебивает то, что записано в `.env`, — путь из
+# `.env` молча не действует, и сборка не находит проект.
+ifdef TENDER_DIR
+export TENDER_DIR
+endif
+ifdef SKSTORE_DIR
+export SKSTORE_DIR
+endif
+ifdef OMARKET_DIR
+export OMARKET_DIR
+endif
 
 .PHONY: help stage build up prod down restart logs ps user shell migrate check clean backup restore
 

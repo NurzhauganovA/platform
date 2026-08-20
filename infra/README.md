@@ -45,14 +45,16 @@ git clone <skstore> skstore
 git clone <omarket> omarket
 ```
 
-Раскладка по умолчанию ждёт `tender-analyze` и `skstore` рядом с `platform`, а
-`omarket` — на два уровня выше. На сервере проще положить всё рядом и сказать
-об этом явно:
+Раскладка по умолчанию ждёт `tender-analyze` и `skstore` рядом с `platform`,
+а `omarket` — на два уровня выше (так он лежит на машине разработчика). На
+сервере всё рядом, поэтому путь к нему надо указать. Строкой в `.env`:
 
-```bash
-cd platform
-echo 'OMARKET_DIR=../omarket' >> .env
 ```
+OMARKET_DIR=../omarket
+```
+
+Или в команде, если удобнее: `make prod OMARKET_DIR=../omarket`. Относительный
+путь считается от каталога `platform`.
 
 ### 2. Настройки и ключи
 
@@ -70,7 +72,18 @@ cp .env.example .env
 задавать не нужно: адреса прописаны в `docker-compose.yml` и смотрят на
 соседние базы того же PostgreSQL.
 
-### 3. Первый запуск
+### 3. Проверка перед запуском
+
+```bash
+./infra/stage-projects.sh
+```
+
+Этим шагом начинается `make prod`: исходники трёх проектов переносятся в
+контекст сборки. Если он падает — службы приложения не поднимаются вовсе, и в
+`make ps` остаются только база и очередь. Скрипт называет проект, который не
+нашёл, и переменную, которой поправить путь.
+
+### 4. Первый запуск
 
 ```bash
 make prod
@@ -85,7 +98,7 @@ docker compose exec api bash -lc 'cd /app/projects/skstore && alembic upgrade he
 docker compose exec api bash -lc 'cd /app/projects/omarket && alembic upgrade head'
 ```
 
-### 4. Данные
+### 5. Данные
 
 На прежней машине:
 
@@ -106,7 +119,7 @@ rsync -a ~/Desktop/тендеры/ сервер:/srv/fintend/тендеры/
 архива на сервере. Без этого список файлов в разборе виден, а открыть их
 нельзя: платформа ищет их там, где они лежали на машине тендерщика.
 
-### 5. Сотрудники
+### 6. Сотрудники
 
 ```bash
 make user EMAIL=ivanov@bcorp.kz ROLE=analyst NAME="Иванов Иван"
@@ -115,7 +128,7 @@ make user EMAIL=ivanov@bcorp.kz ROLE=analyst NAME="Иванов Иван"
 Роли: `admin`, `analyst` (тендерщик — видит деньги), `buyer` (закупщик — видит,
 где взять товар, но не себестоимость), `viewer`.
 
-### 6. Копии
+### 7. Копии
 
 ```bash
 crontab -e

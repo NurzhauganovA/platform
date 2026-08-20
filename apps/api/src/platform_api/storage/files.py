@@ -78,24 +78,27 @@ class FileStorage:
         size = 0
 
         self._root.mkdir(parents=True, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(dir=self._root, delete=False, suffix=".part")
+        # Не через `with` на месте создания намеренно: имя нужно раньше, чем
+        # файл закроется, а сам файл должен пережить закрытие — его потом
+        # переносят под именем хэша. Закрывается он строкой ниже, убирается в
+        # `finally`, так что утечки, ради которой правило и написано, здесь
+        # нет.
+        handle = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            dir=self._root, delete=False, suffix=".part"
+        )
         temporary = Path(handle.name)
         try:
             with handle:
                 while chunk := stream.read(_CHUNK):
                     size += len(chunk)
                     if size > self._max_bytes:
-                        raise FileTooLargeError(
-                            f"Файл больше {self._max_bytes // 1024 // 1024} МБ"
-                        )
+                        raise FileTooLargeError(f"Файл больше {self._max_bytes // 1024 // 1024} МБ")
                     digest.update(chunk)
                     handle.write(chunk)
 
             actual = digest.hexdigest()
             if actual != expected:
-                raise ChecksumMismatchError(
-                    "Содержимое не совпадает с заявленным хэшем"
-                )
+                raise ChecksumMismatchError("Содержимое не совпадает с заявленным хэшем")
 
             target = self.path_for(actual)
             if target.exists():
