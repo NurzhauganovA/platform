@@ -89,16 +89,20 @@ cp .env.example .env
 make prod
 ```
 
-Соберёт образы, поднимет базу, очередь, API, исполнителя и nginx, применит
-миграции платформы. Дальше — схемы подключённых ядер:
+Соберёт образы и поднимет всё: базу, очередь, API, исполнителя и nginx.
 
-```bash
-docker compose exec api bash -lc 'cd /app/projects/tender-analyze && alembic upgrade head'
-docker compose exec api bash -lc 'cd /app/projects/skstore && alembic upgrade head'
-docker compose exec api bash -lc 'cd /app/projects/omarket && alembic upgrade head'
-```
+Схемы поднимаются сами — служба `migrate` заводит недостающие базы
+(`fintend`, `fintend_tender`, `fintend_skstore`, `fintend_omarket`) и доводит
+до головы схему платформы и трёх ядер. Идёт при каждом запуске и повторов не
+боится.
+
+После этого платформа открывается на `http://bcorp.kz`, но **разделы будут
+пусты**: схемы есть, данных нет. Данные переносятся следующим шагом.
 
 ### 5. Данные
+
+Без этого шага платформа работает, но показывать ей нечего: разбор тендеров и
+выгрузки площадок лежат на прежней машине.
 
 На прежней машине:
 
