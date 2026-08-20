@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from platform_api.modules.detail import (
@@ -400,13 +401,21 @@ def _missing_note(files: Any, reachable: Any) -> str:
     """Почему файлов не видно — с путём, по которому их искали.
 
     «Нет на диске» без пути отвечает на вопрос «что случилось», но не на
-    «что чинить». А чинить тут всегда одно из двух: либо архив не подключён
-    томом, либо подключён не туда — пути в базе абсолютные и записаны той
-    машиной, где шёл разбор.
+    «что чинить». А чинить тут одно из трёх: архив не подключён томом,
+    подключён не туда (пути в базе абсолютные и записаны той машиной, где шёл
+    разбор) или закрыт правами. Третье выглядит точно так же, как первые два,
+    и различается одной попыткой прочитать папку.
     """
     if len(reachable) == len(files):
         return ""
-    where = str(files[0].path.parent) if files else ""
+    where = Path(str(files[0].path.parent)) if files else Path()
+    if _forbidden(where):
+        return (
+            f"Файлы на месте, но платформе закрыт доступ к «{where}». Она"
+            " работает под своим пользователем, а архив приехал с правами"
+            " прежней машины. Открыть на чтение:"
+            " sudo chmod -R a+rX <каталог архива>."
+        )
     if reachable:
         return (
             f"Часть файлов платформе не видна. Искали в «{where}» — проверьте,"
@@ -419,6 +428,21 @@ def _missing_note(files: Any, reachable: Any) -> str:
         " пути — в базе ядра пути абсолютные, и записала их та машина, где шёл"
         " разбор. Названия видны и без архива: по ним понятно, что в папке есть."
     )
+
+
+def _forbidden(where: Path) -> bool:
+    """Закрыта ли папка закупки правами.
+
+    Одна попытка на весь раздел, и только когда файлов и так недосчитались:
+    на исправном архиве этот вопрос не задаётся вовсе.
+    """
+    try:
+        where.is_dir()
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _size(value: int) -> str:
