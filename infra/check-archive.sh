@@ -43,6 +43,32 @@ with psycopg.connect(url) as conn, conn.cursor() as cur:
     paths = [row[0] for row in cur]
 
 
+def on_disk(path: Path) -> Path:
+    """Путь так, как имя записано на диске: колено за коленом.
+
+    Целиком приводить путь нельзя — написание расходится по коленам вразнобой,
+    и приведённый целиком путь не совпадёт ни с чем. Тем же способом ищет файл
+    и сама платформа.
+    """
+    if look(path) != "нет":
+        return path
+    here = Path(path.anchor)
+    for part in path.parts[1:]:
+        step = here / part
+        if look(step) == "нет":
+            key = unicodedata.normalize("NFC", part)
+            try:
+                entries = list(here.iterdir())
+            except OSError:
+                return path
+            found = next((e for e in entries if unicodedata.normalize("NFC", e.name) == key), None)
+            if found is None:
+                return path
+            step = found
+        here = step
+    return here
+
+
 def look(path: Path) -> str:
     """Что видно по этому пути: «файл», «папка», «нет», «нет прав», «не имя»."""
     try:
@@ -75,10 +101,9 @@ for text in paths:
     elif seen == "не имя" or any(len(part.encode()) > 255 for part in path.parts):
         why = "имя длиннее 255 байт — файловая система Linux его не примет"
     else:
-        other = "NFC" if unicodedata.normalize("NFD", text) == text else "NFD"
-        if look(Path(unicodedata.normalize(other, text))) == "файл":
-            why = f"есть на диске, но в другой форме записи ({other})"
-        elif look(path.parent) != "папка":
+        if look(on_disk(path)) == "файл":
+            why = "есть на диске, имя записано в другой форме — платформа найдёт"
+        elif look(on_disk(path.parent)) != "папка":
             why = "нет самой папки закупки"
         else:
             why = "папка есть, файла в ней нет"

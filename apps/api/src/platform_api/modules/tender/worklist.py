@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
@@ -426,10 +427,21 @@ def _inside(path: Path, folder: str) -> bool:
     if not folder:
         return False
     try:
-        path.resolve().relative_to(Path(folder).resolve())
+        inside = Path(_same(str(path.resolve())))
+        inside.relative_to(Path(_same(str(Path(folder).resolve()))))
     except (OSError, ValueError):
         return False
     return True
+
+
+def _same(text: str) -> str:
+    """Имя в едином написании — чтобы сравнение не зависело от формы записи.
+
+    Проверку это не ослабляет: приведение однозначно и применяется к обеим
+    сторонам, а выйти за папку по-прежнему нечем — ни «..», ни ссылка формой
+    записи не притворяются.
+    """
+    return unicodedata.normalize("NFC", text)
 
 
 def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) -> list[RankedRow]:
@@ -461,6 +473,9 @@ def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) ->
     model = _case_model(settings)
     vat = settings.analysis.vat_rate
     rows: list[Any] = []
+    # Каталоги перечитываются заново: сборка идёт, когда в базе что-то
+    # изменилось, а вместе с ней меняется обычно и содержимое папок.
+    _LISTINGS.clear()
 
     try:
         with container.unit_of_work() as uow:
@@ -500,6 +515,68 @@ def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) ->
     return rank(rows, min_margin=settings.offer.target_margin_percent)
 
 
+def _on_disk(path: Path) -> Path:
+    """Путь к файлу так, как его имя записано на диске.
+
+    Одну и ту же русскую букву Unicode позволяет записать двумя способами:
+    «й» целиком или «и» со значком краткости. macOS ищет файл нечувствительно
+    к этой разнице, ext4 сравнивает байты — и разобранная у тендерщика папка
+    на сервере не находится при верном на вид пути.
+
+    Разойтись может любое колено, и в базе одна и та же папка встречается в
+    обеих формах: её переписывали разные прогоны. Поэтому чинится не диск, а
+    поиск — колено за коленом, и оба написания ведут к одному файлу. Обратное
+    невозможно: как папку ни переименуй, вторая половина путей перестанет
+    сходиться.
+
+    Путь без расхождений возвращается сразу, не читая ни одного каталога.
+    """
+    if _reachable(path):
+        return path
+    here = Path(path.anchor)
+    for part in path.parts[1:]:
+        step = here / part
+        if not _reachable(step):
+            found = _listing(here).get(unicodedata.normalize("NFC", part))
+            if found is None:
+                return path
+            step = here / found
+        here = step
+    return here
+
+
+def _reachable(path: Path) -> bool:
+    """Есть ли что-то по этому пути. Нет прав или имя не по силам — считаем нет."""
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _listing(folder: Path) -> dict[str, str]:
+    """Содержимое каталога по приведённым именам.
+
+    Запоминается на прогон сборки: в папке закупки три десятка документов, и
+    без этого каталог перечитывался бы для каждого из них.
+    """
+    key = str(folder)
+    known = _LISTINGS.get(key)
+    if known is None:
+        try:
+            known = {
+                unicodedata.normalize("NFC", item.name): item.name for item in folder.iterdir()
+            }
+        except OSError:
+            known = {}
+        _LISTINGS[key] = known
+    return known
+
+
+_LISTINGS: dict[str, dict[str, str]] = {}
+"""Прочитанные каталоги. Живёт от сборки до сборки — как и всё остальное в
+кэше: пересобирается отбор только когда в базе ядра что-то изменилось."""
+
+
 def _case_files(case: Any) -> tuple[CaseFile, ...]:
     """Документы закупки в порядке их важности для человека.
 
@@ -522,7 +599,7 @@ def _case_files(case: Any) -> tuple[CaseFile, ...]:
                 name=source.name,
                 kind=str(insight.kind) if insight is not None and insight.kind else "",
                 size_bytes=source.size_bytes,
-                path=source.path,
+                path=_on_disk(source.path),
             )
         )
     items.sort(key=lambda item: (_KIND_ORDER.get(item.kind, len(_KIND_ORDER)), item.name))

@@ -13,8 +13,10 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -545,3 +547,35 @@ def _money(detail: dict[str, Any]) -> dict[str, Any]:
         item["label"]: (item["number"] if item["number"] is not None else item["text"])
         for item in fields
     }
+
+
+def test_fail_zakupki_nahoditsya_v_lyuboy_forme_zapisi(tmp_path: Path) -> None:
+    """Имя на диске и имя в базе могут расходиться формой записи Unicode.
+
+    Разбор шёл на macOS, где поиск файла к этой разнице нечувствителен, а
+    сервер на ext4 сравнивает байты. Хуже того, одна и та же папка попадает
+    в базу в обоих написаниях — разными прогонами, — поэтому переименовать
+    диск под базу нельзя: какую форму ни выбери, вторая половина путей
+    перестанет сходиться. Находить файл должна платформа.
+    """
+    from platform_api.modules.tender.worklist import _LISTINGS, _on_disk
+
+    _LISTINGS.clear()
+    folder = tmp_path / unicodedata.normalize("NFD", "Жанайбек_Страховка")
+    folder.mkdir()
+    (folder / unicodedata.normalize("NFD", "КП ОГПО ёлки.pdf")).write_text("тз", encoding="utf-8")
+
+    for form in ("NFC", "NFD"):
+        asked = Path(unicodedata.normalize(form, str(folder / "КП ОГПО ёлки.pdf")))
+        found = _on_disk(asked)
+        assert found.is_file(), f"не нашёлся по пути в форме {form}"
+        assert found.read_text(encoding="utf-8") == "тз"
+
+
+def test_fail_ne_iz_svoey_papki_ne_otdaetsya() -> None:
+    """Приведение имён не должно открывать дорогу за пределы папки закупки."""
+    from platform_api.modules.tender.worklist import _inside
+
+    assert not _inside(Path("/srv/tenders/чужая/тз.pdf"), "/srv/tenders/своя")
+    assert not _inside(Path("/srv/tenders/своя/../чужая/тз.pdf"), "/srv/tenders/своя")
+    assert _inside(Path("/srv/tenders/своя/тз.pdf"), "/srv/tenders/своя")

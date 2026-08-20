@@ -657,31 +657,75 @@ function describe(filter: ColumnFilter, format: string, role: string): string {
   return `до ${show(filter.max as number)}${suffix}`;
 }
 
-/** Итог прогона словами: что именно изменилось, а не «готово». */
+/** Итог прогона словами: что именно изменилось, а не «готово».
+ *
+ * Источники выгружаются независимо — упавший не должен утаскивать за собой
+ * остальные, — и поэтому прогон заканчивается успехом даже когда закупы не
+ * доехали. Складывать их в одно число нельзя: «получено записей: 766» зелёной
+ * галочкой при недоступном кабинете читается как «всё хорошо», человек ждёт
+ * новых закупов и не понимает, почему список прежний.
+ */
 function Finished({ job, unit }: { job: Job; unit: string }) {
-  const result = (job.result ?? {}) as Record<
-    string,
-    number | string | undefined
-  >;
-  const parts: string[] = [];
+  const result = (job.result ?? {}) as {
+    records?: number;
+    by_source?: Record<string, number>;
+    errors?: string[];
+    reason?: string;
+    bargains?: number;
+    preorders?: number;
+    market_searched?: number;
+    market_priced?: number;
+  };
+  const errors = result.errors ?? [];
+  const bySource = Object.entries(result.by_source ?? {});
 
+  const parts: string[] = [];
   if (job.kind === "sync") {
-    parts.push(`получено записей: ${result.records ?? 0}`);
+    // По источникам, а не одним числом: спрашивают «пришли ли закупы»,
+    // а не «сколько всего записей».
+    parts.push(
+      bySource.length
+        ? bySource.map(([name, count]) => `${name}: ${count}`).join(" · ")
+        : `получено записей: ${result.records ?? 0}`,
+    );
   } else {
     const counted = result.bargains ?? result.preorders ?? 0;
     parts.push(`пересчитано ${counted} ${unit}`);
     if (result.market_searched)
       parts.push(`найдено на рынке: ${result.market_priced ?? 0}`);
   }
-  if (typeof result.reason === "string") parts.push(result.reason);
+  if (result.reason) parts.push(result.reason);
 
+  const failed = errors.length > 0;
   return (
-    <Card className="border-good/40 bg-good/10 px-5 py-3">
-      <div className="flex items-center gap-2 text-sm">
-        <span aria-hidden className="text-good">
-          ✓
+    <Card
+      className={cx(
+        "px-5 py-3",
+        failed
+          ? "border-warning/40 bg-warning/10"
+          : "border-good/40 bg-good/10",
+      )}
+    >
+      <div className="flex items-start gap-2 text-sm">
+        <span aria-hidden className={failed ? "text-warning" : "text-good"}>
+          {failed ? "⚠" : "✓"}
         </span>
-        <span className="text-ink">{parts.join(" · ")}</span>
+        <div className="space-y-1">
+          <div className="text-ink">
+            {/* Значок цветом не ограничивается: при дальтонизме зелёный и
+                жёлтый неразличимы, а разница здесь — между «данные пришли»
+                и «половина не пришла». */}
+            {failed && (
+              <span className="font-medium">Выгрузилось не всё. </span>
+            )}
+            {parts.join(" · ")}
+          </div>
+          {errors.map((message) => (
+            <div key={message} className="text-ink-secondary">
+              {message}
+            </div>
+          ))}
+        </div>
       </div>
     </Card>
   );
