@@ -12,14 +12,16 @@ import { tender, type CaseStatus } from "@/api/tender";
 import { PageHeader } from "@/shell/AppShell";
 import { Badge, Button, Card, EmptyState, Spinner, bytes } from "@/ui";
 
-const STATUS: Record<CaseStatus, { title: string; tone: "neutral" | "info" | "good" | "warning" }> =
-  {
-    draft: { title: "Черновик", tone: "neutral" },
-    ready: { title: "Готова к разбору", tone: "info" },
-    analyzing: { title: "Разбирается", tone: "warning" },
-    analyzed: { title: "Разобрана", tone: "good" },
-    archived: { title: "В архиве", tone: "neutral" },
-  };
+const STATUS: Record<
+  CaseStatus,
+  { title: string; tone: "neutral" | "info" | "good" | "warning" }
+> = {
+  draft: { title: "Черновик", tone: "neutral" },
+  ready: { title: "Готова к разбору", tone: "info" },
+  analyzing: { title: "Разбирается", tone: "warning" },
+  analyzed: { title: "Разобрана", tone: "good" },
+  archived: { title: "В архиве", tone: "neutral" },
+};
 
 export function CasesPage() {
   const { data: cases, isLoading } = useQuery({
@@ -53,7 +55,9 @@ export function CasesPage() {
                 ▲
               </span>
               <div className="min-w-0">
-                <div className="text-sm font-medium text-ink">Не всё готово к разбору</div>
+                <div className="text-sm font-medium text-ink">
+                  Не всё готово к разбору
+                </div>
                 <ul className="mt-1 space-y-0.5 text-sm text-ink-secondary">
                   {health.problems.map((problem) => (
                     <li key={problem}>{problem}</li>
@@ -83,6 +87,7 @@ export function CasesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-hairline text-left text-xs text-ink-muted">
+                  <th className="w-12 px-3 py-2.5 text-right font-medium">№</th>
                   <th className="px-5 py-2.5 font-medium">Закупка</th>
                   <th className="px-3 py-2.5 font-medium">Заказчик</th>
                   <th className="px-3 py-2.5 text-right font-medium">Файлов</th>
@@ -91,11 +96,14 @@ export function CasesPage() {
                 </tr>
               </thead>
               <tbody>
-                {cases.map((item) => (
+                {cases.map((item, position) => (
                   <tr
                     key={item.id}
                     className="border-b border-hairline last:border-0 hover:bg-plane"
                   >
+                    <td className="px-3 py-3 text-right align-top tabular-nums text-ink-muted">
+                      {position + 1}
+                    </td>
                     <td className="px-5 py-3">
                       <Link
                         to={`/tender/cases/${item.id}`}
@@ -104,16 +112,24 @@ export function CasesPage() {
                         {item.title}
                       </Link>
                       {item.subject && (
-                        <div className="mt-0.5 truncate text-xs text-ink-muted">{item.subject}</div>
+                        <div className="mt-0.5 truncate text-xs text-ink-muted">
+                          {item.subject}
+                        </div>
                       )}
                     </td>
-                    <td className="px-3 py-3 text-ink-secondary">{item.customer || "—"}</td>
-                    <td className="px-3 py-3 text-right text-ink-secondary">{item.files_count}</td>
+                    <td className="px-3 py-3 text-ink-secondary">
+                      {item.customer || "—"}
+                    </td>
+                    <td className="px-3 py-3 text-right text-ink-secondary">
+                      {item.files_count}
+                    </td>
                     <td className="px-3 py-3 text-right text-ink-secondary">
                       {item.total_bytes ? bytes(item.total_bytes) : "—"}
                     </td>
                     <td className="px-5 py-3">
-                      <Badge tone={STATUS[item.status].tone}>{STATUS[item.status].title}</Badge>
+                      <Badge tone={STATUS[item.status].tone}>
+                        {STATUS[item.status].title}
+                      </Badge>
                     </td>
                   </tr>
                 ))}

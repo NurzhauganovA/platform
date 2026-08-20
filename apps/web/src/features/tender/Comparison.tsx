@@ -12,7 +12,16 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { tender } from "@/api/tender";
-import { Badge, Card, Collapsible, EmptyState, Spinner, StatTile, cx, money } from "@/ui";
+import {
+  Badge,
+  Card,
+  Collapsible,
+  EmptyState,
+  Spinner,
+  StatTile,
+  cx,
+  money,
+} from "@/ui";
 import { Requested } from "./Requested";
 import { SplitBanner } from "./SplitBanner";
 
@@ -67,7 +76,11 @@ export function Comparison({ caseId }: { caseId: string }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="Предложений" value={data.offers} hint="КП поставщиков" />
+        <StatTile
+          label="Предложений"
+          value={data.offers}
+          hint="КП поставщиков"
+        />
         <StatTile label="Позиций" value={data.positions.length} />
         <StatTile
           label="Дешевле всех"
@@ -107,7 +120,9 @@ export function Comparison({ caseId }: { caseId: string }) {
               )}
             </div>
             {data.decision.summary && (
-              <p className="text-sm text-ink-secondary">{data.decision.summary}</p>
+              <p className="text-sm text-ink-secondary">
+                {data.decision.summary}
+              </p>
             )}
             {data.decision.blockers.length > 0 && (
               <ul className="space-y-1">
@@ -130,17 +145,29 @@ export function Comparison({ caseId }: { caseId: string }) {
           {data.positions.map((position) => (
             <section key={position.name} className="px-5 py-4">
               <header className="mb-2.5 flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-sm font-medium text-ink">{position.name}</h3>
+                <h3 className="text-sm font-medium text-ink">
+                  {position.name}
+                </h3>
                 <div className="flex items-center gap-2 text-xs text-ink-muted">
                   <span>
                     {position.supplier_count}{" "}
-                    {plural(position.supplier_count, "поставщик", "поставщика", "поставщиков")}
+                    {plural(
+                      position.supplier_count,
+                      "поставщик",
+                      "поставщика",
+                      "поставщиков",
+                    )}
                   </span>
-                  {position.spread_ratio != null && position.spread_ratio > 1.01 && (
-                    <Badge tone={position.spread_ratio > 1.5 ? "warning" : "neutral"}>
-                      разброс ×{position.spread_ratio.toFixed(2)}
-                    </Badge>
-                  )}
+                  {position.spread_ratio != null &&
+                    position.spread_ratio > 1.01 && (
+                      <Badge
+                        tone={
+                          position.spread_ratio > 1.5 ? "warning" : "neutral"
+                        }
+                      >
+                        разброс ×{position.spread_ratio.toFixed(2)}
+                      </Badge>
+                    )}
                 </div>
               </header>
 
@@ -157,20 +184,31 @@ export function Comparison({ caseId }: { caseId: string }) {
                 </colgroup>
                 <thead>
                   <tr className="text-left text-xs text-ink-muted">
+                    <th className="w-10 pb-1.5 text-right font-medium">№</th>
                     <th className="pb-1.5 font-medium">Поставщик</th>
                     <th className="pb-1.5 font-medium">Что предложил</th>
                     <th className="pb-1.5 text-right font-medium">Кол-во</th>
-                    <th className="pb-1.5 text-right font-medium">Цена за ед., ₸</th>
+                    <th className="pb-1.5 text-right font-medium">
+                      Цена за ед., ₸
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {position.quotes.map((quote, index) => (
-                    <tr key={`${quote.supplier}-${index}`} className="align-top">
+                    <tr
+                      key={`${quote.supplier}-${index}`}
+                      className="align-top"
+                    >
+                      <td className="py-1.5 pr-2 text-right tabular-nums text-ink-muted">
+                        {index + 1}
+                      </td>
                       <td className="truncate py-1.5 pr-3">
                         <span
                           className={cx(
                             "inline-flex items-center gap-1.5",
-                            quote.is_cheapest ? "font-medium text-ink" : "text-ink-secondary",
+                            quote.is_cheapest
+                              ? "font-medium text-ink"
+                              : "text-ink-secondary",
                           )}
                         >
                           {quote.is_cheapest && (
@@ -181,7 +219,9 @@ export function Comparison({ caseId }: { caseId: string }) {
                             </span>
                           )}
                           {quote.supplier ?? "—"}
-                          {quote.is_cheapest && <span className="sr-only">лучшая цена</span>}
+                          {quote.is_cheapest && (
+                            <span className="sr-only">лучшая цена</span>
+                          )}
                         </span>
                       </td>
                       <td
@@ -196,10 +236,14 @@ export function Comparison({ caseId }: { caseId: string }) {
                       <td
                         className={cx(
                           "py-1.5 text-right",
-                          quote.is_cheapest ? "font-semibold text-good" : "text-ink",
+                          quote.is_cheapest
+                            ? "font-semibold text-good"
+                            : "text-ink",
                         )}
                       >
-                        {quote.unit_price != null ? money(quote.unit_price) : "—"}
+                        {quote.unit_price != null
+                          ? money(quote.unit_price)
+                          : "—"}
                       </td>
                     </tr>
                   ))}
@@ -245,7 +289,8 @@ export function Comparison({ caseId }: { caseId: string }) {
 }
 
 function toneOf(recommendation: string) {
-  if (recommendation.includes("участвовать") && !recommendation.includes("не")) return "good";
+  if (recommendation.includes("участвовать") && !recommendation.includes("не"))
+    return "good";
   if (recommendation.includes("не участвовать")) return "critical";
   return "warning";
 }

@@ -46,13 +46,19 @@ export function Market({ data }: { data: CaseComparison }) {
     );
   }
 
-  const viable = market.findings.filter((item) => (item.margin_percent ?? 0) > 0);
+  const viable = market.findings.filter(
+    (item) => (item.margin_percent ?? 0) > 0,
+  );
   const best = market.findings[0];
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatTile label="Найдено" value={market.findings.length} hint="предложений на рынке" />
+        <StatTile
+          label="Найдено"
+          value={market.findings.length}
+          hint="предложений на рынке"
+        />
         <StatTile label="Окупается" value={viable.length} tone="series-3" />
         <StatTile
           label="Лучшая маржа"
@@ -99,7 +105,9 @@ export function Market({ data }: { data: CaseComparison }) {
                     <span
                       className={cx(
                         "text-sm font-semibold",
-                        finding.margin_percent >= 15 ? "text-good" : "text-ink-secondary",
+                        finding.margin_percent >= 15
+                          ? "text-good"
+                          : "text-ink-secondary",
                       )}
                     >
                       маржа {finding.margin_percent}%
@@ -109,7 +117,10 @@ export function Market({ data }: { data: CaseComparison }) {
               </div>
 
               {finding.title && (
-                <p className="mt-0.5 truncate text-sm text-ink-secondary" title={finding.title}>
+                <p
+                  className="mt-0.5 truncate text-sm text-ink-secondary"
+                  title={finding.title}
+                >
                   {finding.title}
                 </p>
               )}
@@ -130,7 +141,9 @@ export function Market({ data }: { data: CaseComparison }) {
                 {finding.price_kzt != null && (
                   <div className="flex items-baseline gap-1.5">
                     <dt className="text-xs text-ink-muted">цена</dt>
-                    <dd className="font-medium text-ink">{money(finding.price_kzt)} ₸</dd>
+                    <dd className="font-medium text-ink">
+                      {money(finding.price_kzt)} ₸
+                    </dd>
                   </div>
                 )}
                 {finding.landed_cost != null && (
@@ -173,7 +186,9 @@ export function Market({ data }: { data: CaseComparison }) {
               </div>
 
               {!finding.matches_spec && finding.match_note && (
-                <p className="mt-1.5 text-xs text-critical">{finding.match_note}</p>
+                <p className="mt-1.5 text-xs text-critical">
+                  {finding.match_note}
+                </p>
               )}
             </article>
           ))}

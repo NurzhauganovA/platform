@@ -29,13 +29,19 @@ export function LoginPage() {
   });
 
   const error =
-    login.error instanceof ApiError ? login.error.message : login.error ? "Не удалось войти" : null;
+    login.error instanceof ApiError
+      ? login.error.message
+      : login.error
+        ? "Не удалось войти"
+        : null;
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-plane px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="text-xl font-semibold tracking-tight text-ink">Fintend</div>
+          <div className="text-xl font-semibold tracking-tight text-ink">
+            Fintend
+          </div>
           <p className="mt-1 text-sm text-ink-muted">Тендерный отдел</p>
         </div>
 

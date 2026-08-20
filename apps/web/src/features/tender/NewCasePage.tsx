@@ -16,8 +16,25 @@ import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { tender, type UploadPlan } from "@/api/tender";
 import { PageHeader } from "@/shell/AppShell";
-import { Badge, Button, Card, Field, Input, Progress, Spinner, StatTile, bytes, cx } from "@/ui";
-import { folderNameOf, planUpload, prepare, upload, type PickedFile } from "./upload";
+import {
+  Badge,
+  Button,
+  Card,
+  Field,
+  Input,
+  Progress,
+  Spinner,
+  StatTile,
+  bytes,
+  cx,
+} from "@/ui";
+import {
+  folderNameOf,
+  planUpload,
+  prepare,
+  upload,
+  type PickedFile,
+} from "./upload";
 
 type Step = "pick" | "hashing" | "plan" | "uploading" | "done";
 
@@ -48,7 +65,9 @@ export function NewCasePage() {
       setPlan(await planUpload(prepared));
       setStep("plan");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось прочитать папку");
+      setError(
+        cause instanceof Error ? cause.message : "Не удалось прочитать папку",
+      );
       setStep("pick");
     }
   }
@@ -59,7 +78,10 @@ export function NewCasePage() {
     setStep("uploading");
 
     try {
-      const created = await tender.createCase({ title: title.trim(), customer: customer.trim() });
+      const created = await tender.createCase({
+        title: title.trim(),
+        customer: customer.trim(),
+      });
       const attached = await upload(picked, plan, (done, total, note) =>
         setProgress({ done, total, note }),
       );
@@ -75,7 +97,10 @@ export function NewCasePage() {
 
   return (
     <>
-      <PageHeader title="Новая закупка" subtitle="Выберите папку с документами закупки" />
+      <PageHeader
+        title="Новая закупка"
+        subtitle="Выберите папку с документами закупки"
+      />
 
       <div className="max-w-4xl space-y-4 px-8 py-6">
         {error && (
@@ -102,7 +127,9 @@ export function NewCasePage() {
                 multiple
                 onChange={(event) => onFolder(event.target.files)}
               />
-              <span className="text-sm font-medium text-ink">Выбрать папку закупки</span>
+              <span className="text-sm font-medium text-ink">
+                Выбрать папку закупки
+              </span>
               <span className="text-xs text-ink-muted">
                 Файлы остаются у вас, пока не станет ясно, что из них нужно
               </span>
@@ -110,8 +137,12 @@ export function NewCasePage() {
 
             {step === "hashing" && (
               <div className="space-y-2">
-                <Spinner label={`Читаем файлы: ${progress.done} из ${progress.total}`} />
-                <Progress percent={(progress.done / Math.max(1, progress.total)) * 100} />
+                <Spinner
+                  label={`Читаем файлы: ${progress.done} из ${progress.total}`}
+                />
+                <Progress
+                  percent={(progress.done / Math.max(1, progress.total)) * 100}
+                />
               </div>
             )}
           </div>
@@ -151,7 +182,9 @@ export function NewCasePage() {
                     <span
                       className={cx(
                         "min-w-0 truncate",
-                        file.supported ? "text-ink" : "text-ink-muted line-through",
+                        file.supported
+                          ? "text-ink"
+                          : "text-ink-muted line-through",
                       )}
                       title={file.relative_path}
                     >
@@ -173,7 +206,10 @@ export function NewCasePage() {
 
             <Card title="Как назвать закупку">
               <div className="grid gap-4 px-5 py-5 sm:grid-cols-2">
-                <Field label="Название" hint="По умолчанию — имя выбранной папки">
+                <Field
+                  label="Название"
+                  hint="По умолчанию — имя выбранной папки"
+                >
                   <Input
                     value={title}
                     onChange={(event) => setTitle(event.target.value)}
@@ -198,7 +234,11 @@ export function NewCasePage() {
                       progress.note ? ` — ${progress.note}` : ""
                     }`}
                   />
-                  <Progress percent={(progress.done / Math.max(1, progress.total)) * 100} />
+                  <Progress
+                    percent={
+                      (progress.done / Math.max(1, progress.total)) * 100
+                    }
+                  />
                 </div>
               ) : (
                 <p className="text-sm text-ink-muted">
@@ -211,7 +251,9 @@ export function NewCasePage() {
               <Button
                 variant="primary"
                 onClick={onUpload}
-                disabled={step === "uploading" || !title.trim() || !plan.files.length}
+                disabled={
+                  step === "uploading" || !title.trim() || !plan.files.length
+                }
               >
                 Создать закупку
               </Button>

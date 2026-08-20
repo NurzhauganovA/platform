@@ -17,6 +17,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -579,3 +580,87 @@ def test_fail_ne_iz_svoey_papki_ne_otdaetsya() -> None:
     assert not _inside(Path("/srv/tenders/чужая/тз.pdf"), "/srv/tenders/своя")
     assert not _inside(Path("/srv/tenders/своя/../чужая/тз.pdf"), "/srv/tenders/своя")
     assert _inside(Path("/srv/tenders/своя/тз.pdf"), "/srv/tenders/своя")
+
+
+def test_fail_stroki_odnoy_papki_poluchayut_svoi_dokumenty(tmp_path: Path) -> None:
+    """В одной папке лежат бумаги нескольких потребностей.
+
+    Пять служебных записок на пять разных нужд — обычное дело, а строка в
+    отборе своя у каждой позиции. Пока файлы висели на папке, все пять строк
+    показывали все пять записок: человек открывал документ, читал про чужие
+    насосы и переставал верить разбору.
+    """
+    from platform_api.modules.tender.worklist import _attach_files
+
+    def document(name: str, kind: str) -> Any:
+        path = tmp_path / name
+        path.write_text("x", encoding="utf-8")
+        source = SimpleNamespace(
+            sha256=name, name=name, size_bytes=1, path=path, relative_path=Path(name)
+        )
+        return SimpleNamespace(source=source, insight=SimpleNamespace(kind=kind))
+
+    case = SimpleNamespace(
+        documents=[
+            document("МЗ насосы.docx", "МЗ"),
+            document("МЗ кабель.docx", "МЗ"),
+            document("КП насосы.pdf", "КП"),
+            document("Справка.pdf", ""),
+        ]
+    )
+
+    def row(title: str, sources: list[str], quotes: list[str]) -> Any:
+        return SimpleNamespace(
+            title=title,
+            ens_code="",
+            folder_path=str(tmp_path),
+            sources=sources,
+            quotes=[("Поставщик", name, None, "", "") for name in quotes],
+        )
+
+    pumps = row("Насосы", ["МЗ насосы.docx"], ["КП насосы.pdf"])
+    cable = row("Кабель", ["МЗ кабель.docx"], [])
+
+    files: dict[str, Any] = {}
+    _attach_files(files, [pumps, cable], case)
+
+    from platform_api.modules.tender.worklist import row_id_of_folder
+
+    seen = {key: [(item.name, item.shared) for item in value] for key, value in files.items()}
+    assert seen[row_id_of_folder(pumps)] == [
+        ("МЗ насосы.docx", False),
+        ("КП насосы.pdf", False),
+        # Справка про закупку целиком — достаётся обеим строкам, но помечена:
+        # прятать её было бы враньём наоборот.
+        ("Справка.pdf", True),
+    ]
+    assert seen[row_id_of_folder(cable)] == [
+        ("МЗ кабель.docx", False),
+        ("Справка.pdf", True),
+    ]
+
+
+def test_fail_odna_stroka_na_papku_vidit_vsyu_papku(tmp_path: Path) -> None:
+    """Делить не с кем — значит всё в папке принадлежит единственной строке."""
+    from platform_api.modules.tender.worklist import _attach_files, row_id_of_folder
+
+    path = tmp_path / "ТЗ.pdf"
+    path.write_text("x", encoding="utf-8")
+    case = SimpleNamespace(
+        documents=[
+            SimpleNamespace(
+                source=SimpleNamespace(
+                    sha256="a", name="ТЗ.pdf", size_bytes=1, path=path, relative_path=Path("ТЗ.pdf")
+                ),
+                insight=SimpleNamespace(kind="ТЗ"),
+            )
+        ]
+    )
+    only = SimpleNamespace(
+        title="Насосы", ens_code="", folder_path=str(tmp_path), sources=[], quotes=[]
+    )
+
+    files: dict[str, Any] = {}
+    _attach_files(files, [only], case)
+
+    assert [item.name for item in files[row_id_of_folder(only)]] == ["ТЗ.pdf"]

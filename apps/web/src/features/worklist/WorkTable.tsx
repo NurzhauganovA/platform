@@ -141,12 +141,28 @@ export function WorkTable({
       */}
       <table className="min-w-full table-fixed border-collapse text-[13px]">
         <colgroup>
+          {/* Номер: ширина под три знака плюс поле. Строк на экране до
+              восьмисот, и четырёхзначных не бывает. */}
+          <col style={{ width: "3.25rem" }} />
           {shown.map(({ column }) => (
             <col key={column.key} style={{ width: width(column) }} />
           ))}
         </colgroup>
         <thead className="sticky top-0 z-20">
           <tr>
+            {/* Номер не сортируется: он и есть порядок, в котором строки
+                сейчас лежат. Щелчок по нему мог бы значить только «отменить
+                сортировку», а это уже есть в самой колонке. */}
+            <th
+              scope="col"
+              className={cx(
+                "border-b border-hairline bg-surface px-2.5 py-2",
+                "text-xs font-medium text-ink-muted select-none",
+                "text-right",
+              )}
+            >
+              №
+            </th>
             {shown.map(({ column, index }) => (
               <th
                 key={column.key}
@@ -186,7 +202,7 @@ export function WorkTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((row, position) => (
             /*
               Строка открывает разбор целиком, и она же — то, чем его
               открывают с клавиатуры. Колонки-кнопки «Разбор» больше нет, и
@@ -224,6 +240,13 @@ export function WorkTable({
                   "outline outline-2 -outline-offset-2 outline-series-1",
               )}
             >
+              {/* Порядковый номер в том виде, в каком список сейчас на
+                  экране: отбор и сортировка его меняют, и это правильно —
+                  им называют строку вслух («посмотри седьмую»). Ссылку на
+                  строку он не заменяет, для неё есть устойчивый `row.id`. */}
+              <td className="border-b border-hairline px-2.5 py-1.5 text-right align-top text-ink-muted tabular-nums">
+                {position + 1}
+              </td>
               {shown.map(({ column, index }) => (
                 <td
                   key={column.key}
@@ -250,7 +273,6 @@ export function WorkTable({
     </div>
   );
 }
-
 
 /**
  * Ширина колонки берётся из книги: там она подобрана под содержимое.

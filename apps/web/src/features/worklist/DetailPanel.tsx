@@ -88,7 +88,10 @@ export function DetailPanel({
             <div className="flex items-center gap-2">
               {data?.tone && (
                 <span
-                  className={cx("text-base leading-none", GLYPH_COLOR[data.tone])}
+                  className={cx(
+                    "text-base leading-none",
+                    GLYPH_COLOR[data.tone],
+                  )}
                 >
                   {GLYPH[data.tone]}
                 </span>
@@ -173,11 +176,7 @@ export function DetailPanel({
  * «разделитель, 672 из 1400», и стрелками ширину меняет тот, кто не работает
  * мышью. Без этого панель настраивалась бы только курсором.
  */
-function ResizeHandle({
-  panel,
-}: {
-  panel: ReturnType<typeof usePanelWidth>;
-}) {
+function ResizeHandle({ panel }: { panel: ReturnType<typeof usePanelWidth> }) {
   return (
     <div
       role="separator"
@@ -378,6 +377,10 @@ function MiniTable({
         <thead>
           <tr className="border-b border-hairline text-left text-xs text-ink-muted">
             {pickable && <th className="w-8 px-2 py-1.5 font-medium" />}
+            {/* Номер: находок на позицию бывает под сотню, и назвать нужную
+                вслух («возьми четвёртую») иначе нечем — названия у них
+                похожи до неразличимости. */}
+            <th className="w-10 px-2 py-1.5 text-right font-medium">№</th>
             {table.columns.map((title, index) => (
               <th
                 key={title}
@@ -405,6 +408,9 @@ function MiniTable({
                   pick && onPick && !active && "hover:bg-plane",
                 )}
               >
+                <td className="px-2 py-1.5 text-right align-top text-ink-muted tabular-nums">
+                  {rowIndex + 1}
+                </td>
                 {pickable && (
                   <td className="px-2 py-1.5 align-top">
                     {pick ? (

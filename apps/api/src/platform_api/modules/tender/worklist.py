@@ -275,6 +275,14 @@ class CaseFile:
     size_bytes: int
     path: Path
 
+    shared: bool = False
+    """Файл лежит в папке, но ни к одной её позиции не привязан.
+
+    Справка о регистрации и договор относятся к закупке целиком, и прятать их
+    от строки нельзя. Но и выдавать за документ этой позиции тоже: тендерщик
+    откроет его в поисках требований и не найдёт.
+    """
+
     @property
     def available(self) -> bool:
         """Дотягивается ли платформа до файла.
@@ -389,15 +397,19 @@ def case_sourcing(folder_path: str) -> Any:
     return _CACHE["found"].get(folder_path)
 
 
-def case_files(folder_path: str) -> tuple[CaseFile, ...]:
-    """Файлы закупки: МЗ, ТЗ, КП и всё, что лежит в её папке.
+def case_files(item_id: str) -> tuple[CaseFile, ...]:
+    """Документы строки: её МЗ, ТЗ и КП плюс общие бумаги папки.
+
+    Ключ — строка, а не папка. В папке лежат бумаги нескольких потребностей, и
+    строка в отборе своя у каждой позиции; на общем ключе все они показывали
+    бы одно и то же.
 
     Собираются попутно со строками — те же документы, из которых закупка и
     построена, — поэтому отдельного обращения к базе не стоят.
     """
     _ranked()
     files: dict[str, tuple[CaseFile, ...]] = _CACHE["files"]
-    return files.get(folder_path, ())
+    return files.get(item_id, ())
 
 
 def find_file(item_id: str, sha256: str) -> CaseFile | None:
@@ -416,7 +428,7 @@ def find_file(item_id: str, sha256: str) -> CaseFile | None:
     if found is None:
         return None
     where = found.row.folder_path or ""
-    file = next((item for item in case_files(where) if item.sha256 == sha256), None)
+    file = next((item for item in case_files(item_id) if item.sha256 == sha256), None)
     if file is None or not _inside(file.path, where):
         return None
     return file
@@ -502,7 +514,7 @@ def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) ->
                     rows.extend(built)
                     if built:
                         where = built[0].folder_path
-                        files[where] = _case_files(case)
+                        _attach_files(files, built, case)
                         if sourcing:
                             # Позиции считает ядро. Своя такая же функция
                             # сосчитала бы по названиям находок — а модель
@@ -575,6 +587,45 @@ def _listing(folder: Path) -> dict[str, str]:
 _LISTINGS: dict[str, dict[str, str]] = {}
 """Прочитанные каталоги. Живёт от сборки до сборки — как и всё остальное в
 кэше: пересобирается отбор только когда в базе ядра что-то изменилось."""
+
+
+def _attach_files(files: dict[str, tuple[CaseFile, ...]], rows: Sequence[Any], case: Any) -> None:
+    """Раскладывает документы папки по строкам закупки.
+
+    Папка — граница закупки, но не границы потребности: в ней лежат пять
+    служебных записок на пять разных нужд, и строка в отборе своя у каждой
+    позиции. Пока файлы висели на папке, все пять строк показывали все пять
+    записок — человек открывал документ, читал про чужие насосы и переставал
+    верить разбору.
+
+    Кто о чём говорит, знает ядро: позиции оно взяло из документов заказчика
+    (`row.sources`), а предложения свело по позициям (`row.quotes`). Здесь
+    только раскладка, без своего сопоставления имён — второе такое разошлось
+    бы с книгой на первой же закупке.
+
+    Документ, не привязанный ни к одной позиции, — справка, договор, письмо —
+    достаётся всем строкам с пометкой: он и правда про закупку целиком.
+    """
+    from dataclasses import replace
+
+    everything = _case_files(case)
+    if len(rows) < 2:
+        # Одна строка на папку — делить не с кем, и всё в ней её собственное.
+        files[row_id_of_folder(rows[0])] = everything
+        return
+
+    # Один проход: у каждой строки свои имена, объединение — то, что вообще
+    # к чему-то привязано.
+    own: dict[str, set[str]] = {}
+    claimed: set[str] = set()
+    for row in rows:
+        names = {*row.sources, *(document for _supplier, document, *_rest in row.quotes)}
+        own[row_id_of_folder(row)] = names
+        claimed |= names
+
+    common = tuple(replace(item, shared=True) for item in everything if item.name not in claimed)
+    for key, names in own.items():
+        files[key] = tuple(item for item in everything if item.name in names) + common
 
 
 def _case_files(case: Any) -> tuple[CaseFile, ...]:

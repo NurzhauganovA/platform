@@ -23,9 +23,12 @@ export function Requested({ data }: { data: CaseComparison }) {
     <div className="space-y-4">
       <Card className="border-series-1/40 bg-series-1/5 px-5 py-3.5">
         <p className="text-sm text-ink">
-          <strong className="font-semibold">Предложений конкурентов пока нет.</strong> Это не
-          повод пропускать закупку — наоборот: соперников не видно, и цену можно ставить от
-          рынка. Запустите поиск на рынках, чтобы узнать себестоимость.
+          <strong className="font-semibold">
+            Предложений конкурентов пока нет.
+          </strong>{" "}
+          Это не повод пропускать закупку — наоборот: соперников не видно, и
+          цену можно ставить от рынка. Запустите поиск на рынках, чтобы узнать
+          себестоимость.
         </p>
       </Card>
 
@@ -55,6 +58,7 @@ export function Requested({ data }: { data: CaseComparison }) {
           </colgroup>
           <thead>
             <tr className="border-b border-hairline text-left text-xs text-ink-muted">
+              <th className="w-12 px-3 py-2 text-right font-medium">№</th>
               <th className="px-5 py-2 font-medium">Позиция</th>
               <th className="py-2 font-medium">Характеристики</th>
               <th className="py-2 text-right font-medium">Кол-во</th>
@@ -63,18 +67,29 @@ export function Requested({ data }: { data: CaseComparison }) {
           </thead>
           <tbody>
             {positions.map((item, index) => (
-              <tr key={item.name + index} className="border-b border-hairline last:border-0">
+              <tr
+                key={item.name + index}
+                className="border-b border-hairline last:border-0"
+              >
+                <td className="px-3 py-2 text-right align-top tabular-nums text-ink-muted">
+                  {index + 1}
+                </td>
                 <td className="truncate px-5 py-2 text-ink" title={item.name}>
                   {item.name}
                 </td>
-                <td className="truncate py-2 text-ink-muted" title={item.specification ?? ""}>
+                <td
+                  className="truncate py-2 text-ink-muted"
+                  title={item.specification ?? ""}
+                >
                   {item.specification ?? "—"}
                 </td>
                 <td className="py-2 text-right text-ink-secondary">
                   {item.quantity ?? "—"} {item.unit ?? ""}
                 </td>
                 <td className="px-5 py-2 text-right text-ink">
-                  {item.customer_price != null ? money(item.customer_price) : "—"}
+                  {item.customer_price != null
+                    ? money(item.customer_price)
+                    : "—"}
                 </td>
               </tr>
             ))}
@@ -102,7 +117,9 @@ export function Requested({ data }: { data: CaseComparison }) {
           <div className="space-y-2 px-5 py-4">
             <Badge tone="info">{data.decision.recommendation}</Badge>
             {data.decision.summary && (
-              <p className="text-sm text-ink-secondary">{data.decision.summary}</p>
+              <p className="text-sm text-ink-secondary">
+                {data.decision.summary}
+              </p>
             )}
           </div>
         </Card>

@@ -18,7 +18,14 @@
  * разворачивается вверх.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import type { ColumnFilter as Filter, Filterable } from "./filters";
 import { BLANK } from "./filters";
@@ -36,7 +43,11 @@ export function ColumnFilterButton({
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const [place, setPlace] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
+  const [place, setPlace] = useState<{
+    left: number;
+    top: number;
+    maxHeight: number;
+  } | null>(null);
 
   const WIDTH = 288;
   const GAP = 6;
@@ -52,7 +63,10 @@ export function ColumnFilterButton({
     // под списком нет вовсе, и без разворота он схлопывался бы в полоску.
     const upward = below < 240 && above > below;
     setPlace({
-      left: Math.min(Math.max(EDGE, button.left), window.innerWidth - WIDTH - EDGE),
+      left: Math.min(
+        Math.max(EDGE, button.left),
+        window.innerWidth - WIDTH - EDGE,
+      ),
       top: upward ? Math.max(EDGE, button.top - GAP) : button.bottom + GAP,
       maxHeight: Math.max(180, upward ? above : below),
     });
@@ -68,7 +82,10 @@ export function ColumnFilterButton({
     if (!open) return;
     const away = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (!anchor.current?.contains(target) && !panel.current?.contains(target)) {
+      if (
+        !anchor.current?.contains(target) &&
+        !panel.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -100,9 +117,10 @@ export function ColumnFilterButton({
         width: WIDTH,
         maxHeight: place.maxHeight,
         // Вверх — значит нижним краем к кнопке.
-        transform: place.top < (anchor.current?.getBoundingClientRect().top ?? 0)
-          ? "translateY(-100%)"
-          : undefined,
+        transform:
+          place.top < (anchor.current?.getBoundingClientRect().top ?? 0)
+            ? "translateY(-100%)"
+            : undefined,
       }}
       className="fixed z-50 flex flex-col overflow-hidden rounded-[10px] border border-baseline bg-surface p-3 text-left shadow-xl"
     >
@@ -186,7 +204,9 @@ function ValueList({
   const shown = useMemo(() => {
     const text = needle.trim().toLowerCase();
     if (!text) return target.options;
-    return target.options.filter((item) => item.value.toLowerCase().includes(text));
+    return target.options.filter((item) =>
+      item.value.toLowerCase().includes(text),
+    );
   }, [target.options, needle]);
 
   function toggle(value: string) {
@@ -236,7 +256,9 @@ function ValueList({
             >
               {item.value}
             </span>
-            <span className="shrink-0 tabular-nums text-ink-muted">{item.count}</span>
+            <span className="shrink-0 tabular-nums text-ink-muted">
+              {item.count}
+            </span>
           </label>
         ))}
       </div>
@@ -245,7 +267,10 @@ function ValueList({
         <div className="mt-2 flex gap-3 border-t border-hairline pt-2 text-xs">
           <button
             onClick={() =>
-              onChange({ kind: "values", values: new Set(shown.map((item) => item.value)) })
+              onChange({
+                kind: "values",
+                values: new Set(shown.map((item) => item.value)),
+              })
             }
             className="text-ink-muted underline underline-offset-2 hover:text-ink"
           >
@@ -297,7 +322,9 @@ function RangeInputs({
   const hint = (value: number) =>
     dates
       ? new Date(value).toLocaleDateString("ru-RU")
-      : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value);
+      : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(
+          value,
+        );
 
   return (
     <>
@@ -325,7 +352,9 @@ function RangeInputs({
           то, ради чего фильтр открывают чаще всего, и набирать их руками по
           десять раз на дню незачем. Считаются от самих данных, поэтому
           подходят и там, где суммы на два порядка меньше. */}
-      {!dates && target.bounds && <Presets target={target} onChange={onChange} />}
+      {!dates && target.bounds && (
+        <Presets target={target} onChange={onChange} />
+      )}
 
       <p className="mt-2 border-t border-hairline pt-2 text-[11px] text-ink-muted">
         Строки, где значения нет, под условие не подходят: неизвестная величина
@@ -355,8 +384,10 @@ function Presets({
   // «от миллиона» бессмысленно там, где вся закупка на двести тысяч.
   const steps = percent
     ? [10, 20, 30, 50]
-    : [0.25, 0.5, 0.75].map((share) =>
-        Math.round((bounds.min + (bounds.max - bounds.min) * share) / 1000) * 1000,
+    : [0.25, 0.5, 0.75].map(
+        (share) =>
+          Math.round((bounds.min + (bounds.max - bounds.min) * share) / 1000) *
+          1000,
       );
 
   const label = (value: number) =>

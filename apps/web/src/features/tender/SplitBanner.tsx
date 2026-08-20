@@ -52,8 +52,9 @@ export function SplitBanner({ caseId }: { caseId: string }) {
               В этой папке {cases.length} разных закупок
             </h3>
             <p className="mt-1 text-sm text-ink-secondary">
-              Каждое заключение — про свой предмет: сравнивать их между собой нечего. Разделите
-              папку, и каждая закупка станет отдельной карточкой со своими предложениями.
+              Каждое заключение — про свой предмет: сравнивать их между собой
+              нечего. Разделите папку, и каждая закупка станет отдельной
+              карточкой со своими предложениями.
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -73,13 +74,19 @@ export function SplitBanner({ caseId }: { caseId: string }) {
         {open && (
           <ol className="max-h-96 space-y-1 overflow-y-auto border-t border-series-1/20 pt-3">
             {cases.map((item, index) => (
-              <li key={item.title + index} className="flex items-baseline gap-2.5 text-sm">
+              <li
+                key={item.title + index}
+                className="flex items-baseline gap-2.5 text-sm"
+              >
                 <span className="w-6 shrink-0 text-right text-xs text-ink-muted">
                   {index + 1}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-ink">{item.title}</span>
+                <span className="min-w-0 flex-1 truncate text-ink">
+                  {item.title}
+                </span>
                 <span className="shrink-0 text-xs text-ink-muted">
-                  {item.files.length} {plural(item.files.length, "файл", "файла", "файлов")}
+                  {item.files.length}{" "}
+                  {plural(item.files.length, "файл", "файла", "файлов")}
                   {item.anchors > 1 && ` · ${item.anchors} редакции`}
                 </span>
               </li>

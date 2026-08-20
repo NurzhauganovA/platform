@@ -355,11 +355,16 @@ def _before_submit(row: Any) -> Section:
 
 
 def _files(row: Any) -> Section:
-    """Документы закупки — то, что лежит в её папке.
+    """Документы этой строки — её МЗ, ТЗ и КП, а не всё, что лежит в папке.
 
     Разбор отвечает на «откуда цифра», но последний вопрос перед подачей
     всегда один: «покажи само ТЗ». До сих пор за ним шли в папку на диске, то
     есть выходили из платформы — и обратно к строке возвращались вручную.
+
+    Показывать всю папку нельзя: в ней бумаги нескольких потребностей сразу,
+    а строка своя у каждой позиции. Кто о чём говорит, решило ядро — здесь
+    только показ. Общие бумаги папки, справка и договор, помечены как общие:
+    спрятать их было бы враньём наоборот.
 
     Файлы отдаются платформой, а не копируются в неё: копия разошлась бы с
     папкой в тот день, когда заказчик пришлёт исправленное ТЗ, и разбор
@@ -367,21 +372,21 @@ def _files(row: Any) -> Section:
     """
     from platform_api.modules.tender.worklist import case_files, row_id_of_folder
 
-    files = case_files(row.folder_path or "")
+    item_id = row_id_of_folder(row)
+    files = case_files(item_id)
     if not files:
         return Section(
             title="Документы закупки",
             empty="Файлы этой закупки в базе не числятся — папку не разбирали.",
         )
 
-    item_id = row_id_of_folder(row)
     reachable = [item for item in files if item.available]
     fields = tuple(
         Field(
             label=item.kind or "файл",
             text=item.name,
             link=(f"/api/tender/item/{item_id}/file/{item.sha256}" if item.available else None),
-            note=_size(item.size_bytes) if item.available else "нет на диске",
+            note=_file_note(item),
             tone="" if item.available else "warning",
         )
         for item in files
@@ -395,6 +400,19 @@ def _files(row: Any) -> Section:
         collapsed=True,
         note=_missing_note(files, reachable),
     )
+
+
+def _file_note(item: Any) -> str:
+    """Подпись к файлу: размер и относится ли он к самой позиции.
+
+    Пометка нужна словами, а не оттенком строки: цветом «общий для папки» от
+    «этот документ про вашу позицию» не отличить, а разница здесь ровно в том,
+    стоит ли открывать файл в поисках требований.
+    """
+    parts = [_size(item.size_bytes) if item.available else "нет на диске"]
+    if item.shared:
+        parts.append("общий для папки")
+    return " · ".join(parts)
 
 
 def _missing_note(files: Any, reachable: Any) -> str:

@@ -166,7 +166,8 @@ export function WorklistPage({
   // тендерщика, — а пересчёт у площадок виден только тому, кто платит.
   // Решать это второй раз здесь значило бы завести второе правило, и
   // разошлись бы они на кнопке, которая отвечает 403.
-  const can = (action: WorklistAction) => Boolean(data?.actions.includes(action));
+  const can = (action: WorklistAction) =>
+    Boolean(data?.actions.includes(action));
   const seesMoney = Boolean(data?.columns.some((column) => column.sensitive));
 
   // Отбор считается здесь, а не в таблице: по нему же строятся легенда и
@@ -307,7 +308,8 @@ export function WorklistPage({
               total: data.rows.length,
               columns: data.columns,
               unit,
-              goodLabel: data.legend.find((item) => item.tone === "good")?.title ?? "",
+              goodLabel:
+                data.legend.find((item) => item.tone === "good")?.title ?? "",
             })}
           />
         )}
@@ -332,7 +334,9 @@ export function WorklistPage({
 
         <Card
           title={
-            data ? `${data.sheet} — ${visible.length} из ${data.total}` : "Список"
+            data
+              ? `${data.sheet} — ${visible.length} из ${data.total}`
+              : "Список"
           }
           action={
             <div className="flex items-center gap-2">
@@ -649,7 +653,9 @@ function describe(filter: ColumnFilter, format: string, role: string): string {
   const show = (value: number) =>
     format === "datetime"
       ? new Date(value).toLocaleDateString("ru-RU")
-      : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(value);
+      : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(
+          value,
+        );
   const suffix = format === "percent" || role === "margin" ? "%" : "";
   if (filter.min != null && filter.max != null)
     return `${show(filter.min)}–${show(filter.max)}${suffix}`;
@@ -757,7 +763,9 @@ function Empty({
   // Пустой список — это несколько разных ответов, и путать их нельзя.
   // «Работы нет», «данные устарели», «ещё не считали» и «всё отсеялось»
   // требуют от человека совершенно разных действий.
-  const sync = actions.includes("sync") ? " Нажмите «Обновить данные»." : ` ${hint}`;
+  const sync = actions.includes("sync")
+    ? " Нажмите «Обновить данные»."
+    : ` ${hint}`;
   const message = filter
     ? `По запросу «${filter}» ничего не нашлось.`
     : tones.size

@@ -12,7 +12,16 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { jobs, tender, type Job } from "@/api/tender";
 import { PageHeader } from "@/shell/AppShell";
-import { Badge, Button, Card, Progress, Spinner, StatTile, bytes, cx } from "@/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Progress,
+  Spinner,
+  StatTile,
+  bytes,
+  cx,
+} from "@/ui";
 import { Actions } from "./Actions";
 import { Comparison } from "./Comparison";
 
@@ -24,13 +33,21 @@ function useJobStream(jobId: string | null) {
 
   useEffect(() => {
     if (!jobId) return;
-    const source = new EventSource(`/api/jobs/${jobId}/stream`, { withCredentials: true });
+    const source = new EventSource(`/api/jobs/${jobId}/stream`, {
+      withCredentials: true,
+    });
 
     source.onmessage = (event) => {
       const data = JSON.parse(event.data) as Partial<Job>;
-      setJob((current) => ({ ...(current ?? ({ id: jobId } as Job)), ...data }) as Job);
+      setJob(
+        (current) =>
+          ({ ...(current ?? ({ id: jobId } as Job)), ...data }) as Job,
+      );
 
-      if (data.status && ["succeeded", "failed", "cancelled"].includes(data.status)) {
+      if (
+        data.status &&
+        ["succeeded", "failed", "cancelled"].includes(data.status)
+      ) {
         source.close();
         // Разбор закончился — карточка и список должны показать новое состояние.
         if (seen.current !== data.status) {
@@ -103,7 +120,9 @@ export function CasePage() {
     <>
       <PageHeader
         title={item.title}
-        subtitle={[item.customer, item.subject].filter(Boolean).join(" · ") || undefined}
+        subtitle={
+          [item.customer, item.subject].filter(Boolean).join(" · ") || undefined
+        }
         action={
           <div className="flex items-center gap-2">
             <Link to="/tender/cases">
@@ -113,14 +132,18 @@ export function CasePage() {
               onClick={() => analyze.mutate()}
               disabled={running || analyze.isPending || !item.files.length}
             >
-              {running && job?.kind === "analyze" ? "Разбираем…" : "Разобрать документы"}
+              {running && job?.kind === "analyze"
+                ? "Разбираем…"
+                : "Разобрать документы"}
             </Button>
             <Button
               variant="primary"
               onClick={() => decide.mutate()}
               // Решать по неразобранной закупке не по чему: сначала
               // документы, потом вывод.
-              disabled={running || decide.isPending || item.status !== "analyzed"}
+              disabled={
+                running || decide.isPending || item.status !== "analyzed"
+              }
             >
               {running && job?.kind === "decide" ? "Думаем…" : "Решить"}
             </Button>
@@ -134,7 +157,10 @@ export function CasePage() {
           <StatTile label="Объём" value={bytes(item.total_bytes)} />
           <StatTile
             label="Разобрано"
-            value={result.documents ?? (item.status === "analyzed" ? item.files.length : 0)}
+            value={
+              result.documents ??
+              (item.status === "analyzed" ? item.files.length : 0)
+            }
             tone="series-3"
           />
           <StatTile
@@ -174,8 +200,12 @@ export function CasePage() {
           >
             <div className="space-y-3 px-5 py-4">
               <div className="flex items-baseline justify-between gap-4 text-sm">
-                <span className="min-w-0 truncate text-ink-secondary">{job.note || "…"}</span>
-                <span className="shrink-0 font-medium text-ink">{job.percent}%</span>
+                <span className="min-w-0 truncate text-ink-secondary">
+                  {job.note || "…"}
+                </span>
+                <span className="shrink-0 font-medium text-ink">
+                  {job.percent}%
+                </span>
               </div>
               <Progress
                 percent={job.percent}
@@ -192,7 +222,9 @@ export function CasePage() {
                 <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-secondary">
                   {Object.entries(result).map(([key, value]) => (
                     <div key={key} className="flex gap-1.5">
-                      <dt className="text-ink-muted">{FIELD_TITLES[key] ?? key}:</dt>
+                      <dt className="text-ink-muted">
+                        {FIELD_TITLES[key] ?? key}:
+                      </dt>
                       <dd className="text-ink">{value}</dd>
                     </div>
                   ))}
@@ -237,32 +269,40 @@ export function CasePage() {
         )}
 
         {tab === "documents" && (
-        <Card title={`Документы (${item.files.length})`}>
-          <ul className="divide-y divide-hairline">
-            {item.files.map((file) => (
-              <li
-                key={file.id}
-                className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm"
-              >
-                <span className="min-w-0 truncate text-ink" title={file.relative_path}>
-                  {file.relative_path.includes("/") ? (
-                    <>
-                      <span className="text-ink-muted">
-                        {file.relative_path.slice(0, file.relative_path.lastIndexOf("/") + 1)}
-                      </span>
-                      {file.relative_path.slice(file.relative_path.lastIndexOf("/") + 1)}
-                    </>
-                  ) : (
-                    file.relative_path
-                  )}
-                </span>
-                <span className={cx("shrink-0 text-xs text-ink-muted")}>
-                  {bytes(file.size_bytes)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Card>
+          <Card title={`Документы (${item.files.length})`}>
+            <ul className="divide-y divide-hairline">
+              {item.files.map((file) => (
+                <li
+                  key={file.id}
+                  className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm"
+                >
+                  <span
+                    className="min-w-0 truncate text-ink"
+                    title={file.relative_path}
+                  >
+                    {file.relative_path.includes("/") ? (
+                      <>
+                        <span className="text-ink-muted">
+                          {file.relative_path.slice(
+                            0,
+                            file.relative_path.lastIndexOf("/") + 1,
+                          )}
+                        </span>
+                        {file.relative_path.slice(
+                          file.relative_path.lastIndexOf("/") + 1,
+                        )}
+                      </>
+                    ) : (
+                      file.relative_path
+                    )}
+                  </span>
+                  <span className={cx("shrink-0 text-xs text-ink-muted")}>
+                    {bytes(file.size_bytes)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
         )}
       </div>
     </>

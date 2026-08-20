@@ -21,7 +21,13 @@ import { useQuery } from "@tanstack/react-query";
 import { worklists, type WorklistSlug } from "@/api/worklist";
 import { PageHeader } from "@/shell/AppShell";
 import { Card, Spinner, cx, money } from "@/ui";
-import { defaultSlice, indexOfRole, slices, sliceable, type Slice } from "./aggregate";
+import {
+  defaultSlice,
+  indexOfRole,
+  slices,
+  sliceable,
+  type Slice,
+} from "./aggregate";
 
 export function AnalyticsPage({
   slug,
@@ -51,7 +57,10 @@ export function AnalyticsPage({
     [data, scope],
   );
 
-  const cut = useMemo(() => (data && by ? slices(data, rows, by) : []), [data, rows, by]);
+  const cut = useMemo(
+    () => (data && by ? slices(data, rows, by) : []),
+    [data, rows, by],
+  );
 
   // Деньги показываем только тому, кому их показал сервер: он уже вырезал
   // колонки по правам, и спрашивать роль второй раз здесь значило бы завести
@@ -89,7 +98,9 @@ export function AnalyticsPage({
 
         {isError && (
           <Card className="px-5 py-10 text-center">
-            <p className="text-sm font-medium text-ink">Данные пока недоступны</p>
+            <p className="text-sm font-medium text-ink">
+              Данные пока недоступны
+            </p>
             <p className="mt-1 text-sm text-ink-muted">
               {error instanceof Error ? error.message : "Попробуйте позже"}
             </p>
@@ -152,7 +163,11 @@ function SliceTable({
   seesMoney: boolean;
 }) {
   if (!slices.length) {
-    return <div className="px-5 py-10 text-center text-sm text-ink-muted">Нечего разрезать</div>;
+    return (
+      <div className="px-5 py-10 text-center text-sm text-ink-muted">
+        Нечего разрезать
+      </div>
+    );
   }
   const biggest = Math.max(...slices.map((item) => item.total ?? item.rows));
 
@@ -161,19 +176,36 @@ function SliceTable({
       <table className="w-full text-[13px]">
         <thead>
           <tr className="border-b border-hairline text-xs text-ink-secondary">
+            {/* Номер: разрезов бывает под сотню, и место строки в порядке
+                убывания — это и есть ответ на «какая категория главная». */}
+            <th className="w-12 px-3 py-2 text-right font-medium">№</th>
             <th className="px-5 py-2 text-left font-medium">{cutTitle}</th>
             <th className="px-3 py-2 text-right font-medium">Строк</th>
             <th className="px-3 py-2 text-right font-medium">Брать</th>
-            {hasTotal && <th className="px-3 py-2 text-right font-medium">Объём, ₸</th>}
-            {seesMoney && <th className="px-3 py-2 text-right font-medium">Себестоимость, ₸</th>}
-            {seesMoney && <th className="px-3 py-2 text-right font-medium">Заработок, ₸</th>}
+            {hasTotal && (
+              <th className="px-3 py-2 text-right font-medium">Объём, ₸</th>
+            )}
+            {seesMoney && (
+              <th className="px-3 py-2 text-right font-medium">
+                Себестоимость, ₸
+              </th>
+            )}
+            {seesMoney && (
+              <th className="px-3 py-2 text-right font-medium">Заработок, ₸</th>
+            )}
             <th className="px-3 py-2 text-right font-medium">Маржа</th>
             <th className="px-5 py-2 text-right font-medium">Оценено</th>
           </tr>
         </thead>
         <tbody>
-          {slices.map((item) => (
-            <tr key={item.name} className="border-b border-hairline last:border-0 hover:bg-plane">
+          {slices.map((item, position) => (
+            <tr
+              key={item.name}
+              className="border-b border-hairline last:border-0 hover:bg-plane"
+            >
+              <td className="px-3 py-1.5 text-right align-top tabular-nums text-ink-muted">
+                {position + 1}
+              </td>
               <td className="px-5 py-1.5">
                 {/* Полоска под названием: доля этого разреза читается боковым
                     зрением, без сравнения чисел между собой. */}
@@ -189,9 +221,13 @@ function SliceTable({
                   />
                 </div>
               </td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-ink">{item.rows}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-ink">
+                {item.rows}
+              </td>
               <td className="px-3 py-1.5 text-right tabular-nums">
-                <span className={item.good ? "text-good" : "text-ink-muted"}>{item.good}</span>
+                <span className={item.good ? "text-good" : "text-ink-muted"}>
+                  {item.good}
+                </span>
               </td>
               {hasTotal && (
                 <td className="px-3 py-1.5 text-right tabular-nums text-ink">

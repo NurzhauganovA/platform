@@ -56,7 +56,9 @@ export function Actions({
   const offer = useMutation({
     mutationFn: () =>
       tender.offer(caseId, {
-        companies: chosen.length ? chosen : companies.filter((c) => c.is_default).map((c) => c.key),
+        companies: chosen.length
+          ? chosen
+          : companies.filter((c) => c.is_default).map((c) => c.key),
         number: number.trim() || null,
       }),
     onSuccess: (started) => {
@@ -73,114 +75,132 @@ export function Actions({
   return (
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
-      <Card title="Поиск на рынках">
-        <div className="space-y-3 px-5 py-4">
-          <p className="text-sm text-ink-secondary">
-            Ищет позиции закупки в Казахстане, Кыргызстане, России, Китае и Узбекистане и считает,
-            где мы заработаем. Здесь впервые появляется наша собственная цена — та, по которой мы
-            можем купить.
-          </p>
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={() => sourcing.mutate()}
-              disabled={busy || !analyzed || sourcing.isPending}
-            >
-              Искать
-            </Button>
-            <Badge tone="warning">платно — запросы идут в интернет</Badge>
-          </div>
-          {!analyzed && (
-            <p className="text-xs text-ink-muted">Сначала разберите документы закупки.</p>
-          )}
-        </div>
-      </Card>
-
-      <Card title="Наше предложение">
-        <div className="space-y-3 px-5 py-4">
-          <p className="text-sm text-ink-secondary">
-            Собирает КП для заказчика и задание закупщику. Денег не стоит: цена считается кодом по
-            уже известным величинам.
-          </p>
-
-          <fieldset>
-            <legend className="mb-1.5 text-xs font-medium text-ink-muted">От кого отправляем</legend>
-            <div className="flex flex-wrap gap-1.5">
-              {companies.map((company) => {
-                const active = chosen.includes(company.key) || (!chosen.length && company.is_default);
-                return (
-                  <button
-                    key={company.key}
-                    type="button"
-                    onClick={() =>
-                      setChosen((current) =>
-                        current.includes(company.key)
-                          ? current.filter((key) => key !== company.key)
-                          : [...current, company.key],
-                      )
-                    }
-                    title={company.missing.length ? `Не заполнено: ${company.missing.join(", ")}` : ""}
-                    className={cx(
-                      "rounded-full border px-3 py-1 text-xs transition",
-                      active
-                        ? "border-series-1 bg-series-1/10 font-medium text-series-1"
-                        : "border-baseline text-ink-secondary hover:bg-plane",
-                    )}
-                  >
-                    {company.name}
-                    {company.missing.length > 0 && (
-                      // Незаполненный реквизит должен всплыть при выборе,
-                      // а не в готовом КП у заказчика.
-                      <span aria-label="есть незаполненные реквизиты" className="ml-1 text-warning">
-                        ▲
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+        <Card title="Поиск на рынках">
+          <div className="space-y-3 px-5 py-4">
+            <p className="text-sm text-ink-secondary">
+              Ищет позиции закупки в Казахстане, Кыргызстане, России, Китае и
+              Узбекистане и считает, где мы заработаем. Здесь впервые появляется
+              наша собственная цена — та, по которой мы можем купить.
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={() => sourcing.mutate()}
+                disabled={busy || !analyzed || sourcing.isPending}
+              >
+                Искать
+              </Button>
+              <Badge tone="warning">платно — запросы идут в интернет</Badge>
             </div>
-          </fieldset>
-
-          <div className="flex items-end gap-2">
-            <label className="flex-1">
-              <span className="mb-1 block text-xs font-medium text-ink-muted">Исходящий номер</span>
-              <input
-                value={number}
-                onChange={(event) => setNumber(event.target.value)}
-                placeholder="7"
-                className="w-full rounded-[8px] border border-baseline bg-surface px-3 py-1.5 text-sm text-ink"
-              />
-            </label>
-            <Button
-              variant="primary"
-              onClick={() => offer.mutate()}
-              disabled={busy || !analyzed || offer.isPending}
-            >
-              Собрать КП
-            </Button>
+            {!analyzed && (
+              <p className="text-xs text-ink-muted">
+                Сначала разберите документы закупки.
+              </p>
+            )}
           </div>
+        </Card>
 
-          {offer.isPending && <Spinner label="Собираем документы…" />}
+        <Card title="Наше предложение">
+          <div className="space-y-3 px-5 py-4">
+            <p className="text-sm text-ink-secondary">
+              Собирает КП для заказчика и задание закупщику. Денег не стоит:
+              цена считается кодом по уже известным величинам.
+            </p>
 
-          {documents.length > 0 && (
-            <ul className="space-y-1 border-t border-hairline pt-3">
-              {documents.map((document) => (
-                <li key={document.name} className="flex items-center justify-between gap-3">
-                  <a
-                    href={`/api/tender/cases/${caseId}/documents/${encodeURIComponent(document.name)}`}
-                    download
-                    className="min-w-0 truncate text-sm text-series-1 hover:underline"
+            <fieldset>
+              <legend className="mb-1.5 text-xs font-medium text-ink-muted">
+                От кого отправляем
+              </legend>
+              <div className="flex flex-wrap gap-1.5">
+                {companies.map((company) => {
+                  const active =
+                    chosen.includes(company.key) ||
+                    (!chosen.length && company.is_default);
+                  return (
+                    <button
+                      key={company.key}
+                      type="button"
+                      onClick={() =>
+                        setChosen((current) =>
+                          current.includes(company.key)
+                            ? current.filter((key) => key !== company.key)
+                            : [...current, company.key],
+                        )
+                      }
+                      title={
+                        company.missing.length
+                          ? `Не заполнено: ${company.missing.join(", ")}`
+                          : ""
+                      }
+                      className={cx(
+                        "rounded-full border px-3 py-1 text-xs transition",
+                        active
+                          ? "border-series-1 bg-series-1/10 font-medium text-series-1"
+                          : "border-baseline text-ink-secondary hover:bg-plane",
+                      )}
+                    >
+                      {company.name}
+                      {company.missing.length > 0 && (
+                        // Незаполненный реквизит должен всплыть при выборе,
+                        // а не в готовом КП у заказчика.
+                        <span
+                          aria-label="есть незаполненные реквизиты"
+                          className="ml-1 text-warning"
+                        >
+                          ▲
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            <div className="flex items-end gap-2">
+              <label className="flex-1">
+                <span className="mb-1 block text-xs font-medium text-ink-muted">
+                  Исходящий номер
+                </span>
+                <input
+                  value={number}
+                  onChange={(event) => setNumber(event.target.value)}
+                  placeholder="7"
+                  className="w-full rounded-[8px] border border-baseline bg-surface px-3 py-1.5 text-sm text-ink"
+                />
+              </label>
+              <Button
+                variant="primary"
+                onClick={() => offer.mutate()}
+                disabled={busy || !analyzed || offer.isPending}
+              >
+                Собрать КП
+              </Button>
+            </div>
+
+            {offer.isPending && <Spinner label="Собираем документы…" />}
+
+            {documents.length > 0 && (
+              <ul className="space-y-1 border-t border-hairline pt-3">
+                {documents.map((document) => (
+                  <li
+                    key={document.name}
+                    className="flex items-center justify-between gap-3"
                   >
-                    {document.name}
-                  </a>
-                  <span className="shrink-0 text-xs text-ink-muted">
-                    {bytes(document.size_bytes)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </Card>
+                    <a
+                      href={`/api/tender/cases/${caseId}/documents/${encodeURIComponent(document.name)}`}
+                      download
+                      className="min-w-0 truncate text-sm text-series-1 hover:underline"
+                    >
+                      {document.name}
+                    </a>
+                    <span className="shrink-0 text-xs text-ink-muted">
+                      {bytes(document.size_bytes)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </Card>
       </div>
 
       {comparison && <Market data={comparison} />}
