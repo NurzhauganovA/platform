@@ -135,9 +135,28 @@ class StartedJobOut(BaseModel):
 class ModuleHealth(BaseModel):
     """Готовность модуля к работе."""
 
+    database: str = ""
+    """С какой базой работает ядро: «PostgreSQL» или «SQLite (файл)». Забытая
+    переменная окружения не ломает ничего заметного — ядро продолжает писать
+    в старое место, — поэтому видно должно быть сразу."""
+
     ok: bool
     core_version: str
     provider: str
     model_access: bool
     companies_configured: int
     problems: tuple[str, ...] = ()
+
+
+__all__ = [
+    "CompanyOut",
+    "EstimateIn",
+    "FileLookupOut",
+    "FileProbe",
+    "FileVerdict",
+    "FormatOut",
+    "ModuleHealth",
+    "StartedJobOut",
+    "UploadPlan",
+    "UploadedFileOut",
+]

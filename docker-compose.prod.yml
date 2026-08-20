@@ -1,0 +1,50 @@
+# Отличия рабочего сервера от машины разработчика.
+#
+# Накладывается поверх основного файла и меняет только то, что на сервере
+# должно быть иначе. Порты базы, очереди и API привязаны к самой машине уже
+# там — и у разработчика они тоже не нужны в сети:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+#
+# Короче — `make prod`.
+#
+# Разработку это не трогает: без второго файла всё остаётся как было, и
+# `make up` на своей машине продолжает поднимать интерфейс на 8080.
+
+services:
+  postgres:
+    restart: always
+    # Пароль по умолчанию годится, пока база видна только своей машине.
+    # Уедет наружу — меняется здесь и в трёх адресах ядер разом.
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fintend}
+
+  redis:
+    restart: always
+
+  api:
+    restart: always
+    environment:
+      # На сервере журнал читают программы, а не человек: строкой JSON его
+      # разбирает и `docker logs`, и любой сборщик, который поставят потом.
+      PLATFORM__LOG_FORMAT: json
+
+  worker:
+    restart: always
+    environment:
+      PLATFORM__LOG_FORMAT: json
+
+  web:
+    # Восьмидесятый порт: домен bcorp.kz ведёт сюда. Имя и предел размера
+    # тела — в `apps/web/nginx.conf`.
+    ports:
+      - "80:80"
+    restart: always
+    volumes:
+      # Место для проверки владения доменом. Пусто, пока сертификат не
+      # выпускают; путь нужен, чтобы включение HTTPS не требовало правки
+      # образа и пересборки.
+      - certbot:/var/www/certbot:ro
+
+volumes:
+  certbot:

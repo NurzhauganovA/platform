@@ -105,9 +105,14 @@ def discover_modules() -> list[ModuleSpec]:
     молча пропускает модуль, который не установился, — а «в меню нет раздела»
     гораздо труднее связать с причиной, чем упавший импорт при запуске.
     """
+    from platform_api.modules.omarket import module as omarket
+    from platform_api.modules.skstore import module as skstore
     from platform_api.modules.tender import module as tender
 
-    return [tender]
+    # Порядок задаёт и порядок разделов в меню. Сверху то, с чем работают
+    # каждый день: площадки обновляются сами и требуют решения к сроку, а
+    # тендерная папка приходит по почте и ждёт, пока её откроют.
+    return [skstore, omarket, tender]
 
 
 __all__ = ["ModuleRegistry", "ModuleSpec", "NavItem", "discover_modules"]

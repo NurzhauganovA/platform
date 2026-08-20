@@ -167,7 +167,7 @@ export function StatTile({
   value: ReactNode;
   unit?: string;
   hint?: string;
-  tone?: "series-1" | "series-2" | "series-3" | "good" | "critical";
+  tone?: "series-1" | "series-2" | "series-3" | "good" | "warning" | "critical";
 }) {
   const accent = tone ? `text-${tone}` : "text-ink";
   return (

@@ -1,0 +1,71 @@
+/**
+ * Вердикт: цвет, значок и слово.
+ *
+ * Слово приходит с сервера, а цвет и значок живут здесь. Разделение не
+ * произвольное: словом раздел называет своё решение сам — площадка говорит
+ * «участвовать», тендерный отбор «брать», — и вписать это в браузер значило
+ * бы подписать чужими словами тот раздел, который добавят следующим. А цвет и
+ * форма значка — это про палитру платформы, одну на все разделы: покрасить
+ * «проверить» в жёлтый в одном месте и в оранжевый в другом нельзя.
+ *
+ * У каждого тона есть **и цвет, и значок разной формы**. Это не украшение:
+ * при дальтонизме зелёная и красная строки неразличимы, и цвет сам по себе
+ * смысла не несёт. Форма значка различается всегда — заполненный круг,
+ * половина, пустой, крест, — поэтому таблица читается и без цвета.
+ */
+
+import { cx } from "@/ui";
+import type { LegendItem, Tone } from "@/api/worklist";
+
+/** Форма значка по тону. Порядок тот же, что тяжесть: полный круг — берём,
+ *  крест — не берём. Точка — решения нет, и это тоже ответ. */
+export const GLYPH: Record<Tone, string> = {
+  good: "●",
+  warning: "◐",
+  info: "○",
+  critical: "✕",
+  "": "·",
+};
+
+/** Цвет значка. Отдельно от заливки строки: на бледном фоне нужен насыщенный. */
+export const GLYPH_COLOR: Record<string, string> = {
+  good: "text-good",
+  warning: "text-warning",
+  info: "text-series-1",
+  critical: "text-critical",
+  "": "text-ink-muted",
+};
+
+/** Поиск вердикта по тону в легенде раздела. */
+export function verdictLookup(legend: LegendItem[]) {
+  const byTone = new Map(legend.map((item) => [item.tone, item]));
+  return (tone: Tone) => (tone ? byTone.get(tone) : undefined);
+}
+
+/**
+ * Метка вердикта в строке таблицы.
+ *
+ * Занимает четыре знака вместо восемнадцати — ради этого колонка со словом и
+ * убрана из «Главного». Само слово никуда не делось: оно в подсказке, в
+ * легенде над таблицей и в разборе.
+ */
+export function VerdictMark({
+  tone,
+  verdict,
+}: {
+  tone: Tone;
+  verdict?: LegendItem;
+}) {
+  if (!verdict) return <span className="text-ink-muted">·</span>;
+
+  return (
+    <span
+      title={`${verdict.title} — ${verdict.hint}`}
+      aria-label={verdict.title}
+      role="img"
+      className={cx("text-[15px] leading-none", GLYPH_COLOR[tone])}
+    >
+      {GLYPH[tone]}
+    </span>
+  );
+}

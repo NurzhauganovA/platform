@@ -33,3 +33,7 @@ apps/api/migrations/__pycache__/
 # Playwright
 apps/web/test-results/
 apps/web/playwright-report/
+
+# Исходники соседних проектов, подготовленные к сборке образа.
+# Копия чужих репозиториев: своё место у них там, а не здесь.
+.docker/

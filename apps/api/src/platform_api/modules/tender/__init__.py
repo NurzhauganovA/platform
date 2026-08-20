@@ -22,10 +22,18 @@ module = ModuleSpec(
     title="Тендеры",
     description="Разбор тендерной документации, сравнение КП и наши предложения",
     router=router,
+    # Один пункт — отбор. Заведение закупки папкой из меню убрано: разбор всё
+    # равно идёт у тендерщика на машине, где эти папки лежат, а платформа
+    # показывает то, что он уже разобрал. Эндпоинты загрузки остались рабочими
+    # (`/tender/cases`), пункт вернётся, когда папки поедут через платформу.
+    #
+    # «История цен» и «Конкуренты» в ядре есть (`PriceHistoryService`,
+    # `CompetitorAnalyzer`), но страниц под них пока нет — а пункт меню,
+    # который молча уводит на чужой раздел, хуже отсутствующего: человек
+    # решает, что сломался вход, и перестаёт верить остальным пунктам тоже.
     nav=(
-        NavItem(title="Закупки", path="/tender/cases", icon="folder"),
-        NavItem(title="История цен", path="/tender/prices", icon="chart"),
-        NavItem(title="Конкуренты", path="/tender/competitors", icon="users"),
+        NavItem(title="Отбор закупок", path="/tender/worklist", icon="target"),
+        NavItem(title="Аналитика", path="/tender/analytics", icon="chart"),
     ),
     jobs=jobs,
     health=health.check,

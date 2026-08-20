@@ -56,5 +56,10 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Корень проекта в путях импорта: тесты берут общие приспособления из
+# `tests.conftest`, а без этого работает только запуск с заранее выставленным
+# PYTHONPATH — то есть команда из README падает, а команда из чьей-то памяти
+# работает.
+pythonpath = ["."]
 addopts = "-q --strict-markers"
 asyncio_mode = "auto"

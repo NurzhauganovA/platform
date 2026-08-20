@@ -13,10 +13,14 @@ def test_modules_describe_themselves(client: TestClient) -> None:
 
     tender = next(item for item in modules if item["slug"] == "tender")
     assert tender["title"] == "Тендеры"
+    # Только то, что открывается. «История цен» и «Конкуренты» в ядре есть,
+    # но страниц под них пока нет, и в меню их держать нельзя: пункт, молча
+    # уводящий на чужой раздел, читается как поломка входа. Заведение закупки
+    # папкой убрано с глаз по той же причине наоборот: страница и эндпоинты
+    # живы, но разбор пока идёт на машине тендерщика.
     assert [item["path"] for item in tender["nav"]] == [
-        "/tender/cases",
-        "/tender/prices",
-        "/tender/competitors",
+        "/tender/worklist",
+        "/tender/analytics",
     ]
 
 

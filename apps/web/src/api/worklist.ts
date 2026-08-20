@@ -1,0 +1,225 @@
+/**
+ * Запросы к рабочим спискам — SKStore, OMarket и тендерному отбору.
+ *
+ * Один слой на все три, потому что и раздела три одинаковых: список закупок
+ * с себестоимостью и маржой, разбор строки сбоку, книга Excel. Разводить их
+ * по файлам значило бы трижды править одно и то же и однажды забыть третий.
+ *
+ * С сервера приходит и то, что раньше пришлось бы держать здесь: описание
+ * колонок, слова легенды и список доступных кнопок. Это не лень. Колонки
+ * задаёт сам проект — те же, что в его книге Excel; слова у разделов разные
+ * («участвовать» против «брать»); а кнопка, которую нечем обслужить, хуже
+ * отсутствующей. Захардкодь любое из трёх — и оно разойдётся с сервером на
+ * разделе, который добавят следующим.
+ */
+
+import { api } from "./client";
+
+/** Куда и как выравнивать значение. Формат тот же, что у колонки в книге. */
+export type CellFormat = "text" | "money" | "percent" | "quantity" | "datetime";
+
+export interface WorklistColumn {
+  key: string;
+  title: string;
+  /** Ширина из книги Excel, в символах. */
+  width: number;
+  format: CellFormat;
+  align: "left" | "right";
+  /** Колонка с деньгами. Приходит только тем, кому положено их видеть. */
+  sensitive: boolean;
+  /** Показывать значком, а не текстом: целиком содержимое есть в разборе. */
+  compact: boolean;
+  /** Показывать ли сразу, без прокрутки вбок. */
+  essential: boolean;
+  /** Что колонка означает по смыслу: `total`, `price`, `cost`, `profit`,
+   *  `margin`, `quantity`. Пусто — колонка без особой роли. По ролям
+   *  считаются итоги: заголовки у разделов разные, а смысл один. */
+  role: string;
+}
+
+export interface WorklistCell {
+  text: string;
+  number: number | null;
+  link: string | null;
+}
+
+/** Подсветка по вердикту — та же, что заливка строки в книге. */
+export type Tone = "" | "good" | "warning" | "info" | "critical";
+
+export interface WorklistRow {
+  cells: WorklistCell[];
+  /** Чем открыть разбор. Идентификатор площадки, а не номер строки. */
+  id: string;
+  /** Когда закрывается приём. По нему подсвечивается срочное. */
+  deadline: string | null;
+  /** Есть ли с этой строкой что делать. Отбор идёт здесь, а не запросом. */
+  focus: boolean;
+  tone: Tone;
+}
+
+// --- разбор одной строки ---------------------------------------------------
+
+export interface DetailField {
+  label: string;
+  text: string;
+  number: number | null;
+  format: CellFormat;
+  link: string | null;
+  tone: "" | "good" | "warning" | "critical";
+  /** Оговорка к значению. «Комиссия не известна» важнее самой цифры. */
+  note: string;
+}
+
+export interface DetailTable {
+  columns: string[];
+  rows: string[][];
+  aligns: string[];
+  /** В какой колонке живёт ссылка. */
+  link_column: number;
+  /** Куда ведёт строка. Находка без ссылки — обещание, а не поставщик. */
+  links: string[];
+  /** Чем выбрать строку для пересчёта. Пусто — строка не выбирается. */
+  picks: string[];
+  /** Какие строки сейчас в расчёте: по ним и посчитана себестоимость. */
+  chosen: string[];
+}
+
+export interface DetailSection {
+  title: string;
+  fields: DetailField[];
+  table: DetailTable | null;
+  note: string;
+  /** Что сказать, если раздела нет: «конкурентов ещё нет» и «карточку не
+   *  читали» — разные ответы, молчание хуже обоих. */
+  empty: string;
+  /** Показывать свёрнутым. Решает сервер: длина раздела ничего не говорит о
+   *  том, насколько он нужен — «как считали себестоимость» короче, но важнее. */
+  collapsed: boolean;
+}
+
+export interface Detail {
+  id: string;
+  title: string;
+  subtitle: string;
+  verdict: string;
+  tone: Tone;
+  /** Ссылка на карточку у площадки — то, ради чего разбор чаще и открывают. */
+  url: string | null;
+  sections: DetailSection[];
+  hidden_sections: number;
+}
+
+export interface LegendItem {
+  /** Пустой тон — тоже запись: «нет данных» надо объяснить так же, как
+   *  зелёное. Строка при этом остаётся серой. */
+  tone: Tone;
+  /** Слово этого раздела: «участвовать», «брать». Из книги того же проекта. */
+  title: string;
+  hint: string;
+}
+
+/** Что можно запустить в разделе. Приходит с сервера: у тендерного отбора нет
+ *  ни обновления, ни пересчёта — папки разбирают на машине тендерщика. */
+export type WorklistAction = "sync" | "analyze" | "export";
+
+export interface Worklist {
+  /** Как этот же список называется в книге: человеку надо знать, с чем сверяться. */
+  sheet: string;
+  columns: WorklistColumn[];
+  rows: WorklistRow[];
+  legend: LegendItem[];
+  actions: WorklistAction[];
+  hidden_columns: number;
+  total: number;
+  shown: number;
+  /** Сколько с истёкшим приёмом. Из базы они не удаляются — это история, —
+   *  но в рабочем списке их нет. Видны по кнопке «Все строки». */
+  expired: number;
+  verdicts: Record<string, number>;
+  margin_total: number | null;
+  priced: number;
+  /** Считали ли вообще. Пустой список без этого признака выглядит как «нечего
+   *  смотреть», хотя строки, возможно, просто ещё не оценивали. */
+  analyzed: boolean;
+}
+
+export interface WorklistHealth {
+  ok: boolean;
+  core_version: string;
+  /** Площадки: настроен ли поиск себестоимости на внешних рынках. */
+  market_search?: boolean;
+  market_model?: string;
+  warehouse?: boolean;
+  problems: string[];
+  /** SKStore. */
+  bargains?: number;
+  /** OMarket. */
+  preorders?: number;
+  /** OMarket: жива ли сессия кабинета. Вход по ЭЦП идёт на машине сотрудника. */
+  session?: boolean;
+  /** Тендеры: есть ли доступ к модели и заполнены ли реквизиты компаний. */
+  model_access?: boolean;
+  companies_configured?: number;
+}
+
+export type WorklistSlug = "skstore" | "omarket" | "tender";
+
+export type Scope = "focus" | "all";
+
+/**
+ * Состав колонок.
+ *
+ * `key` — то, по чему принимают решение: помещается на экран без прокрутки.
+ * `all` — дословно как в книге Excel, все девятнадцать (или семнадцать).
+ *
+ * Оба состава приходят одним ответом и переключаются на месте: второй запрос
+ * ради того, что уже лежит в памяти, — это полсекунды ожидания на каждое
+ * нажатие.
+ */
+export type ColumnSet = "key" | "all";
+
+export const worklists = {
+  health: (slug: WorklistSlug) => api.get<WorklistHealth>(`/api/${slug}/health`),
+
+  /**
+   * Весь список одним запросом.
+   *
+   * Отбор строк и колонок делает браузер по признакам в ответе. Так
+   * переключатели срабатывают мгновенно, а не ждут полсекунды пересчёта на
+   * сервере — при том, что данные уже лежат в памяти вкладки.
+   */
+  worklist: (slug: WorklistSlug) =>
+    api.get<Worklist>(`/api/${slug}/worklist`),
+
+  /**
+   * Откуда взялась цифра: решение, деньги, где взять, что проверить.
+   *
+   * `pick` пересчитывает себестоимость по выбранной находке. Считает сервер:
+   * тот же код, которым считается книга, — свой расчёт в браузере разошёлся
+   * бы с ней на первой же закупке.
+   */
+  detail: (slug: WorklistSlug, id: string, pick = "") =>
+    api.get<Detail>(
+      `/api/${slug}/item/${encodeURIComponent(id)}` +
+        (pick ? `?pick=${encodeURIComponent(pick)}` : ""),
+    ),
+
+  sync: (slug: WorklistSlug) =>
+    api.post<{ job_id: string }>(`/api/${slug}/sync`),
+
+  analyze: (slug: WorklistSlug) =>
+    api.post<{ job_id: string }>(`/api/${slug}/analyze`),
+
+  /**
+   * Книга Excel.
+   *
+   * Обычной ссылкой, а не через `fetch`: браузер сам покажет диалог
+   * сохранения и сам подставит имя файла из заголовка ответа. Скачивание
+   * через `fetch` пришлось бы собирать вручную, и имя файла потерялось бы.
+   *
+   * У тендеров адрес свой: `/api/tender/export` в модуле уже занят выгрузкой
+   * нашего КП по одной закупке, а книга отбора — про весь список.
+   */
+  exportUrl: (slug: WorklistSlug) =>
+    slug === "tender" ? "/api/tender/worklist/export" : `/api/${slug}/export`,
+};

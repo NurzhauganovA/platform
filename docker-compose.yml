@@ -1,7 +1,95 @@
-# База и очередь для разработки.
+# Платформа целиком: база, очередь, API, исполнитель и интерфейс.
 #
-# Только инфраструктура: сам API и фронтенд запускаются с машины, чтобы
-# перезагрузка кода занимала секунду, а не пересборку образа.
+# По умолчанию поднимается только инфраструктура — база и очередь. Это рабочий
+# режим разработки: API и фронтенд запускаются с машины, и перезагрузка кода
+# занимает секунду, а не пересборку образа.
+#
+#   docker compose up -d              база и очередь
+#   make up                           всё вместе, в контейнерах
+#
+# Приложение живёт под профилем `full`, поэтому первая команда продолжает
+# работать как раньше.
+#
+# Про тома. Подключённые проекты остаются самостоятельными: у каждого свой
+# `.env`, своя база и свой каталог выгрузок. Внутрь образа они не копируются —
+# база skstore весит четыреста мегабайт, а `.env` это ключ к моделям. И то и
+# другое подключается с машины, поэтому контейнер работает с теми же данными,
+# что и терминал, и правка настройки не требует пересборки.
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  environment: &app-env
+    PLATFORM__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend
+    PLATFORM__REDIS__URL: redis://redis:6379/0
+    # Слушать снаружи контейнера и не следить за файлами: код здесь не правят.
+    PLATFORM__HOST: 0.0.0.0
+    PLATFORM__RELOAD: "false"
+    PLATFORM__LOG_FORMAT: ${PLATFORM__LOG_FORMAT:-console}
+    # Хранилище загруженных папок — в томе, а не в слое образа: файлы должны
+    # пережить пересборку.
+    PLATFORM__STORAGE__ROOT: /app/storage
+    PLATFORM__STORAGE__CASES_ROOT: /app/storage/cases
+
+    # Базы подключённых ядер. Адреса переопределены здесь, а не в `.env`
+    # проектов: там стоит `localhost`, и это правильно — каждый проект умеет
+    # работать сам по себе на машине разработчика. Внутри сети Compose
+    # `localhost` — это сам контейнер, и обращение уходит в пустоту.
+    #
+    # PostgreSQL, а не файл SQLite, и это не единообразие ради единообразия.
+    # К этим базам одновременно ходят почасовые прогоны и открытые страницы,
+    # а пишущий в SQLite блокирует файл целиком: читатель получает
+    # «database is locked» ровно в тот час, когда работают все.
+    #
+    # Сервер один, базы соседние — доступ тот же, что у платформы (см. службу
+    # `postgres` ниже).
+    TENDER__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_tender
+    SKSTORE__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_skstore
+    OMARKET__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_omarket
+  env_file:
+    # Ключи моделей и настройки платформы. Читается и платформой, и SDK
+    # подключённых проектов — им нужен `GEMINI_API_KEY` из окружения.
+    - .env
+  volumes: &app-volumes
+    # Загруженные тендерные папки.
+    - storage:/app/storage
+
+    # Настройки и данные подключённых проектов. `.env` только на чтение:
+    # контейнеру незачем их править, а случайная запись затёрла бы рабочий
+    # файл на машине.
+    - ${TENDER_DIR:-../tender-analyze}/.env:/app/projects/tender-analyze/.env:ro
+    - ${TENDER_DIR:-../tender-analyze}/companies.toml:/app/projects/tender-analyze/companies.toml:ro
+    - ${TENDER_DIR:-../tender-analyze}/data:/app/projects/tender-analyze/data
+    - ${TENDER_DIR:-../tender-analyze}/exports:/app/projects/tender-analyze/exports
+
+    # `data` подключён и после переезда на PostgreSQL: старый файл SQLite там
+    # остаётся как страховка на первое время, а сам каталог нужен под кэши.
+    - ${SKSTORE_DIR:-../skstore}/.env:/app/projects/skstore/.env:ro
+    - ${SKSTORE_DIR:-../skstore}/data:/app/projects/skstore/data
+    - ${SKSTORE_DIR:-../skstore}/exports:/app/projects/skstore/exports
+
+    # У omarket в `data` лежит ещё и сессия кабинета: вход по ЭЦП делается на
+    # машине сотрудника (`omarket login`), а контейнер работает с её следом.
+    - ${OMARKET_DIR:-../../github/omarket}/.env:/app/projects/omarket/.env:ro
+    - ${OMARKET_DIR:-../../github/omarket}/data:/app/projects/omarket/data
+    - ${OMARKET_DIR:-../../github/omarket}/exports:/app/projects/omarket/exports
+
+    # Архив тендерных папок — только на чтение. Разбор туда не пишет: он
+    # прочитал документы давно и всё нужное сложил в базу. Платформа открывает
+    # оттуда ТЗ и КП, когда их просят показать в разборе.
+    #
+    # Путь внутри контейнера тот же, что снаружи, и это не небрежность:
+    # абсолютные пути файлов записаны в базе ядра, и любое другое место
+    # потребовало бы переписывать их на лету — то есть держать ещё одну
+    # настройку и ошибаться в ней при переезде архива.
+    - ${TENDER_ARCHIVE:-/dev/null}:${TENDER_ARCHIVE:-/dev/null}:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
 
 services:
   postgres:
@@ -22,7 +110,10 @@ services:
         --icu-locale=ru-KZ
         --locale=C.UTF-8
     ports:
-      - "5432:5432"
+      # Только для самой машины. К базе ходят команды подключённых проектов
+      # с этого же хоста; открытый в сеть 5432 — это доступ к себестоимости
+      # в обход платформы и её ролей.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -36,7 +127,7 @@ services:
     container_name: fintend-redis
     command: redis-server --appendonly yes
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -45,6 +136,75 @@ services:
       timeout: 3s
       retries: 10
 
+  # Разворачивает схему платформы и завершается. Отдельной службой, а не
+  # шагом в запуске API: два процесса API, стартовавшие разом, применяли бы
+  # миграции одновременно — а это одна и та же таблица версий.
+  migrate:
+    <<: *app
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: api
+    container_name: fintend-migrate
+    profiles: ["full"]
+    working_dir: /app/apps/api
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
+  api:
+    <<: *app
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: api
+    container_name: fintend-api
+    profiles: ["full"]
+    # Порт для самой машины: постучаться в API напрямую, минуя интерфейс, —
+    # так удобнее смотреть `/api/docs` и разбираться с ответами. Браузер
+    # сотрудника ходит через nginx, и второй вход в обход него означал бы
+    # обход ограничения размера тела и журнала запросов.
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: worker
+    container_name: fintend-worker
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: fintend-web
+    profiles: ["full"]
+    # Порт задаёт слой: 8080 у разработчика (`docker-compose.dev.yml`),
+    # 80 на сервере (`docker-compose.prod.yml`). Здесь его нет намеренно —
+    # Compose умеет списки портов только складывать, и оставленный тут 8080
+    # висел бы на сервере рядом с 80.
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
+  storage:

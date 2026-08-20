@@ -1,4 +1,9 @@
-"""Запуск сервера разработки: `python -m platform_api`."""
+"""Запуск сервера: `python -m platform_api`.
+
+Один и тот же вход и на своей машине, и в контейнере. Адрес, порт и слежение
+за правками задаются настройками: второй способ запускать сервер однажды
+разошёлся бы с первым — и выяснилось бы это на бою.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +17,9 @@ def main() -> None:
     uvicorn.run(
         "platform_api.app:create_app",
         factory=True,
-        host="127.0.0.1",
-        port=8000,
-        reload=not settings.is_prod,
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload_enabled,
         # Логи настраивает structlog: свой конфиг uvicorn напечатал бы то же
         # самое вторым форматом, и читать поток стало бы нечитаемо.
         log_config=None,

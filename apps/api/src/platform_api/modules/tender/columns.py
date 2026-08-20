@@ -1,0 +1,143 @@
+"""Колонки отбора и то, кто их видит.
+
+Книга тендерного ядра описывает лист «Отбор» не объектами колонок, как две
+другие площадки, а заголовками, ширинами и функцией значений. Разница
+несущественная: здесь из них собирается тот же `Column`, что платформа ждёт
+от любого модуля, — заголовок, ширина, формат и способ достать значение.
+Источник правды остаётся один, в книге.
+
+Права — явным списком, и незнакомая колонка считается денежной. Таблица
+собирается автоматически, и колонка, добавленная в ядре, попала бы в ответ
+сама, вместе с себестоимостью.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from platform_api.modules.table import Visibility
+
+
+@dataclass(frozen=True, slots=True)
+class RankedColumn:
+    """Колонка листа «Отбор» в том виде, в каком её ждёт таблица платформы."""
+
+    title: str
+    getter: Any
+    hyperlink: Any = None
+    width: int = 18
+    number_format: str | None = None
+
+
+def ranked_columns() -> Sequence[RankedColumn]:
+    """Колонки книги, по одной на заголовок.
+
+    Значение достаётся из `row_values` — той же функции, которой книга
+    заполняет строку. Позиция в кортеже и есть связь колонки со значением,
+    поэтому заголовки и значения не могут разъехаться незаметно: они приходят
+    из одного места.
+    """
+    from tender_analyze.export.ranked import (
+        HEADERS,
+        MONEY_COLUMNS,
+        PERCENT_COLUMN,
+        QUANTITY_COLUMN,
+        WIDTHS,
+        row_values,
+    )
+
+    def at(index: int) -> Any:
+        return lambda item: row_values(item)[index]
+
+    columns: list[RankedColumn] = []
+    for index, (title, width) in enumerate(zip(HEADERS, WIDTHS, strict=True)):
+        number = index + 1
+        if number in MONEY_COLUMNS:
+            fmt: str | None = "#,##0.00"
+        elif number == PERCENT_COLUMN:
+            # В книге маржа записана числом процентов («24,7»), а не долей.
+            # Формат «0.0» — не проценты: доля тут превратилась бы в 2470 %.
+            fmt = "#,##0.###"
+        elif number == QUANTITY_COLUMN:
+            fmt = "#,##0.###"
+        else:
+            fmt = None
+        columns.append(RankedColumn(title=title, getter=at(index), width=width, number_format=fmt))
+    return columns
+
+
+POLICY: dict[str, Visibility] = {
+    # --- что закупают: видно всем ---
+    # Цены заказчика и предложений конкурентов не наша тайна: они в
+    # заключении, которое видит каждый участник.
+    "вердикт": Visibility.ALL,
+    "категория": Visibility.ALL,
+    "название закупки": Visibility.ALL,
+    "название заказчика": Visibility.ALL,
+    "ЕНС ТРУ": Visibility.ALL,
+    "средн. цена КП": Visibility.ALL,
+    "количество": Visibility.ALL,
+    "сумма": Visibility.ALL,
+    "признак закупки": Visibility.ALL,
+    "дата закупки": Visibility.ALL,
+    # --- работа закупщика: где брать и что проверить ---
+    "рынок от–до": Visibility.SOURCING,
+    "по аналогу": Visibility.SOURCING,
+    "разбор": Visibility.SOURCING,
+    "папка": Visibility.SOURCING,
+    # --- деньги: только тендерщику ---
+    "себестоимость": Visibility.MONEY,
+    "заработок": Visibility.MONEY,
+    "моржа %": Visibility.MONEY,
+}
+
+ROLES: dict[str, str] = {
+    "категория": "category",
+    "название заказчика": "customer",
+    "сумма": "total",
+    "средн. цена КП": "price",
+    "количество": "quantity",
+    "себестоимость": "cost",
+    "моржа %": "margin",
+    "заработок": "profit",
+}
+"""Что колонка означает по смыслу — для итогов по отобранному и вида фильтра.
+
+Не дублирование заголовка: заголовки у разделов свои («заработок» здесь,
+«Маржа ₸» у SKStore, «Заработок всего, ₸» у OMarket), а считается по ним одно
+и то же. Роль — это то общее, что браузер может понять, не разбирая русский
+текст.
+
+`сумма` — единственный из трёх разделов, где есть цена всей закупки: у
+площадок в книге стоит цена за единицу, и складывать её по строкам нельзя.
+"""
+
+ESSENTIAL: tuple[str, ...] = (
+    "название закупки",
+    "название заказчика",
+    "категория",
+    "количество",
+    "сумма",
+    "себестоимость",
+    "заработок",
+    "моржа %",
+    "дата закупки",
+)
+"""Что видно сразу, без прокрутки вбок.
+
+Вердикта здесь нет: его показывает цветная метка в первой колонке, а слово
+стоит в легенде над таблицей и в разборе. По кнопке «Все колонки» лист
+разворачивается дословно как в книге — все семнадцать.
+"""
+
+COMPACT: frozenset[str] = frozenset({"папка"})
+"""Колонки, которые в списке показываются значком.
+
+Путь к папке — это тридцать восемь знаков, одинаковых у всех строк в первой
+половине: «тендеры/12_КАРTechnology/…». В списке от него нужен один ответ —
+где лежит, — и он читается в подсказке и в разборе.
+"""
+
+__all__ = ["COMPACT", "ESSENTIAL", "POLICY", "RankedColumn", "ranked_columns"]

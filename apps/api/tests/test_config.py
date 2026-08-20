@@ -53,3 +53,23 @@ def test_case_folders_are_absolute() -> None:
 
     assert settings.storage.root.is_absolute()
     assert settings.storage.cases_root.is_absolute()
+
+
+def test_server_slushaet_tolko_svoy_kompyuter_po_umolchaniyu() -> None:
+    """Сервер разработки не должен без спроса оказаться доступен всей сети:
+    за ним себестоимость и маржа. В контейнере адрес задаётся явно."""
+    settings = config.Settings()
+
+    assert settings.host == "127.0.0.1"
+    assert settings.port == 8000
+
+
+def test_slezhenie_za_pravkami_po_okruzheniyu() -> None:
+    """Не задано — включено в разработке и выключено в бою."""
+    assert config.Settings(environment="dev").reload_enabled is True
+    assert config.Settings(environment="prod").reload_enabled is False
+
+
+def test_slezhenie_mozhno_vyklyuchit_yavno() -> None:
+    """В контейнере код не правят, а слежение держит второй процесс."""
+    assert config.Settings(environment="dev", reload=False).reload_enabled is False

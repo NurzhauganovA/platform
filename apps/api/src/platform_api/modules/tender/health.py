@@ -34,14 +34,35 @@ def check() -> dict[str, Any]:
         if missing := profile.missing:
             problems.append(f"{profile.name}: не заполнено — {', '.join(missing)}")
 
+    # Файловая база — для платформы неисправность, а не выбор. К ней
+    # одновременно ходят почасовые прогоны и открытые страницы, а пишущий в
+    # SQLite блокирует файл целиком. Молчать об этом нельзя: сломается оно не
+    # сразу, а в первый час, когда работают все.
+    if settings.db.url.startswith("sqlite"):
+        problems.append(
+            "Ядро работает с файлом SQLite, а не с общей базой — задайте TENDER__DB__URL"
+        )
+
     return {
         "ok": not problems,
         "core_version": core_version(),
+        "database": _database(settings),
         "provider": provider,
         "model_access": model_access,
         "companies_configured": len(configured),
         "problems": tuple(problems),
     }
+
+
+def _database(settings: Any) -> str:
+    """С какой базой работает ядро — словами, на страницу готовности.
+
+    Не украшение: URL задаётся окружением, и забытая переменная не ломает
+    ничего заметного — ядро просто продолжает писать в старое место.
+    Обнаруживается это через неделю по тому, что свежих разборов нет, хотя
+    прогоны отработали.
+    """
+    return "SQLite (файл)" if settings.db.url.startswith("sqlite") else "PostgreSQL"
 
 
 def _has_model_access() -> bool:

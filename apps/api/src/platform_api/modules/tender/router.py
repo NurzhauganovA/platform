@@ -2,18 +2,36 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 
-from platform_api.auth.dependencies import CurrentUser, Db, requires_money, requires_sourcing
+from platform_api.auth.dependencies import (
+    CurrentUser,
+    Db,
+    requires_money,
+    requires_read,
+    requires_sourcing,
+)
 from platform_api.config import Settings
 from platform_api.db.models import StoredFile
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
-from platform_api.modules.tender import core
+from platform_api.modules.detail import for_role
+from platform_api.modules.schemas import (
+    ColumnOut,
+    DetailOut,
+    LegendItem,
+    RowOut,
+    WorklistOut,
+)
+from platform_api.modules.table import build_table, sees_money
+from platform_api.modules.tender import core, worklist
 from platform_api.modules.tender.cases import router as cases_router
+from platform_api.modules.tender.columns import COMPACT, ESSENTIAL, POLICY, ROLES
 from platform_api.modules.tender.comparison import router as comparison_router
 from platform_api.modules.tender.health import check as check_health
 from platform_api.modules.tender.schemas import (
@@ -43,6 +61,190 @@ def get_health() -> ModuleHealth:
     файле, если нет доступа к модели, — а человек к этому моменту уже ждёт.
     """
     return ModuleHealth.model_validate(check_health())
+
+
+@router.get("/worklist", summary="Отбор закупок")
+def get_worklist(
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_read] = None,
+) -> WorklistOut:
+    """Разобранные закупки так же, как их показывает лист «Отбор».
+
+    Ничего не запускает и не стоит денег: разбор документов, решения модели и
+    поиск на рынках тендерщик уже прогнал у себя, а здесь только читается то,
+    что они оставили в базе ядра. Иначе обновление страницы списывало бы со
+    счёта, а F5 в отделе нажимают часто.
+
+    Колонки, их порядок и значения — из книги того же проекта. Человек сверяет
+    экран с выгруженным файлом, и расхождение в них стоит получаса на
+    выяснение, кто из двух прав.
+    """
+    try:
+        data = worklist.worklist()
+    except Exception as exc:
+        # База ядра может быть недоступна или пуста — это не поломка
+        # платформы, а состояние, о котором должна сказать сводка готовности.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Данные тендерного разбора недоступны: {exc}",
+        ) from exc
+
+    table = build_table(
+        worklist.columns(),
+        data.rows,
+        policy=POLICY,
+        role=identity.role,
+        tone=worklist.tone_of,
+        focus=worklist.in_focus,
+        identity=worklist.row_id,
+        deadline=worklist.row_deadline,
+        essential=ESSENTIAL,
+        compact=COMPACT,
+        roles=ROLES,
+    )
+    money = sees_money(identity.role)
+
+    return WorklistOut(
+        sheet=worklist.sheet_title(),
+        columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
+        rows=[RowOut.model_validate(asdict(row)) for row in table.rows],
+        legend=[
+            LegendItem(tone=tone, title=title, hint=hint) for tone, title, hint in worklist.legend()
+        ],
+        # Ни обновления, ни пересчёта: закупки приходят папками с документами,
+        # а разбор идёт у тендерщика на машине — там, где эти папки лежат.
+        # Книга — единственное, что платформа может отдать сама.
+        actions=["export"] if money else [],
+        hidden_columns=table.hidden_columns,
+        total=data.total,
+        shown=data.focused,
+        expired=data.expired,
+        verdicts=data.verdicts,
+        margin_total=(
+            float(data.margin_total) if money and data.margin_total is not None else None
+        ),
+        priced=data.priced,
+        analyzed=data.analyzed,
+    )
+
+
+@router.get("/item/{item_id}", summary="Разбор одной закупки")
+def get_worklist_item(
+    item_id: str,
+    identity: CurrentUser,
+    pick: str = "",
+    _guard: Annotated[None, requires_read] = None,
+) -> DetailOut:
+    """Откуда взялась цифра: решение, деньги, комплект, где купить, что
+    проверить перед подачей.
+
+    Порядок разделов тот же, что на листе разбора в книге. Разделы с деньгами
+    не уходят закупщику — так же, как колонки в таблице, и по той же причине:
+    спрятать в браузере и отдать в JSON значит отдать.
+
+    `pick` пересчитывает себестоимость по выбранной находке. Ядро берёт самую
+    дешёвую из подходящих, и это правильное умолчание, но не всегда правильный
+    ответ: «подходит» — суждение модели, поставщик может быть незнакомым, а
+    срок неподъёмным. Считает при этом всё равно ядро — тем же кодом, которым
+    считается книга.
+    """
+    try:
+        found = worklist.detail(item_id, pick)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Данные недоступны: {exc}",
+        ) from exc
+
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Такой закупки нет в отборе",
+        )
+    return DetailOut.model_validate(asdict(for_role(found, identity.role)))
+
+
+@router.get("/item/{item_id}/file/{sha256}", summary="Открыть документ закупки")
+def get_case_file(
+    item_id: str,
+    sha256: str,
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_read] = None,
+) -> FileResponse:
+    """Отдаёт файл из папки закупки: ТЗ, МЗ, КП.
+
+    Последний вопрос перед подачей всегда «покажи само ТЗ», и до сих пор за
+    ним выходили из платформы в папку на диске. Файл читается с места, а не из
+    копии: копия разошлась бы с папкой в день, когда заказчик пришлёт
+    исправленное ТЗ.
+
+    Файл ищется в пределах своей закупки, а не по всей базе. Взять его по
+    одному хэшу значило бы позволить прочитать чужую папку, подставив хэш
+    оттуда, — а в чужой папке лежат КП с ценами, которые нам не показывали.
+
+    Открывается во вкладке, а не скачивается: ТЗ смотрят, а не собирают.
+    """
+    del identity
+    try:
+        found = worklist.find_file(item_id, sha256)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Данные недоступны: {exc}",
+        ) from exc
+
+    if found is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Такого документа в этой закупке нет",
+        )
+    if not found.available:
+        # Не ошибка платформы, а неподключённый архив: сказать это словами
+        # полезнее, чем отдать пустой ответ и оставить гадать.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Файл есть в базе, но платформе не виден: архив закупок лежит на "
+                "машине тендерщика и подключается томом (TENDER_ARCHIVE в .env)."
+            ),
+        )
+
+    return FileResponse(
+        found.path,
+        filename=found.name,
+        # `inline` — открыть, а не скачать: за ТЗ идут посмотреть.
+        content_disposition_type="inline",
+    )
+
+
+@router.get("/worklist/export", summary="Выгрузить книгу отбора")
+def export_worklist(
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_money] = None,
+) -> FileResponse:
+    """Отдаёт ту же книгу, что пишет `tender-analyze hunt`.
+
+    Только тендерщику: в книге себестоимость и маржа целиком, и урезать их по
+    ролям здесь нечем — файл уходит одним куском и дальше живёт своей жизнью,
+    в почте и на флешках.
+
+    Собирается из уже прочитанного отбора, поэтому это секунды и ноль
+    списаний: заново разбирать документы ради скачивания незачем.
+    """
+    del identity
+    try:
+        path = worklist.export_workbook()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Книга не собралась: {exc}",
+        ) from exc
+
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=path.name,
+    )
 
 
 @router.get("/companies", summary="Наши компании")

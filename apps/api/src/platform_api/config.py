@@ -104,12 +104,30 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["console", "json"] = "console"
 
+    host: str = "127.0.0.1"
+    """На каком адресе слушать. По умолчанию только свой компьютер: сервер
+    разработки не должен без спроса оказаться доступен всей сети — за ним
+    себестоимость и маржа. В контейнере задаётся `0.0.0.0`, иначе снаружи к
+    нему не достучаться."""
+
+    port: int = Field(default=8000, ge=1, le=65535)
+
+    reload: bool | None = None
+    """Перезапускать ли сервер при правке кода. По умолчанию — в разработке
+    да, в бою нет. В контейнере выключается явно: код там не правят, а
+    слежение за файлами держит второй процесс и лишнюю память."""
+
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     """Откуда пускаем фронтенд. По умолчанию — дев-сервер Vite."""
 
     @property
     def is_prod(self) -> bool:
         return self.environment == "prod"
+
+    @property
+    def reload_enabled(self) -> bool:
+        """Следить ли за правками кода. Не задано — по окружению."""
+        return not self.is_prod if self.reload is None else self.reload
 
 
 def load_dotenv_into_environment() -> None:
