@@ -29,7 +29,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TENDER_DIR="${TENDER_DIR:-$here/../tender-analyze}"
 SKSTORE_DIR="${SKSTORE_DIR:-$here/../skstore}"
-OMARKET_DIR="${OMARKET_DIR:-$here/../../github/omarket}"
+OMARKET_DIR="${OMARKET_DIR:-$here/../omarket}"
 
 target="$here/.docker/projects"
 

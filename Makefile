@@ -19,7 +19,7 @@ COMPOSE ?= docker compose -f docker-compose.yml -f docker-compose.dev.yml --prof
 PROD = docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full
 export TENDER_DIR  ?= ../tender-analyze
 export SKSTORE_DIR ?= ../skstore
-export OMARKET_DIR ?= ../../github/omarket
+export OMARKET_DIR ?= ../omarket
 
 .PHONY: help stage build up prod down restart logs ps user shell migrate check clean backup restore
 
