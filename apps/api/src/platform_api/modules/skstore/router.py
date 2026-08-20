@@ -153,6 +153,12 @@ def start_sync(
 
     Каталог площадки по умолчанию не трогаем: двести тридцать тысяч карточек,
     шесть минут, а меняется он медленно.
+
+    За выгрузкой идёт разбор — но только тех закупов, которых в базе ещё не
+    было, и только если заказавший вправе тратить. Разбор всех подряд — это
+    деньги за посчитанное вчера, а разбор без права — расход мимо того, кто за
+    него отвечает. Закупщик по-прежнему обновляет список сам: свежие строки он
+    увидит, просто без пересчёта себестоимости по новым.
     """
     settings: Settings = request.app.state.settings
     job = JobService(db, request.app.state.redis).create(
@@ -160,7 +166,10 @@ def start_sync(
         created_by_id=identity.user.id,
         module="skstore",
         kind="sync",
-        params={"skip_catalog": not with_catalog},
+        params={
+            "skip_catalog": not with_catalog,
+            "analyze_new": sees_money(identity.role),
+        },
         total=4,
     )
     # Фиксируем до постановки в очередь: исполнитель заберёт задачу мгновенно

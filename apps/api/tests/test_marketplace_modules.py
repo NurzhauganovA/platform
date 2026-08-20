@@ -586,3 +586,60 @@ def test_faylovaya_baza_eto_neispravnost(monkeypatch: pytest.MonkeyPatch, module
 
     monkeypatch.setattr(type(settings.db), "is_sqlite", property(lambda _self: False))
     assert not any("SQLite" in problem for problem in core.readiness()["problems"])
+
+
+def test_fail_itog_nazyvaet_pomehi_a_ne_tolko_verdikt() -> None:
+    """Разбор отвечает на шесть вопросов, а открывают его ради седьмого.
+
+    «Участвовать или нет» человек до сих пор складывал в голове из шести
+    разделов — и складывал по-разному в понедельник и в пятницу. Итог
+    собирает то же самое, ничего не решая заново: вердикт и причину посчитало
+    ядро, пороги взяты из его настроек.
+    """
+    from types import SimpleNamespace
+
+    from platform_api.modules.skstore.core import _blockers
+
+    # Находка не отвечает требованию, связка со складом слабая, предложений по
+    # ТРУ мало — три помехи разом, и это обычный случай, а не выдуманный.
+    item = SimpleNamespace(
+        bargain=SimpleNamespace(deadline_at=None),
+        finding=SimpleNamespace(matches_spec=False, match_note="другая модель"),
+        match=SimpleNamespace(score=Decimal("0.4")),
+        market=SimpleNamespace(offers=2),
+        cost=SimpleNamespace(unit_cost=Decimal(1)),
+        llm=SimpleNamespace(summary="ок"),
+    )
+
+    found = {label: text for label, text, _tone in _blockers(item)}
+
+    assert "другая модель" in found["Товар не тот"]
+    assert "40%" in found["Связка со складом слабая"]
+    # Порог надёжности — из настроек ядра, а не из числа, написанного здесь.
+    assert "их 2" in found["Мало предложений"]
+    assert "Себестоимости нет" not in found
+
+
+def test_fail_ischerpannyy_srok_ne_prosit_podat() -> None:
+    """За три часа до конца приёма закуп горит, после — уже нет смысла."""
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from platform_api.modules.skstore.core import _blockers
+
+    def item(hours: float) -> Any:
+        return SimpleNamespace(
+            bargain=SimpleNamespace(deadline_at=datetime.now(UTC) + timedelta(hours=hours)),
+            finding=None,
+            match=None,
+            market=None,
+            cost=SimpleNamespace(unit_cost=Decimal(1)),
+            llm=SimpleNamespace(summary="ок"),
+        )
+
+    def left(hours: float) -> str:
+        return {label: text for label, text, _tone in _blockers(item(hours))}.get("Срок", "")
+
+    assert left(5) == ""
+    assert "меньше чем через три часа" in left(2)
+    assert "приём закрыт" in left(-1)

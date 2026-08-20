@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
@@ -164,8 +165,15 @@ def worklist() -> Worklist:
     Отдаются все закупы, а не только отобранные: отбор делает браузер по
     признаку строки, и переключение «Только нужное / Все» получается
     мгновенным вместо второго прогона на полсекунды.
+
+    Порядок — по появлению на площадке, свежие сверху. Ядро отдаёт их по
+    выгоде, и для книги это правильно: её открывают, чтобы выбрать лучшее из
+    всего. Экран работает иначе — на него смотрят после «Обновить», и вопрос
+    там один: что появилось с прошлого раза. В порядке по выгоде новый закуп
+    оказывается посередине шестисот строк, и человек решает, что выгрузка его
+    не забрала. По марже список сортируется щелчком по колонке.
     """
-    everything = _analyze()
+    everything = _newest_first(_analyze())
     # Счётчики считаются по действующим, а не по всему, что лежит в базе.
     # «Всего закупов 599» при пятистах истёкших — это неправда о том, сколько
     # работы на самом деле.
@@ -178,6 +186,24 @@ def worklist() -> Worklist:
         margin_total=_margin_total(live),
         focused=sum(1 for item in everything if in_focus(item)),
         priced=sum(1 for item in live if item.cost is not None),
+    )
+
+
+def _newest_first(rows: list[Any]) -> list[Any]:
+    """Свежие сверху, а без даты — вниз.
+
+    Дата у закупа своя, площадки: не когда мы его выгрузили, а когда он на ней
+    появился. По времени выгрузки все закупы одного прогона были бы
+    одинаковыми, и порядок внутри него определяла бы очередь страниц.
+    """
+    oldest = datetime.min.replace(tzinfo=UTC)
+    return sorted(
+        rows,
+        # Номер закупа вторым ключом: две публикации в одну секунду бывают, а
+        # список, который переставляется между двумя открытиями страницы,
+        # выглядит сломанным.
+        key=lambda item: (to_utc(item.bargain.published_at) or oldest, item.bargain.platform_id),
+        reverse=True,
     )
 
 
@@ -418,6 +444,7 @@ def detail(platform_id: str) -> Detail | None:
         tone=tone_of(found),
         url=_bargain_url(bargain),
         sections=(
+            _summary(found),
             _about(bargain),
             _decision(found),
             _money(found),
@@ -425,6 +452,121 @@ def detail(platform_id: str) -> Detail | None:
             _ai(found),
         ),
     )
+
+
+def _summary(item: Any) -> Section:
+    """Итог одной строкой: участвовать или нет — и что этому мешает.
+
+    Разделов в разборе шесть, и каждый отвечает на свой вопрос: откуда цена,
+    где взять, что сказала модель. Вопрос, ради которого разбор открывают,
+    остаётся при этом несобранным — человек читает шесть разделов и складывает
+    ответ в голове. Складывает по-разному в понедельник и в пятницу.
+
+    Ничего нового здесь не решается: вердикт и его причину посчитало ядро, а
+    пороги взяты из его же настроек. Собираются только помехи — то, из-за чего
+    цифрам нельзя верить как есть, — и они у закупа обычно не одна.
+    """
+    verdict = _verdict_of(item)
+    blockers = _blockers(item)
+    fields = [
+        text_field("Участвовать", _ANSWERS.get(verdict, "решать не на чем"), tone=tone_of(item)),
+        text_field("Почему", item.reason),
+    ]
+    fields.extend(text_field(label, text, tone=tone) for label, text, tone in blockers)
+    fields.append(text_field("Что дальше", _NEXT_STEP.get(verdict, "")))
+    return Section(
+        title="Итог",
+        fields=tuple(field for field in fields if field is not None),
+        note=(
+            "Вердикт — подсказка, а не решение: код ТРУ объединяет разные по цене "
+            "товары, и читать его надо вместе с тем, что мешает."
+            if blockers
+            else ""
+        ),
+        access=Visibility.MONEY,
+    )
+
+
+_ANSWERS = {
+    "promising": "да — маржа выше порога",
+    "marginal": "на грани — считать по своему складу и объёму",
+    "unprofitable": "нет — не окупается",
+    "unknown": "решать не на чем: себестоимость неизвестна",
+    "blocked": "нет — закуп закрыт для нас",
+}
+"""Ответ словами на тот вердикт, что поставило ядро. Своего решения здесь
+нет: разойдись эти два, и книга с экраном показали бы разное."""
+
+_NEXT_STEP = {
+    "promising": "проверить требования и подать",
+    "marginal": "сравнить со своим складом: при остатке маржа выше",
+    "unprofitable": "пропустить, если не появится своя цена",
+    "unknown": "нажать «Пересчитать» — поиск на рынках добудет цену",
+    "blocked": "ничего",
+}
+
+
+def _blockers(item: Any) -> list[tuple[str, str, str]]:
+    """Что мешает верить цифрам: подпись, текст, тон.
+
+    Каждая помеха — уже посчитанный ядром факт, а не новая оценка. Пороги
+    берутся из его настроек: свои числа здесь означали бы, что экран считает
+    закуп пограничным, а книга — выгодным.
+    """
+    settings = core_settings().analysis
+    found: list[tuple[str, str, str]] = []
+
+    finding = item.finding
+    if finding is not None and not finding.matches_spec:
+        found.append(
+            ("Товар не тот", f"находка не отвечает требованию: {finding.match_note}", "critical")
+        )
+
+    match = item.match
+    if match is not None and match.score < Decimal("0.6"):
+        found.append(
+            (
+                "Связка со складом слабая",
+                f"совпадение по названию {match.score:.0%} — маржа может быть выдуманной",
+                "warning",
+            )
+        )
+
+    market = item.market
+    if market is not None and market.offers < settings.reliable_offers:
+        found.append(
+            (
+                "Мало предложений",
+                f"по коду ТРУ их {market.offers}, а надёжной медиану"
+                f" делает {settings.reliable_offers}",
+                "warning",
+            )
+        )
+
+    if item.cost is None:
+        found.append(("Себестоимости нет", "сравнивать не с чем", "warning"))
+
+    if item.llm is None:
+        found.append(("Модель не смотрела", "закуп разобран только по своим данным", "info"))
+
+    hours = _hours_left(item.bargain)
+    if hours is not None and hours <= 3:
+        found.append(
+            (
+                "Срок",
+                "приём закрывается меньше чем через три часа" if hours > 0 else "приём закрыт",
+                "critical",
+            )
+        )
+    return found
+
+
+def _hours_left(bargain: Any) -> float | None:
+    """Сколько часов осталось до конца приёма. `None` — срока нет."""
+    deadline = to_utc(bargain.deadline_at)
+    if deadline is None:
+        return None
+    return (deadline - datetime.now(UTC)).total_seconds() / 3600
 
 
 def _about(bargain: Any) -> Section:

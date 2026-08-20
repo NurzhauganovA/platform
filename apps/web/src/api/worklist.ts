@@ -48,6 +48,9 @@ export type Tone = "" | "good" | "warning" | "info" | "critical";
 
 export interface WorklistRow {
   cells: WorklistCell[];
+  /** Номер, которым строку называют вслух: «посмотри сорок вторую». Считает
+   *  сервер по всему списку, поэтому отбор и сортировка его не сдвигают. */
+  number: number;
   /** Чем открыть разбор. Идентификатор площадки, а не номер строки. */
   id: string;
   /** Когда закрывается приём. По нему подсвечивается срочное. */
@@ -179,7 +182,8 @@ export type Scope = "focus" | "all";
 export type ColumnSet = "key" | "all";
 
 export const worklists = {
-  health: (slug: WorklistSlug) => api.get<WorklistHealth>(`/api/${slug}/health`),
+  health: (slug: WorklistSlug) =>
+    api.get<WorklistHealth>(`/api/${slug}/health`),
 
   /**
    * Весь список одним запросом.
@@ -188,8 +192,7 @@ export const worklists = {
    * переключатели срабатывают мгновенно, а не ждут полсекунды пересчёта на
    * сервере — при том, что данные уже лежат в памяти вкладки.
    */
-  worklist: (slug: WorklistSlug) =>
-    api.get<Worklist>(`/api/${slug}/worklist`),
+  worklist: (slug: WorklistSlug) => api.get<Worklist>(`/api/${slug}/worklist`),
 
   /**
    * Откуда взялась цифра: решение, деньги, где взять, что проверить.

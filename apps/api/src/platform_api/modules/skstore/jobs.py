@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from platform_api.jobs.contract import JobContext, JobSpec
@@ -20,7 +21,9 @@ from platform_api.logging import get_logger
 logger = get_logger(__name__)
 
 
-def sync_sources(ctx: JobContext, *, skip_catalog: bool = True, **_: Any) -> dict[str, Any]:
+def sync_sources(
+    ctx: JobContext, *, skip_catalog: bool = True, analyze_new: bool = False, **_: Any
+) -> dict[str, Any]:
     """Тянет с площадки то, что настроено: прайс, закупы, склад, каталог.
 
     Источники идут независимо: не настроенный или упавший не должен утащить за
@@ -30,6 +33,12 @@ def sync_sources(ctx: JobContext, *, skip_catalog: bool = True, **_: Any) -> dic
     Каталог по умолчанию пропускается. Полный проход по нему — около трёхсот
     запросов и шесть минут ради двухсот тридцати тысяч чужих карточек, а
     нужен он только для медианы по ТРУ и меняется медленно.
+
+    `analyze_new` дописывает к выгрузке разбор — но только тех закупов,
+    которых в базе ещё не было. Появляется их за час пять-десять, а лежит
+    шестьсот; разбор всех подряд — это часы работы модели и деньги за то, что
+    посчитано вчера и с тех пор не менялось. Решает не задача, а эндпоинт: шаг
+    платный, и заказывать его может только тот, кто отвечает за бюджет.
     """
     from skstore.application.container import Container
     from skstore.application.sync import SyncService
@@ -40,6 +49,11 @@ def sync_sources(ctx: JobContext, *, skip_catalog: bool = True, **_: Any) -> dic
     settings = core_settings()
     container = Container(settings)
     service = SyncService(container)
+    # Момент до выгрузки: всё, что после него впервые попало в базу, и есть
+    # новое. Время питона, а не базы, и это не небрежность — `first_seen_at`
+    # проставляет тот же питон при вставке, так что сравниваются показания
+    # одних часов.
+    since = datetime.now(UTC) if analyze_new else None
 
     tasks: list[tuple[str, Any]] = []
     if settings.openrest.is_configured:
@@ -71,6 +85,11 @@ def sync_sources(ctx: JobContext, *, skip_catalog: bool = True, **_: Any) -> dic
                 errors.append(f"{name}: {exc}")
                 logger.warning("Источник не выгрузился", source=name, error=str(exc))
             ctx.advance(index, note=f"{name} — готово")
+
+        fresh: dict[str, Any] = {}
+        if since is not None:
+            ctx.advance(len(tasks), note="разбираем новые закупы")
+            fresh = _analyze_fresh(container, since)
     finally:
         container.dispose()
 
@@ -78,8 +97,36 @@ def sync_sources(ctx: JobContext, *, skip_catalog: bool = True, **_: Any) -> dic
         "records": sum(counts.values()),
         "by_source": counts,
         "errors": errors,
-        # Выгрузка идёт по HTTP площадки и модель не трогает.
+        **fresh,
+        # Сама выгрузка модель не трогает; разбор новых — трогает, и его
+        # расход считается ядром в токенах, а не в долларах.
         "cost_usd": 0.0,
+    }
+
+
+def _analyze_fresh(container: Any, since: Any) -> dict[str, Any]:
+    """Разбирает закупы, впервые появившиеся после указанного момента.
+
+    Ничего нового — ничего и не считаем: пустой прогон ядра всё равно поднял
+    бы весь каталог по ТРУ, а это секунды на ровном месте.
+    """
+    from skstore.application.analysis import AnalysisService
+    from skstore.domain.enums import BargainStatus
+
+    with container.unit_of_work() as uow:
+        ids = uow.bargains.ids_seen_since(since, BargainStatus.ACTIVE)
+        if not ids:
+            return {"analyzed_new": 0}
+        service = AnalysisService(container)
+        analyses = service.analyze_within(uow, BargainStatus.ACTIVE, platform_ids=ids)
+        uow.commit()
+        stats = service.last_run_stats
+
+    return {
+        "analyzed_new": len(analyses),
+        "promising_new": sum(1 for item in analyses if item.verdict.value == "promising"),
+        "market_searched": stats.market_searched if stats else 0,
+        "total_tokens": stats.total_tokens if stats else 0,
     }
 
 

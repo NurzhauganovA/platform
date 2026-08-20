@@ -664,3 +664,41 @@ def test_fail_odna_stroka_na_papku_vidit_vsyu_papku(tmp_path: Path) -> None:
     _attach_files(files, [only], case)
 
     assert [item.name for item in files[row_id_of_folder(only)]] == ["ТЗ.pdf"]
+
+
+def test_fail_staroe_yadro_ne_ostavlyaet_razdel_pustym(tmp_path: Path) -> None:
+    """Платформа и ядро — разные репозитории, выкатываются порознь.
+
+    Строка из старого ядра не знает, из какого документа взята позиция.
+    Разложить по одним предложениям нельзя — строка осталась бы без своего
+    ТЗ, — но и падать нельзя: раздел целиком отвечал «Данные недоступны», и
+    разбор было не открыть вовсе.
+    """
+    from platform_api.modules.tender.worklist import _attach_files, row_id_of_folder
+
+    path = tmp_path / "ТЗ.pdf"
+    path.write_text("x", encoding="utf-8")
+    case = SimpleNamespace(
+        documents=[
+            SimpleNamespace(
+                source=SimpleNamespace(
+                    sha256="a", name="ТЗ.pdf", size_bytes=1, path=path, relative_path=Path("ТЗ.pdf")
+                ),
+                insight=SimpleNamespace(kind="ТЗ"),
+            )
+        ]
+    )
+    # Ровно старая строка: `quotes` есть, `sources` ещё нет.
+    old = [
+        SimpleNamespace(title=name, ens_code="", folder_path=str(tmp_path), quotes=[])
+        for name in ("Насосы", "Кабель")
+    ]
+
+    files: dict[str, Any] = {}
+    _attach_files(files, old, case)
+
+    for row in old:
+        seen = files[row_id_of_folder(row)]
+        assert [item.name for item in seen] == ["ТЗ.pdf"]
+        # Помечены общими, и это правда: чей документ — сказать нечем.
+        assert all(item.shared for item in seen)

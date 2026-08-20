@@ -174,10 +174,16 @@ export function WorklistPage({
   // итог снизу. Посчитай его в трёх местах — и однажды они разойдутся.
   const inScope = useMemo(() => {
     const needle = filter.trim().toLowerCase();
+    // Одни цифры в поиске — это номер строки, а не кусок названия. Так им и
+    // пользуются: коллега сказал «сорок вторая», её набирают и находят. Ровно,
+    // а не «содержит»: иначе «4» вытащила бы четвёртую, сороковые и все
+    // четырёхсотые разом.
+    const wanted = /^\d+$/.test(needle) ? Number(needle) : null;
     return (data?.rows ?? []).filter(
       (row) =>
         (scope === "all" || row.focus) &&
         (!needle ||
+          row.number === wanted ||
           row.cells.some((cell) => cell.text.toLowerCase().includes(needle))),
     );
   }, [data?.rows, filter, scope]);
@@ -343,7 +349,7 @@ export function WorklistPage({
               <input
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
-                placeholder="Найти по названию или заказчику…"
+                placeholder="Найти по номеру, названию или заказчику…"
                 className="w-64 rounded-[8px] border border-baseline bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-ink-muted"
               />
               <Switch<Scope>
@@ -677,6 +683,7 @@ function Finished({ job, unit }: { job: Job; unit: string }) {
     by_source?: Record<string, number>;
     errors?: string[];
     reason?: string;
+    analyzed_new?: number;
     bargains?: number;
     preorders?: number;
     market_searched?: number;
@@ -694,6 +701,14 @@ function Finished({ job, unit }: { job: Job; unit: string }) {
         ? bySource.map(([name, count]) => `${name}: ${count}`).join(" · ")
         : `получено записей: ${result.records ?? 0}`,
     );
+    // Разбор идёт только по новым, и сказать об этом надо словами: «0» тут
+    // означает «нового не появилось», а не «разбор не отработал».
+    if (result.analyzed_new !== undefined)
+      parts.push(
+        result.analyzed_new
+          ? `разобрано новых: ${result.analyzed_new}`
+          : "новых закупов нет",
+      );
   } else {
     const counted = result.bargains ?? result.preorders ?? 0;
     parts.push(`пересчитано ${counted} ${unit}`);

@@ -614,6 +614,20 @@ def _attach_files(files: dict[str, tuple[CaseFile, ...]], rows: Sequence[Any], c
         files[row_id_of_folder(rows[0])] = everything
         return
 
+    if not all(hasattr(row, "sources") for row in rows):
+        # Ядро старее платформы: связи «позиция — документ заказчика» в строке
+        # ещё нет. Раскладывать по одним предложениям нельзя — строка осталась
+        # бы без своего ТЗ, — поэтому возвращаемся к прежнему поведению и
+        # честно называем всё общим. Пустой раздел был бы хуже: разбор без
+        # документов не сделаешь, а разошедшиеся версии — обычное дело, репозитории
+        # у платформы и ядра разные и выкатываются порознь.
+        from dataclasses import replace as _replace
+
+        shared = tuple(_replace(item, shared=True) for item in everything)
+        for row in rows:
+            files[row_id_of_folder(row)] = shared
+        return
+
     # Один проход: у каждой строки свои имена, объединение — то, что вообще
     # к чему-то привязано.
     own: dict[str, set[str]] = {}

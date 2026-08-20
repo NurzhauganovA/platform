@@ -155,6 +155,19 @@ class RowOut:
     """Строка таблицы."""
 
     cells: tuple[CellOut, ...]
+
+    number: int = 0
+    """Номер строки, которым её называют вслух: «посмотри сорок вторую».
+
+    Считается один раз по всему списку и приходит вместе со строкой, а не
+    рисуется браузером по месту. Иначе он менялся бы от каждого отбора и
+    сортировки: один сотрудник говорит «сорок вторая», у второго на экране
+    другой отбор — и сорок вторая у него чужая.
+
+    Разбор им не открывают, для этого есть `id`: список пересобирается после
+    каждой выгрузки, и номер закрепляется за строкой только до неё.
+    """
+
     deadline: str | None = None
     """Когда закрывается приём предложений. Отдельным полем, а не разбором
     ячейки: колонок с датой может стать несколько, и угадывать, какая из них
@@ -302,13 +315,14 @@ def build_table(
 
     body = tuple(
         RowOut(
+            number=position,
             cells=tuple(_cell(column, item) for _index, column, _access in chosen),
             id=identity(item) if identity is not None else "",
             deadline=deadline(item) if deadline is not None else None,
             focus=focus(item) if focus is not None else True,
             tone=tone(item) if tone is not None else "",
         )
-        for item in materialized
+        for position, item in enumerate(materialized, start=1)
     )
     # Скрытыми считаем только те, что закрыты правами: их человек не увидит
     # никаким переключателем, и об этом стоит сказать. Колонки, убранные

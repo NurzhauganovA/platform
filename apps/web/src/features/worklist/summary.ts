@@ -53,7 +53,7 @@ export function summarise({
   columns,
   unit,
   goodLabel,
-  urgentDays = 2,
+  urgentHours = 3,
 }: {
   /** Только то, что видно после отбора. */
   rows: WorklistRow[];
@@ -63,7 +63,10 @@ export function summarise({
   unit: string;
   /** Слово раздела для зелёного вердикта: «участвовать», «брать». */
   goodLabel: string;
-  urgentDays?: number;
+  /** За сколько часов до конца приёма закуп считается горящим. Трое суток
+   *  «горят» только на словах: за это время успевают и посчитать, и подать.
+   *  Горит то, что успевает потеряться за обедом. */
+  urgentHours?: number;
 }): Tile[] {
   const tiles: Tile[] = [];
   const shown = rows.length;
@@ -71,7 +74,10 @@ export function summarise({
   tiles.push({
     label: `Показано ${unit}`,
     value: money(shown),
-    hint: shown === total ? "весь список" : `из ${money(total)} — остальное отобрано`,
+    hint:
+      shown === total
+        ? "весь список"
+        : `из ${money(total)} — остальное отобрано`,
   });
 
   // Стоит взяться: считается по цвету, а не по слову. Слова у разделов свои,
@@ -81,7 +87,9 @@ export function summarise({
     label: goodLabel || "Стоит взяться",
     value: money(good),
     tone: good ? "good" : undefined,
-    hint: shown ? `${Math.round((good / shown) * 100)}% показанного` : "маржа выше порога",
+    hint: shown
+      ? `${Math.round((good / shown) * 100)}% показанного`
+      : "маржа выше порога",
   });
 
   // Объём: сумма закупок там, где раздел её знает. У площадок в книге цена за
@@ -91,7 +99,9 @@ export function summarise({
     const values = numbers(rows, totalIndex);
     tiles.push({
       label: "Объём закупок",
-      value: values.length ? compact(values.reduce((sum, value) => sum + value, 0)) : "—",
+      value: values.length
+        ? compact(values.reduce((sum, value) => sum + value, 0))
+        : "—",
       unit: "₸",
       hint: `по ${money(values.length)} из ${money(shown)} строк`,
     });
@@ -104,7 +114,9 @@ export function summarise({
     const earned = numbers(rows, profitIndex).filter((value) => value > 0);
     tiles.push({
       label: "Заработаем",
-      value: earned.length ? compact(earned.reduce((sum, value) => sum + value, 0)) : "—",
+      value: earned.length
+        ? compact(earned.reduce((sum, value) => sum + value, 0))
+        : "—",
       unit: "₸",
       hint: `на ${money(earned.length)} окупающихся`,
     });
@@ -112,7 +124,9 @@ export function summarise({
 
   const marginIndex = indexOfRole(columns, "margin");
   if (marginIndex >= 0) {
-    const values = numbers(rows, marginIndex).slice().sort((a, b) => a - b);
+    const values = numbers(rows, marginIndex)
+      .slice()
+      .sort((a, b) => a - b);
     // Медиана, а не среднее: одна закупка с маржой в тысячу процентов —
     // а такие в данных есть, это ненайденный товар — утаскивает среднее
     // туда, где не лежит ни одна строка.
@@ -136,23 +150,28 @@ export function summarise({
       label: "Не с чем сравнить",
       value: money(unpriced),
       tone: unpriced ? "critical" : undefined,
-      hint: unpriced ? "себестоимость не нашлась" : "себестоимость есть по всем",
+      hint: unpriced
+        ? "себестоимость не нашлась"
+        : "себестоимость есть по всем",
     });
   }
 
   // Срочное — только там, где у строк вообще есть срок приёма. У тендерной
   // закупки его в данных нет, и плитка не появится.
   if (rows.some((row) => row.deadline)) {
-    const edge = Date.now() + urgentDays * 24 * 3600 * 1000;
+    const now = Date.now();
+    const edge = now + urgentHours * 3600 * 1000;
     const urgent = rows.filter((row) => {
       const at = row.deadline ? Date.parse(row.deadline) : NaN;
-      return Number.isFinite(at) && at <= edge;
+      // Закончившиеся не горят: с ними уже ничего не сделать, а в счётчике
+      // они выглядели бы как работа, которую ещё можно успеть.
+      return Number.isFinite(at) && at > now && at <= edge;
     }).length;
     tiles.push({
       label: "Горит",
       value: money(urgent),
       tone: urgent ? "warning" : undefined,
-      hint: `приём закрывается в ближайшие ${urgentDays} дня`,
+      hint: `приём закрывается в ближайшие ${urgentHours} часа`,
     });
   }
 

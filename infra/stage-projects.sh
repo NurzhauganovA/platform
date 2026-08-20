@@ -112,4 +112,33 @@ copy tender-analyze "$TENDER_DIR" TENDER_DIR
 copy skstore "$SKSTORE_DIR" SKSTORE_DIR
 copy omarket "$OMARKET_DIR" OMARKET_DIR
 
+# Файлы, которые Compose подключает томом поштучно. Проверяются здесь, потому
+# что Docker на месте несуществующего пути молча создаёт каталог — и падение
+# приходит позже и совсем в другом месте: «IsADirectoryError: companies.toml»
+# из недр ядра при обращении к готовности. Найти по такому следу причину
+# «файл не доехал на сервер» почти нельзя.
+mounted() {
+  local path="$1" why="$2"
+  if [ -d "$path" ]; then
+    echo >&2
+    echo "На месте файла — каталог: $path" >&2
+    echo "Его создал Docker, когда файла не было при первом запуске." >&2
+    echo "    sudo rm -rf \"$path\"   и скопируйте настоящий файл" >&2
+    exit 1
+  fi
+  if [ ! -f "$path" ]; then
+    echo >&2
+    echo "Нет файла: $path" >&2
+    echo "$why" >&2
+    echo "Пустой тоже годится — но пустоту надо создать самому, иначе Docker" >&2
+    echo "сделает на этом месте каталог: touch \"$path\"" >&2
+    exit 1
+  fi
+}
+
+mounted "$TENDER_DIR/.env" "Настройки тендерного ядра: ключ модели и адрес базы."
+mounted "$TENDER_DIR/companies.toml" "Наши юрлица: по ним разбор считает, от кого подаём."
+mounted "$SKSTORE_DIR/.env" "Доступы SKStore: без них кабинет не отдаст закупы."
+mounted "$OMARKET_DIR/.env" "Доступы OMarket."
+
 echo "Готово: $(du -sh "$target" | cut -f1) в .docker/projects"
