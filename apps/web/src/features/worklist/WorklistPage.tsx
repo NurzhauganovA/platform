@@ -42,6 +42,7 @@ import {
   type FilterState,
 } from "./filters";
 import { summarise, type Tile } from "./summary";
+import { TZ } from "./format";
 
 /** Живой прогресс задачи. За минуты связь рвётся, и поток восстанавливается сам. */
 function useJobStream(jobId: string | null, onDone: () => void) {
@@ -684,7 +685,7 @@ function describe(filter: ColumnFilter, format: string, role: string): string {
   }
   const show = (value: number) =>
     format === "datetime"
-      ? new Date(value).toLocaleDateString("ru-RU")
+      ? new Date(value).toLocaleDateString("ru-RU", { timeZone: TZ })
       : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(
           value,
         );

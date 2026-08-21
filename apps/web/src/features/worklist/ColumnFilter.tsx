@@ -29,6 +29,7 @@ import {
 import { createPortal } from "react-dom";
 import type { ColumnFilter as Filter, Filterable } from "./filters";
 import { BLANK } from "./filters";
+import { TZ } from "./format";
 import { cx } from "@/ui";
 
 export function ColumnFilterButton({
@@ -321,7 +322,7 @@ function RangeInputs({
 
   const hint = (value: number) =>
     dates
-      ? new Date(value).toLocaleDateString("ru-RU")
+      ? new Date(value).toLocaleDateString("ru-RU", { timeZone: TZ })
       : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(
           value,
         );

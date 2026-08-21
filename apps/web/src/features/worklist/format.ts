@@ -9,13 +9,22 @@
 import type { CellFormat } from "@/api/worklist";
 import { money } from "@/ui";
 
-/** «13.08.2026 09:00» — как в книге, в местном времени сотрудника. */
+/** Часовой пояс, в котором показываются все сроки: UTC+5, как на площадках.
+ *
+ *  Не часовой пояс машины. Компания работает в одном городе, а сроки приёма
+ *  сверяют с кабинетом площадки — и «15:57» там должно быть «15:57» здесь.
+ *  Ноутбук с неверно выставленным поясом иначе показывал бы своё время, и
+ *  человек узнавал бы об этом на закупе, который он не успел подать. */
+export const TZ = "Asia/Almaty";
+
+/** «13.08.2026 09:00» — как в книге, по времени Казахстана. */
 export function formatDate(iso: string): string {
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return iso;
   // Без запятой между датой и временем: в книге формат «DD.MM.YYYY HH:MM».
   return parsed
     .toLocaleString("ru-KZ", {
+      timeZone: TZ,
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
