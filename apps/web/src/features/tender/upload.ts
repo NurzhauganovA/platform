@@ -31,20 +31,25 @@ export async function hashFile(file: File): Promise<string> {
   // Для файлов до нашего потолка в 64 МБ этого достаточно.
   const buffer = await file.arrayBuffer();
   const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export function relativePathOf(file: File): string {
   // webkitRelativePath приходит с именем корневой папки впереди — его
   // отбрасываем: внутри закупки путь считается от неё самой, а подпапки
   // («обновленные кп») сохраняются, по ним ядро отличает состав закупок.
-  const full = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+  const full =
+    (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+    file.name;
   const parts = full.split("/");
   return parts.length > 1 ? parts.slice(1).join("/") : full;
 }
 
 export function folderNameOf(files: File[]): string {
-  const first = files[0] as (File & { webkitRelativePath?: string }) | undefined;
+  const first = files[0] as
+    (File & { webkitRelativePath?: string }) | undefined;
   const full = first?.webkitRelativePath ?? "";
   return full.split("/")[0] ?? "";
 }
@@ -53,7 +58,11 @@ export function folderNameOf(files: File[]): string {
 const JUNK = new Set([".DS_Store", "Thumbs.db", "desktop.ini"]);
 
 export function isJunk(file: File): boolean {
-  return JUNK.has(file.name) || file.name.startsWith("~$") || file.name.startsWith("._");
+  return (
+    JUNK.has(file.name) ||
+    file.name.startsWith("~$") ||
+    file.name.startsWith("._")
+  );
 }
 
 export async function prepare(
@@ -64,7 +73,11 @@ export async function prepare(
   const picked: PickedFile[] = [];
 
   for (const [index, file] of useful.entries()) {
-    picked.push({ file, relativePath: relativePathOf(file), sha256: await hashFile(file) });
+    picked.push({
+      file,
+      relativePath: relativePathOf(file),
+      sha256: await hashFile(file),
+    });
     onProgress?.(index + 1, useful.length);
   }
   return picked;
@@ -95,7 +108,9 @@ export async function upload(
   onProgress?: (done: number, total: number, name: string) => void,
 ): Promise<{ file_id: string; relative_path: string }[]> {
   const keep = plan.files.filter((item) => item.supported);
-  const known = new Set(keep.filter((item) => item.known).map((item) => item.relative_path));
+  const known = new Set(
+    keep.filter((item) => item.known).map((item) => item.relative_path),
+  );
   const paths = new Set(keep.map((item) => item.relative_path));
   const queue = picked.filter((item) => paths.has(item.relativePath));
 
@@ -103,9 +118,12 @@ export async function upload(
   // повторно незачем: идентификатор находится по содержимому. Без этого шага
   // весь смысл плана терялся бы на самом главном месте.
   const existing = new Map<string, string>();
-  const knownHashes = queue.filter((item) => known.has(item.relativePath)).map((i) => i.sha256);
+  const knownHashes = queue
+    .filter((item) => known.has(item.relativePath))
+    .map((i) => i.sha256);
   if (knownHashes.length) {
-    for (const row of await tender.lookupFiles(knownHashes)) existing.set(row.sha256, row.id);
+    for (const row of await tender.lookupFiles(knownHashes))
+      existing.set(row.sha256, row.id);
   }
 
   const attached: { file_id: string; relative_path: string }[] = [];
@@ -114,7 +132,8 @@ export async function upload(
 
     const cached = existing.get(item.sha256);
     const fileId =
-      cached ?? (await tender.uploadFile(item.file, item.relativePath, item.sha256)).id;
+      cached ??
+      (await tender.uploadFile(item.file, item.relativePath, item.sha256)).id;
     attached.push({ file_id: fileId, relative_path: item.relativePath });
   }
   onProgress?.(queue.length, queue.length, "");

@@ -24,10 +24,6 @@ export const GLYPH: Record<Tone, string> = {
   warning: "◐",
   info: "○",
   critical: "✕",
-  // Перечёркнутый круг: закупка не отвергнута по расчёту, а исключена до
-  // него. Крест уже занят «мимо», и две одинаковые формы человек различал бы
-  // по цвету — то есть никак при дальтонизме.
-  domestic: "⊘",
   "": "·",
 };
 
@@ -37,7 +33,6 @@ export const GLYPH_COLOR: Record<string, string> = {
   warning: "text-warning",
   info: "text-series-1",
   critical: "text-critical",
-  domestic: "text-critical",
   "": "text-ink-muted",
 };
 

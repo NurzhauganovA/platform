@@ -41,13 +41,13 @@ export interface WorklistCell {
   text: string;
   number: number | null;
   link: string | null;
+  /** Отметка на самой ячейке: заливка строки занята вердиктом, а выделить
+   *  надо значение — код ЕНС, по которому есть отечественный производитель. */
+  tone: Tone;
 }
 
 /** Подсветка по вердикту — та же, что заливка строки в книге. */
-/** `domestic` — по коду ЕНС в стране есть свой производитель. Отдельно от
- *  `critical`: «мимо» значит «посчитали и не подходит», а здесь считать
- *  нечего вовсе. */
-export type Tone = "" | "good" | "warning" | "info" | "critical" | "domestic";
+export type Tone = "" | "good" | "warning" | "info" | "critical";
 
 export interface WorklistRow {
   cells: WorklistCell[];

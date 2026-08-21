@@ -96,12 +96,16 @@ export function DetailPanel({
                   {GLYPH[data.tone]}
                 </span>
               )}
-              <h2 className="truncate text-base font-semibold text-ink">
+              {/* Переносится, а не обрезается многоточием. Название позиции
+                  доходит до двухсот пятидесяти знаков, и хвост в нём — это
+                  модель и характеристики: «…LBE-M5-23; 5,15-5,87 ГГц». Ради
+                  них разбор и открывают, а троеточие прячет ровно их. */}
+              <h2 className="text-base leading-snug font-semibold break-words text-ink">
                 {data?.title ?? "Разбор"}
               </h2>
             </div>
             {data?.subtitle && (
-              <p className="mt-0.5 truncate text-sm text-ink-muted">
+              <p className="mt-0.5 text-sm break-words text-ink-muted">
                 {data.subtitle}
               </p>
             )}
@@ -137,25 +141,15 @@ export function DetailPanel({
             </p>
           ) : data ? (
             <div className="space-y-6">
-              {/* «Свой производитель» — тон рабочего списка, а не значка: у
-                  значка своя палитра, и лишний оттенок в ней означал бы шестую
-                  краску ради одного места. Красный подходит: смысл тот же —
-                  эту закупку не берём. */}
               {data.verdict && (
-                <Badge
-                  tone={
-                    data.tone === "domestic"
-                      ? "critical"
-                      : data.tone || "neutral"
-                  }
-                >
+                <Badge tone={data.tone || "neutral"}>
                   {data.tone && GLYPH[data.tone]} {data.verdict}
                 </Badge>
               )}
               {data.sections.map((section) => (
                 <SectionBlock
                   key={section.title}
-                  section={section}
+                  section={hide(section)}
                   onPick={setPick}
                   busy={isFetching}
                 />
@@ -369,6 +363,28 @@ function FieldRow({ field }: { field: DetailField }) {
  * - **отмеченная** — та, по которой себестоимость посчитана сейчас. Без
  *   отметки непонятно, откуда взялась цифра.
  */
+/** Поля разбора, которые на экране не нужны. */
+const HIDDEN_FIELDS = new Set(["Предмет"]);
+
+/**
+ * Убирает поля, которые в разборе не нужны.
+ *
+ * Прячется здесь, а не на сервере: в книге и в выгрузке предмет закупки
+ * остаётся — там он единственное, чем закупка названа. На экране им же
+ * назван сам разбор, в заголовке, и поле повторяет заголовок слово в слово.
+ *
+ * Список короткий и держится списком: строка, спрятанная условием в вёрстке,
+ * находится потом только чтением всего файла.
+ */
+function hide(section: DetailSection): DetailSection {
+  if (!section.fields?.some((field) => HIDDEN_FIELDS.has(field.label)))
+    return section;
+  return {
+    ...section,
+    fields: section.fields.filter((field) => !HIDDEN_FIELDS.has(field.label)),
+  };
+}
+
 function MiniTable({
   table,
   onPick,

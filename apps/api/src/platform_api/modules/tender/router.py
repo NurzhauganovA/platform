@@ -98,6 +98,7 @@ def get_worklist(
         focus=worklist.in_focus,
         identity=worklist.row_id,
         deadline=worklist.row_deadline,
+        mark=worklist.mark_cell,
         essential=ESSENTIAL,
         compact=COMPACT,
         roles=ROLES,

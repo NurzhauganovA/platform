@@ -107,7 +107,9 @@ export function filterable(data: Worklist): Filterable[] {
       kind: "values",
       options: [...counts.entries()]
         .map(([value, count]) => ({ value: value || "— пусто —", count }))
-        .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, "ru")),
+        .sort(
+          (a, b) => b.count - a.count || a.value.localeCompare(b.value, "ru"),
+        ),
       bounds: null,
     });
   });
@@ -127,7 +129,10 @@ export const BLANK = "— пусто —";
  * должны учитывать соседние фильтры: выбрал категорию «Электроника», и
  * напротив заказчиков стоит, сколько их электроники, а не сколько всего.
  */
-export function countValues(rows: WorklistRow[], index: number): Map<string, number> {
+export function countValues(
+  rows: WorklistRow[],
+  index: number,
+): Map<string, number> {
   const counts = new Map<string, number>();
   for (const row of rows) {
     const value = row.cells[index]?.text?.trim() || BLANK;
@@ -182,7 +187,9 @@ export function apply(
     });
   }
 
-  return checks.length ? rows.filter((row) => checks.every((check) => check(row))) : rows;
+  return checks.length
+    ? rows.filter((row) => checks.every((check) => check(row)))
+    : rows;
 }
 
 // --- состояние в адресе ----------------------------------------------------
@@ -202,7 +209,10 @@ export function readFilters(params: URLSearchParams): FilterState {
     if (name.startsWith(VALUES)) {
       const values = raw.split("|").filter(Boolean);
       if (values.length) {
-        state.set(name.slice(VALUES.length), { kind: "values", values: new Set(values) });
+        state.set(name.slice(VALUES.length), {
+          kind: "values",
+          values: new Set(values),
+        });
       }
     } else if (name.startsWith(RANGE)) {
       const [from, to] = raw.split("..");
@@ -221,14 +231,18 @@ export function readFilters(params: URLSearchParams): FilterState {
 }
 
 /** Что записать в адрес, чтобы получился этот отбор. `null` — убрать. */
-export function writeFilter(key: string, filter: ColumnFilter | null): Record<string, string | null> {
+export function writeFilter(
+  key: string,
+  filter: ColumnFilter | null,
+): Record<string, string | null> {
   const patch: Record<string, string | null> = {
     [`${VALUES}${key}`]: null,
     [`${RANGE}${key}`]: null,
   };
   if (filter === null) return patch;
   if (filter.kind === "values") {
-    if (filter.values.size) patch[`${VALUES}${key}`] = [...filter.values].join("|");
+    if (filter.values.size)
+      patch[`${VALUES}${key}`] = [...filter.values].join("|");
   } else if (filter.min != null || filter.max != null) {
     patch[`${RANGE}${key}`] = `${filter.min ?? ""}..${filter.max ?? ""}`;
   }

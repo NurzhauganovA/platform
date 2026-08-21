@@ -704,90 +704,25 @@ def test_fail_staroe_yadro_ne_ostavlyaet_razdel_pustym(tmp_path: Path) -> None:
         assert all(item.shared for item in seen)
 
 
-def test_fail_kod_iz_perechnya_otmenyaet_verdikt() -> None:
-    """Перечень Минпрома снимает вопрос раньше, чем считается маржа.
+def test_fail_kod_iz_perechnya_krasit_svoyu_yacheyku() -> None:
+    """Перечень Минпрома отмечает код, а не строку.
 
-    По коду ЕНС в стране есть свой производитель — искать позицию за рубежом
-    незачем, закупка идёт по своим правилам. Строку читают боковым зрением при
-    прокрутке трёхсот закупок, и «выгодно, но не наше» цветом не передать:
-    вердикт здесь именно отменяется, а не дополняется.
+    Заливка строки занята вердиктом — «брать», «мимо», — и второго смысла в
+    неё не вложить: закупка бывает и выгодной, и с отечественным
+    производителем разом. Красится сам код: он стоит первой колонкой, его
+    видно, не читая остального, а вердикт остаётся при строке.
     """
     import platform_api.modules.tender.worklist as module
 
-    verdict = SimpleNamespace(label="Брать")
-    свой = SimpleNamespace(row=SimpleNamespace(ens_code="281314.900.000076"), verdict=verdict)
-    чужой = SimpleNamespace(row=SimpleNamespace(ens_code="999999.999.999999"), verdict=verdict)
-    пустой = SimpleNamespace(row=SimpleNamespace(ens_code=""), verdict=verdict)
+    свой = SimpleNamespace(row=SimpleNamespace(ens_code="281314.900.000076"))
+    чужой = SimpleNamespace(row=SimpleNamespace(ens_code="999999.999.999999"))
 
-    assert module.tone_of(свой) == "domestic"
-    # Не в перечне и без кода — обычный вердикт, а не серая строка.
-    assert module.tone_of(чужой) == "good"
-    assert module.tone_of(пустой) == "good"
-
-
-def test_fail_staroe_yadro_bez_perechnya_ne_ronyaet_razdel(monkeypatch: Any) -> None:
-    """Перечень появился в ядре позже платформы, и оно бывает старее.
-
-    Обращение к тому, чего в нём ещё нет, обрушило весь раздел: список
-    отвечал «данные недоступны» из-за необязательной подсказки. Без перечня
-    строки просто не помечаются.
-    """
-    import platform_api.modules.tender.core as core
-    import platform_api.modules.tender.worklist as module
-
-    # Ровно старое ядро: настройки есть, а перечня в них нет.
-    monkeypatch.setattr(core, "core_settings", lambda: SimpleNamespace())
-
-    row = SimpleNamespace(ens_code="281314.900.000076")
-    assert module.is_domestic(row) is False
+    assert module.mark_cell("ЕНС ТРУ", свой) == "critical"
+    # Другие колонки той же строки не трогаются.
+    assert module.mark_cell("сумма", свой) == ""
+    assert module.mark_cell("ЕНС ТРУ", чужой) == ""
+    # И вердикт строки остаётся вердиктом.
     assert (
-        module.tone_of(SimpleNamespace(row=row, verdict=SimpleNamespace(label="Брать"))) == "good"
+        module.tone_of(SimpleNamespace(row=свой.row, verdict=SimpleNamespace(label="Брать")))
+        == "good"
     )
-
-
-def test_fail_pereschet_beret_nahodki_tolko_svoey_pozicii() -> None:
-    """Строка отбора — это позиция, а находки лежат на всю закупку.
-
-    В папке бывает сорок две позиции и три десятка находок. Пока пересчёт шёл
-    по всему набору, себестоимость антенны за двести тысяч выходила в
-    девяносто семь миллионов: в неё складывались 3D-сканер, каски и
-    внедорожник из той же папки.
-
-    Сужает набор само ядро — по имени позиции, которое оно же и записало в
-    строку. Числу позиций верить нельзя: единица бывает и у закупки из одной
-    позиции, а находки у неё не сужаются.
-    """
-    import platform_api.modules.tender.worklist as module
-
-    сужено: dict[str, Any] = {}
-
-    def findings_for(sourcing: Any, name: str, budget: Any) -> Any:
-        сужено["имя"], сужено["бюджет"] = name, budget
-        return SimpleNamespace(opportunities=("своя находка",))
-
-    monkeypatch = pytest.MonkeyPatch()
-    core = SimpleNamespace(findings_for=findings_for)
-    monkeypatch.setitem(__import__("sys").modules, "tender_analyze.application.sheet_builder", core)
-    try:
-        целая = SimpleNamespace(opportunities=("чужая", "ещё чужая"))
-        строка = SimpleNamespace(
-            position_name="Антенна (Ubiquiti AirMAX Omni AMO-5G13)",
-            title="Антенна (Ubiquiti AirMAX Omni AMO-5G13)",
-            total=Decimal("226597.70"),
-            quantity=Decimal(2),
-        )
-
-        found, positions = module._for_row(строка, целая, 42)
-
-        assert found.opportunities == ("своя находка",)
-        assert positions == 1, "бюджет позиции нельзя делить на сорок две"
-        assert сужено["имя"] == строка.position_name
-        # Цена заказчика за единицу: по ней ядро отсеивает находки, которые
-        # дешевле требуемого в разы.
-        assert сужено["бюджет"] == Decimal("113298.85")
-
-        # Закупка целиком — весь набор и все её позиции.
-        закупка = SimpleNamespace(position_name="", title="Сетевое оборудование")
-        assert module._for_row(закупка, целая, 42) == (целая, 42)
-    finally:
-        monkeypatch.undo()

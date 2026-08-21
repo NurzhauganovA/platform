@@ -34,17 +34,21 @@ type Direction = "asc" | "desc";
  * Сам по себе он смысла не несёт — при дальтонизме «участвовать» и «не
  * участвовать» неразличимы.
  */
+/** Заливка отмеченной ячейки. Насыщеннее строчной: строка красится вердиктом
+ *  бледно, и отметка на её фоне должна читаться, а не сливаться. */
+const CELL_TONES: Record<string, string> = {
+  critical: "bg-critical/25",
+  warning: "bg-warning/25",
+  good: "bg-good/20",
+  info: "bg-series-1/15",
+  "": "",
+};
+
 const TONES: Record<string, string> = {
   good: "bg-good/10 hover:bg-good/15",
   warning: "bg-warning/10 hover:bg-warning/15",
   info: "bg-series-1/5 hover:bg-series-1/10",
   critical: "bg-critical/5 hover:bg-critical/10",
-  // Заметно насыщеннее, чем «мимо»: строку с отечественным производителем
-  // пролистывают, не читая, и она должна отличаться от просто невыгодной на
-  // скорости прокрутки. Цвет один и тот же — роль `critical`, — потому что
-  // заводить ради этого шестую краску значит ослабить проверку палитры на
-  // различимость.
-  domestic: "bg-critical/25 hover:bg-critical/30",
   "": "hover:bg-plane",
 };
 
@@ -262,6 +266,7 @@ export function WorkTable({
                     column.align === "right"
                       ? "text-right whitespace-nowrap"
                       : "text-left",
+                    CELL_TONES[row.cells[index]?.tone ?? ""],
                   )}
                 >
                   {column.format === "datetime" ? (

@@ -57,7 +57,9 @@ export function sliceable(data: Worklist): WorklistColumn[] {
   if (!rows) return [];
   return data.columns.filter((column, index) => {
     if (column.compact || column.format !== "text") return false;
-    const distinct = new Set(data.rows.map((row) => row.cells[index]?.text?.trim() ?? "")).size;
+    const distinct = new Set(
+      data.rows.map((row) => row.cells[index]?.text?.trim() ?? ""),
+    ).size;
     if (distinct < 2) return false;
     if (CUTS.has(column.role)) return true;
     return distinct <= 60 && distinct <= rows * 0.6;
@@ -120,7 +122,11 @@ function measure(rows: WorklistRow[], columns: WorklistColumn[]) {
   };
 }
 
-export function slices(data: Worklist, rows: WorklistRow[], key: string): Slice[] {
+export function slices(
+  data: Worklist,
+  rows: WorklistRow[],
+  key: string,
+): Slice[] {
   const index = data.columns.findIndex((column) => column.key === key);
   if (index < 0) return [];
 
@@ -141,5 +147,7 @@ export function slices(data: Worklist, rows: WorklistRow[], key: string): Slice[
   // — в их книге цена за единицу, — и порядок по ней оставил бы разрезы
   // вперемешку, в порядке появления строк.
   const weight = (item: Slice) => item.total ?? item.profit ?? item.rows;
-  return result.sort((left, right) => weight(right) - weight(left) || right.rows - left.rows);
+  return result.sort(
+    (left, right) => weight(right) - weight(left) || right.rows - left.rows,
+  );
 }

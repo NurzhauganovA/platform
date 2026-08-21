@@ -39,9 +39,13 @@ export function AppShell({ me }: { me: Me }) {
     <div className="flex min-h-screen bg-plane">
       <aside className="flex w-60 shrink-0 flex-col border-r border-hairline bg-surface">
         <div className="border-b border-hairline px-5 py-4">
-          <div className="text-base font-semibold tracking-tight text-ink">Fintend</div>
+          <div className="text-base font-semibold tracking-tight text-ink">
+            Fintend
+          </div>
           {me.organization.name !== "Fintend" && (
-            <div className="mt-0.5 text-xs text-ink-muted">{me.organization.name}</div>
+            <div className="mt-0.5 text-xs text-ink-muted">
+              {me.organization.name}
+            </div>
           )}
         </div>
 
@@ -106,8 +110,12 @@ export function PageHeader({
   return (
     <header className="flex items-start justify-between gap-6 border-b border-hairline bg-surface px-8 py-5">
       <div className="min-w-0">
-        <h1 className="truncate text-lg font-semibold tracking-tight text-ink">{title}</h1>
-        {subtitle && <p className="mt-0.5 truncate text-sm text-ink-muted">{subtitle}</p>}
+        <h1 className="truncate text-lg font-semibold tracking-tight text-ink">
+          {title}
+        </h1>
+        {subtitle && (
+          <p className="mt-0.5 truncate text-sm text-ink-muted">{subtitle}</p>
+        )}
       </div>
       {action && <div className="shrink-0">{action}</div>}
     </header>

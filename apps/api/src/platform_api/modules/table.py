@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -148,6 +148,15 @@ class CellOut:
     text: str = ""
     number: float | None = None
     link: str | None = None
+
+    tone: str = ""
+    """Отметка на самой ячейке, а не на строке.
+
+    Заливка строки занята вердиктом — «выгодно», «мимо», — и второго смысла в
+    неё не вложить. А отметить надо именно значение: код ЕНС, по которому в
+    стране есть свой производитель, виден только в своей колонке, и красить
+    ради него всю строку значит спорить с вердиктом.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +285,7 @@ def build_table(
     focus: Callable[[Any], bool] | None = None,
     identity: Callable[[Any], str] | None = None,
     deadline: Callable[[Any], str | None] | None = None,
+    mark: Callable[[str, Any], str] | None = None,
     compact: Collection[str] = (),
     essential: Sequence[str] = (),
     roles: dict[str, str] | None = None,
@@ -285,6 +295,11 @@ def build_table(
     Значения берутся вызовом `getter` — тем самым, которым они попадают в
     книгу. Второй способ посчитать ячейку разошёлся бы с первым, и расхождение
     всплыло бы при сверке экрана с файлом.
+
+    `mark` отмечает отдельные ячейки: получает заголовок колонки и строку,
+    возвращает тон или пустое. Нужно там, где значение важнее строки целиком —
+    код ЕНС из перечня отечественных товаров закрашивается сам, а вердикт
+    строки остаётся при ней.
 
     `roles` подписывает колонки по смыслу: где сумма, где себестоимость, где
     заработок. Без этого браузеру, который считает итоги по отобранному,
@@ -316,7 +331,10 @@ def build_table(
     body = tuple(
         RowOut(
             number=position,
-            cells=tuple(_cell(column, item) for _index, column, _access in chosen),
+            cells=tuple(
+                _cell(column, item, mark(column.title, item) if mark else "")
+                for _index, column, _access in chosen
+            ),
             id=identity(item) if identity is not None else "",
             deadline=deadline(item) if deadline is not None else None,
             focus=focus(item) if focus is not None else True,
@@ -335,7 +353,7 @@ _NUMERIC = frozenset({"#,##0.00", "#,##0.###", "0.0%"})
 разряду, и разнобой по левому краю сравнивать мешает."""
 
 
-def _cell(column: Column, item: Any) -> CellOut:
+def _cell(column: Column, item: Any, tone: str = "") -> CellOut:
     """Одна ячейка: значение и, если есть, ссылка.
 
     Ошибка в `getter` не роняет таблицу целиком. Строк несколько сотен, и одна
@@ -355,7 +373,8 @@ def _cell(column: Column, item: Any) -> CellOut:
         except Exception:  # pragma: no cover
             link = None
 
-    return _value(value, link)
+    cell = _value(value, link)
+    return replace(cell, tone=tone) if tone else cell
 
 
 def _value(value: Any, link: str | None) -> CellOut:

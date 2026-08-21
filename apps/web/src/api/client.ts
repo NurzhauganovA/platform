@@ -50,7 +50,11 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new ApiError(response.status, await readError(response), await safeJson(response));
+    throw new ApiError(
+      response.status,
+      await readError(response),
+      await safeJson(response),
+    );
   }
 
   if (response.status === 204) return undefined as T;
@@ -81,9 +85,12 @@ async function safeJson(response: Response): Promise<unknown> {
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
+  post: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "POST", body }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PATCH", body }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   /** Загрузка файла: тело — FormData, заголовок ставит браузер. */
-  upload: <T>(path: string, form: FormData) => request<T>(path, { method: "POST", body: form }),
+  upload: <T>(path: string, form: FormData) =>
+    request<T>(path, { method: "POST", body: form }),
 };

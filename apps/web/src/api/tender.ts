@@ -20,7 +20,8 @@ export interface Me {
   last_login_at: string | null;
 }
 
-export type CaseStatus = "draft" | "ready" | "analyzing" | "analyzed" | "archived";
+export type CaseStatus =
+  "draft" | "ready" | "analyzing" | "analyzed" | "archived";
 
 export interface TenderCase {
   id: string;
@@ -69,7 +70,8 @@ export interface UploadPlan {
   already_analyzed: number;
 }
 
-export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type JobStatus =
+  "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 export interface Job {
   id: string;
@@ -227,13 +229,21 @@ export const tender = {
 
   cases: () => api.get<TenderCase[]>("/api/tender/cases"),
   case: (id: string) => api.get<CaseDetail>(`/api/tender/cases/${id}`),
-  comparison: (id: string) => api.get<CaseComparison>(`/api/tender/cases/${id}/comparison`),
-  createCase: (payload: { title: string; customer?: string; subject?: string }) =>
-    api.post<TenderCase>("/api/tender/cases", payload),
-  attachFiles: (id: string, files: { file_id: string; relative_path: string }[]) =>
-    api.post<CaseDetail>(`/api/tender/cases/${id}/files`, files),
+  comparison: (id: string) =>
+    api.get<CaseComparison>(`/api/tender/cases/${id}/comparison`),
+  createCase: (payload: {
+    title: string;
+    customer?: string;
+    subject?: string;
+  }) => api.post<TenderCase>("/api/tender/cases", payload),
+  attachFiles: (
+    id: string,
+    files: { file_id: string; relative_path: string }[],
+  ) => api.post<CaseDetail>(`/api/tender/cases/${id}/files`, files),
   analyze: (id: string, force = false) =>
-    api.post<{ job_id: string }>(`/api/tender/cases/${id}/analyze?force=${force}`),
+    api.post<{ job_id: string }>(
+      `/api/tender/cases/${id}/analyze?force=${force}`,
+    ),
   splitPreview: (id: string) =>
     api.get<{
       can_split: boolean;
@@ -247,11 +257,16 @@ export const tender = {
         offers: number;
       }[];
     }>(`/api/tender/cases/${id}/split`),
-  split: (id: string) => api.post<TenderCase[]>(`/api/tender/cases/${id}/split`),
+  split: (id: string) =>
+    api.post<TenderCase[]>(`/api/tender/cases/${id}/split`),
   sourcing: (id: string, force = false) =>
-    api.post<{ job_id: string }>(`/api/tender/cases/${id}/sourcing?force=${force}`),
-  offer: (id: string, payload: { companies: string[]; number: string | null }) =>
-    api.post<{ job_id: string }>(`/api/tender/cases/${id}/offer`, payload),
+    api.post<{ job_id: string }>(
+      `/api/tender/cases/${id}/sourcing?force=${force}`,
+    ),
+  offer: (
+    id: string,
+    payload: { companies: string[]; number: string | null },
+  ) => api.post<{ job_id: string }>(`/api/tender/cases/${id}/offer`, payload),
   documents: (id: string) =>
     api.get<{ name: string; size_bytes: number; kind: string }[]>(
       `/api/tender/cases/${id}/documents`,
@@ -261,7 +276,8 @@ export const tender = {
       `/api/tender/cases/${id}/decide?with_market=${withMarket}`,
     ),
 
-  uploadPlan: (probes: FileProbe[]) => api.post<UploadPlan>("/api/tender/upload-plan", probes),
+  uploadPlan: (probes: FileProbe[]) =>
+    api.post<UploadPlan>("/api/tender/upload-plan", probes),
   lookupFiles: (hashes: string[]) =>
     api.post<{ id: string; sha256: string; size_bytes: number }[]>(
       "/api/tender/files/lookup",
