@@ -14,18 +14,27 @@
 #
 #   make up OMARKET_DIR=~/code/omarket
 
-COMPOSE ?= docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile full
+# Имя набора Compose. По умолчанию — имя каталога, ровно то, что Compose
+# подставляет сам, когда `-p` не указан.
+#
+# Записано явно, но менять его нельзя: под этим именем на сервере уже созданы
+# тома. Смена имени не переносит данные — Compose заводит новые пустые тома и
+# поднимает поверх них пустую базу, а рабочая остаётся лежать рядом
+# невостребованной. Выглядит это как «платформа потеряла все данные».
+PROJECT ?= $(notdir $(CURDIR))
+
+COMPOSE ?= docker compose -p $(PROJECT) -f docker-compose.yml -f docker-compose.dev.yml --profile full
 # Рабочий режим — тот же набор служб плюс слой отличий сервера.
-PROD = docker compose -p fintend -f docker-compose.yml -f docker-compose.prod.yml --profile full
+PROD = docker compose -p $(PROJECT) -f docker-compose.yml -f docker-compose.prod.yml --profile full
 
 # Проверочная среда: тот же слой отличий сервера, но своё имя набора, свои
 # порты и своя база. Слой один и тот же намеренно — проверять надо ровно то,
 # что потом поднимут в работу; отдельный файл разошёлся бы с рабочим, и
 # расхождение обнаружилось бы на рабочем сервере.
 #
-# Имя набора (`-p`) разводит контейнеры, сети и тома. Без него Compose счёл бы
-# рабочие контейнеры своими и пересоздал бы их — вместо проверки вышла бы
-# остановка работы.
+# Имя набора у проверочной своё и не зависит от каталога: оба дерева
+# называются `platform`, и без этого проверочная встала бы поверх рабочей.
+# Набор новый, поэтому имя выбирается свободно — томов под ним ещё нет.
 STAGE = STACK=fintend-stage WEB_BIND=127.0.0.1 WEB_PORT=$(STAGE_WEB_PORT) POSTGRES_PORT=$(STAGE_PG_PORT) \
 	REDIS_PORT=$(STAGE_REDIS_PORT) API_PORT=$(STAGE_API_PORT) \
 	docker compose -p fintend-stage -f docker-compose.yml -f docker-compose.prod.yml --profile full
