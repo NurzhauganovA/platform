@@ -137,8 +137,18 @@ export function DetailPanel({
             </p>
           ) : data ? (
             <div className="space-y-6">
+              {/* «Свой производитель» — тон рабочего списка, а не значка: у
+                  значка своя палитра, и лишний оттенок в ней означал бы шестую
+                  краску ради одного места. Красный подходит: смысл тот же —
+                  эту закупку не берём. */}
               {data.verdict && (
-                <Badge tone={data.tone || "neutral"}>
+                <Badge
+                  tone={
+                    data.tone === "domestic"
+                      ? "critical"
+                      : data.tone || "neutral"
+                  }
+                >
                   {data.tone && GLYPH[data.tone]} {data.verdict}
                 </Badge>
               )}

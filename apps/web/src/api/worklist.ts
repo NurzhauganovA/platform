@@ -44,7 +44,10 @@ export interface WorklistCell {
 }
 
 /** Подсветка по вердикту — та же, что заливка строки в книге. */
-export type Tone = "" | "good" | "warning" | "info" | "critical";
+/** `domestic` — по коду ЕНС в стране есть свой производитель. Отдельно от
+ *  `critical`: «мимо» значит «посчитали и не подходит», а здесь считать
+ *  нечего вовсе. */
+export type Tone = "" | "good" | "warning" | "info" | "critical" | "domestic";
 
 export interface WorklistRow {
   cells: WorklistCell[];
@@ -212,6 +215,13 @@ export const worklists = {
 
   analyze: (slug: WorklistSlug) =>
     api.post<{ job_id: string }>(`/api/${slug}/analyze`),
+
+  /**
+   * Остановить прогон. Разбор шестисот закупов с поиском на рынках идёт
+   * десятками минут и тратит деньги на каждом — начатый не тем и не вовремя
+   * должен прерываться, а не досчитываться.
+   */
+  cancel: (jobId: string) => api.post<unknown>(`/api/jobs/${jobId}/cancel`),
 
   /**
    * Книга Excel.

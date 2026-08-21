@@ -52,6 +52,9 @@ type ButtonProps = {
   variant?: "primary" | "secondary" | "ghost" | "danger";
   disabled?: boolean;
   className?: string;
+  /** Подсказка при наведении. Слово на кнопке короткое по необходимости,
+   *  а последствие нажатия объяснить надо — особенно у прерывающих. */
+  title?: string;
 };
 
 export function Button({
@@ -61,6 +64,7 @@ export function Button({
   variant = "secondary",
   disabled,
   className,
+  title,
 }: ButtonProps) {
   const styles = {
     primary: "bg-series-1 text-white hover:opacity-90",
@@ -74,6 +78,7 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cx(
         "rounded-[8px] px-3.5 py-2 text-sm font-medium transition",
         "disabled:cursor-not-allowed disabled:opacity-45",
@@ -99,7 +104,9 @@ export function Field({
     <label className="block">
       <span className="mb-1.5 block text-sm font-medium text-ink">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-xs text-ink-muted">{hint}</span>}
+      {hint && (
+        <span className="mt-1 block text-xs text-ink-muted">{hint}</span>
+      )}
     </label>
   );
 }
@@ -127,7 +134,13 @@ type Tone = "neutral" | "good" | "warning" | "serious" | "critical" | "info";
  * Всегда с текстом, и это не стилистика: цвет состояния сам по себе смысла
  * не несёт — при дальтонизме «в работе» и «ошибка» неразличимы.
  */
-export function Badge({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
+export function Badge({
+  tone = "neutral",
+  children,
+}: {
+  tone?: Tone;
+  children: ReactNode;
+}) {
   const styles = {
     neutral: "bg-plane text-ink-secondary border-hairline",
     good: "text-good border-good/40 bg-good/10",
@@ -174,7 +187,12 @@ export function StatTile({
     <div className="rounded-[10px] border border-hairline bg-surface px-4 py-3.5">
       <div className="text-xs font-medium text-ink-muted">{label}</div>
       <div className="mt-1.5 flex items-baseline gap-1.5">
-        <span className={cx("text-2xl leading-none font-semibold tracking-tight", accent)}>
+        <span
+          className={cx(
+            "text-2xl leading-none font-semibold tracking-tight",
+            accent,
+          )}
+        >
           {value}
         </span>
         {unit && <span className="text-sm text-ink-secondary">{unit}</span>}
@@ -207,11 +225,20 @@ export function Collapsible({
       <summary className="flex cursor-pointer items-center justify-between gap-3 px-5 py-3 text-sm">
         <span className="font-semibold text-ink">
           {title}
-          {count != null && <span className="ml-1.5 font-normal text-ink-muted">{count}</span>}
+          {count != null && (
+            <span className="ml-1.5 font-normal text-ink-muted">{count}</span>
+          )}
         </span>
         <span className="flex items-center gap-2">
-          {hint && <span className="hidden text-xs text-ink-muted sm:inline">{hint}</span>}
-          <span aria-hidden className="text-ink-muted transition group-open:rotate-90">
+          {hint && (
+            <span className="hidden text-xs text-ink-muted sm:inline">
+              {hint}
+            </span>
+          )}
+          <span
+            aria-hidden
+            className="text-ink-muted transition group-open:rotate-90"
+          >
             ›
           </span>
         </span>
@@ -233,7 +260,9 @@ export function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <p className="text-sm font-medium text-ink">{title}</p>
-      {description && <p className="max-w-md text-sm text-ink-muted">{description}</p>}
+      {description && (
+        <p className="max-w-md text-sm text-ink-muted">{description}</p>
+      )}
       {action}
     </div>
   );
@@ -249,7 +278,13 @@ export function Spinner({ label }: { label?: string }) {
 }
 
 /** Полоса выполнения. Проценты подписаны: цвет полосы их не заменяет. */
-export function Progress({ percent, tone = "series-1" }: { percent: number; tone?: string }) {
+export function Progress({
+  percent,
+  tone = "series-1",
+}: {
+  percent: number;
+  tone?: string;
+}) {
   return (
     <div className="h-1.5 w-full overflow-hidden rounded-full bg-hairline">
       <div

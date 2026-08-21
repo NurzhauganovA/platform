@@ -39,6 +39,12 @@ const TONES: Record<string, string> = {
   warning: "bg-warning/10 hover:bg-warning/15",
   info: "bg-series-1/5 hover:bg-series-1/10",
   critical: "bg-critical/5 hover:bg-critical/10",
+  // Заметно насыщеннее, чем «мимо»: строку с отечественным производителем
+  // пролистывают, не читая, и она должна отличаться от просто невыгодной на
+  // скорости прокрутки. Цвет один и тот же — роль `critical`, — потому что
+  // заводить ради этого шестую краску значит ослабить проверку палитры на
+  // различимость.
+  domestic: "bg-critical/25 hover:bg-critical/30",
   "": "hover:bg-plane",
 };
 

@@ -89,7 +89,7 @@ def sync_sources(
         fresh: dict[str, Any] = {}
         if since is not None:
             ctx.advance(len(tasks), note="разбираем новые закупы")
-            fresh = _analyze_fresh(container, since)
+            fresh = _analyze_fresh(ctx, container, since)
     finally:
         container.dispose()
 
@@ -104,7 +104,7 @@ def sync_sources(
     }
 
 
-def _analyze_fresh(container: Any, since: Any) -> dict[str, Any]:
+def _analyze_fresh(ctx: JobContext, container: Any, since: Any) -> dict[str, Any]:
     """Разбирает закупы, впервые появившиеся после указанного момента.
 
     Ничего нового — ничего и не считаем: пустой прогон ядра всё равно поднял
@@ -118,7 +118,9 @@ def _analyze_fresh(container: Any, since: Any) -> dict[str, Any]:
         if not ids:
             return {"analyzed_new": 0}
         service = AnalysisService(container)
-        analyses = service.analyze_within(uow, BargainStatus.ACTIVE, platform_ids=ids)
+        analyses = service.analyze_within(
+            uow, BargainStatus.ACTIVE, platform_ids=ids, progress=_reporter(ctx)
+        )
         uow.commit()
         stats = service.last_run_stats
 
@@ -128,6 +130,27 @@ def _analyze_fresh(container: Any, since: Any) -> dict[str, Any]:
         "market_searched": stats.market_searched if stats else 0,
         "total_tokens": stats.total_tokens if stats else 0,
     }
+
+
+def _reporter(ctx: JobContext) -> Any:
+    """Обратный вызов ядра: доля прогона наружу, отмена — внутрь.
+
+    Не на каждый закуп. Ядро зовёт его шестьсот раз, а каждый вызов — это
+    запись доли в базу и перечитывание состояния задачи оттуда же: тысяча
+    двести обращений ради полоски, которая всё равно рисуется не чаще
+    десяти раз в секунду. Раз в пять закупов и хватает, и держит остановку
+    отзывчивой: закупы без поиска считаются мгновенно.
+
+    Отмену бросает сам `ctx.advance` — здесь её не ловят: цикл ядра должен
+    прерваться, а не дойти до конца, потратив деньги на поиск.
+    """
+
+    def report(done: int, total: int) -> None:
+        if done % 5 and done != total:
+            return
+        ctx.advance(done, total=total, note=f"разобрано {done} из {total}")
+
+    return report
 
 
 def analyze(ctx: JobContext, *, search_market: bool = True, **_: Any) -> dict[str, Any]:
@@ -149,10 +172,13 @@ def analyze(ctx: JobContext, *, search_market: bool = True, **_: Any) -> dict[st
     settings = core_settings()
     container = Container(settings)
     try:
-        ctx.advance(0, total=1, note="считаем себестоимость и маржу")
+        ctx.advance(0, total=1, note="поднимаем закупы и каталог")
         service = AnalysisService(container)
-        analyses = service.analyze(BargainStatus.ACTIVE, search_market=search_market)
-        ctx.advance(1, note="готово")
+        analyses = service.analyze(
+            BargainStatus.ACTIVE,
+            search_market=search_market,
+            progress=_reporter(ctx),
+        )
         stats = service.last_run_stats
     finally:
         container.dispose()

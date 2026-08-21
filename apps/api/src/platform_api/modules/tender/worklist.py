@@ -223,6 +223,13 @@ _TONES = {label: tone for label, tone, _ in _VERDICTS}
 
 
 def tone_of(item: RankedRow) -> str:
+    if is_domestic(item.row):
+        # Перечень отменяет вердикт, а не дополняет его. Вердикт отвечает
+        # «выгодно ли»; здесь вопрос снят раньше: по коду в стране есть свой
+        # производитель, закупка идёт по своим правилам, и считать маржу
+        # незачем. Строку читают боковым зрением при прокрутке трёхсот
+        # закупок, и «выгодно, но не наше» цветом не передать.
+        return _DOMESTIC_TONE
     label = item.verdict.label
     if label not in _TONES:
         # Ядро завело новый вердикт, а здесь о нём не знают. Серая строка без
@@ -232,10 +239,39 @@ def tone_of(item: RankedRow) -> str:
     return _TONES.get(label, "")
 
 
+_DOMESTIC_TONE = "domestic"
+"""Отдельный тон, а не «Мимо». «Мимо» значит «посчитали и не подходит», и
+перепутать их нельзя: у одного закупа считать нечего, у другого посчитано.
+Оттенок тоже разный по насыщенности — рядом в списке они различимы."""
+
+
+def is_domestic(row: Any) -> bool:
+    """Есть ли по коду ЕНС отечественный производитель.
+
+    Перечень читает ядро — приказ Минпрома, три с половиной тысячи кодов в
+    файле Word. Разбирать его здесь значило бы завести второй список, который
+    разойдётся с первым в день, когда министерство пришлёт обновление.
+    """
+    from platform_api.modules.tender.core import core_settings
+
+    code = (row.ens_code or "").strip()
+    return bool(code) and code in core_settings().domestic
+
+
 def row_deadline(_item: RankedRow) -> str | None:
     """Срока приёма у тендерной закупки в данных нет: дата в строке — это дата
     закупки из заключения, а не «до какого числа подать»."""
     return None
+
+
+_DOMESTIC_LEGEND = (
+    _DOMESTIC_TONE,
+    "Свой производитель",
+    "по коду ЕНС в перечне Минпрома есть казахстанский производитель — "
+    "искать позицию за рубежом незачем",
+)
+"""Слово к цвету. Красная строка без подписи означала бы «плохо» вообще, а
+здесь она означает ровно одно: этой закупкой мы не занимаемся."""
 
 
 def legend() -> tuple[tuple[str, str, str], ...]:
@@ -254,7 +290,13 @@ def legend() -> tuple[tuple[str, str, str], ...]:
             labels[tone], hints[tone] = [], []
         labels[tone].append(label)
         hints[tone].append(hint)
-    return tuple((tone, " / ".join(labels[tone]), "; ".join(hints[tone])) for tone in order)
+    items = [(tone, " / ".join(labels[tone]), "; ".join(hints[tone])) for tone in order]
+    # Первой: перечень отменяет вердикт, и читать легенду надо с того, что
+    # отсеивается раньше всего. Появляется, только когда такие строки есть, —
+    # пустой значок отбора нажимают и получают пустой список.
+    if any(is_domestic(item.row) for item in _ranked()):
+        items.insert(0, _DOMESTIC_LEGEND)
+    return tuple(items)
 
 
 # ---------------------------------------------------------------------------

@@ -702,3 +702,24 @@ def test_fail_staroe_yadro_ne_ostavlyaet_razdel_pustym(tmp_path: Path) -> None:
         assert [item.name for item in seen] == ["ТЗ.pdf"]
         # Помечены общими, и это правда: чей документ — сказать нечем.
         assert all(item.shared for item in seen)
+
+
+def test_fail_kod_iz_perechnya_otmenyaet_verdikt() -> None:
+    """Перечень Минпрома снимает вопрос раньше, чем считается маржа.
+
+    По коду ЕНС в стране есть свой производитель — искать позицию за рубежом
+    незачем, закупка идёт по своим правилам. Строку читают боковым зрением при
+    прокрутке трёхсот закупок, и «выгодно, но не наше» цветом не передать:
+    вердикт здесь именно отменяется, а не дополняется.
+    """
+    import platform_api.modules.tender.worklist as module
+
+    verdict = SimpleNamespace(label="Брать")
+    свой = SimpleNamespace(row=SimpleNamespace(ens_code="281314.900.000076"), verdict=verdict)
+    чужой = SimpleNamespace(row=SimpleNamespace(ens_code="999999.999.999999"), verdict=verdict)
+    пустой = SimpleNamespace(row=SimpleNamespace(ens_code=""), verdict=verdict)
+
+    assert module.tone_of(свой) == "domestic"
+    # Не в перечне и без кода — обычный вердикт, а не серая строка.
+    assert module.tone_of(чужой) == "good"
+    assert module.tone_of(пустой) == "good"

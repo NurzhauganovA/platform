@@ -161,6 +161,10 @@ export function WorklistPage({
     onSuccess: (started) => setJobId(started.job_id),
   });
 
+  const stop = useMutation({
+    mutationFn: () => worklists.cancel(jobId ?? ""),
+  });
+
   // Что показывать, решает сервер. Кнопки приходят списком: у тендерного
   // отбора нет ни обновления, ни пересчёта — папки разбирают на машине
   // тендерщика, — а пересчёт у площадок виден только тому, кто платит.
@@ -287,11 +291,33 @@ export function WorklistPage({
         {job && running && (
           <Card className="px-5 py-3.5">
             <div className="flex items-center justify-between gap-4">
+              {/* Подпись приходит от задачи и называет числа: «разобрано 340
+                  из 1121». Без них полоска на 0% отвечает «работаем» на
+                  вопрос «сколько ещё ждать» и «это отобранные или все». */}
               <Spinner label={job.note || "Работаем…"} />
-              <span className="text-xs text-ink-muted">{job.percent}%</span>
+              <div className="flex shrink-0 items-center gap-3">
+                <span className="text-xs text-ink-muted">{job.percent}%</span>
+                <Button
+                  variant="ghost"
+                  onClick={() => stop.mutate()}
+                  disabled={stop.isPending}
+                  title="Прервать прогон на ближайшем закупе"
+                >
+                  {stop.isPending ? "Останавливаем…" : "Остановить"}
+                </Button>
+              </div>
             </div>
             <div className="mt-2.5">
               <Progress percent={job.percent} />
+            </div>
+          </Card>
+        )}
+
+        {job && job.status === "cancelled" && (
+          <Card className="px-5 py-3.5">
+            <div className="text-sm text-ink">
+              Остановлено. Посчитанное до остановки сохранено — прогон
+              продолжится с того же места.
             </div>
           </Card>
         )}
