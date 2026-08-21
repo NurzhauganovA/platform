@@ -94,22 +94,33 @@ def recalculate(row: Any, pick: str) -> Any:
     `None`, когда выбирать не из чего или выбор не найден: тогда разбор
     показывает то, что посчитано по умолчанию.
 
-    Возвращает сумму, расшифровку построчно и ключ выбранной находки — тем же
-    кодом, которым книга считает свою. Свой расчёт здесь разошёлся бы с
-    книгой на первой же закупке, и выяснилось бы это при сверке.
+    Находки берутся те же, по которым ядро посчитало эту строку, и это
+    главное здесь. Строка отбора — это позиция, а находки в базе лежат на всю
+    закупку: их там бывает три десятка на сорок две позиции. Пока расчёт шёл
+    по всему набору, себестоимость антенны за двести тысяч выходила в
+    девяносто семь миллионов — в неё складывались 3D-сканер, каски и
+    внедорожник из той же папки.
+
+    Сужает набор и делит бюджет по позициям само ядро: `findings_for` и
+    `row.positions` — то же, чем оно строило строку. Свой отбор находок здесь
+    разошёлся бы с книгой на первой же закупке.
     """
     from tender_analyze.application.sheet_builder import cost_basis, default_choice
 
     saved = case_sourcing(row.folder_path or "")
     if saved is None:
         return None
-    sourcing, positions = saved
+    sourcing, whole = saved
     if not sourcing.opportunities:
         return None
 
-    chosen = default_choice(sourcing.opportunities, positions)
+    found, positions = _for_row(row, sourcing, whole)
+    if not found.opportunities:
+        return None
+
+    chosen = default_choice(found.opportunities, positions)
     picked = next(
-        (item for item in sourcing.opportunities if finding_key(item) == pick),
+        (item for item in found.opportunities if finding_key(item) == pick),
         None,
     )
     if picked is not None:
@@ -121,6 +132,30 @@ def recalculate(row: Any, pick: str) -> Any:
 
     total, lines = cost_basis(chosen, row.quantity, positions)
     return total, lines, {finding_key(item) for item in chosen.values()}
+
+
+def _for_row(row: Any, sourcing: Any, whole: int) -> tuple[Any, int]:
+    """Находки этой строки и число позиций, между которыми делится бюджет.
+
+    У строки-позиции — только её находки и единица; у закупки целиком — весь
+    набор и число её позиций. Что есть что, говорит само ядро полем
+    `position_name`: по числу позиций этого не понять, единица бывает и у
+    закупки из одной позиции, а находки у неё не сужаются.
+
+    Ядро старее платформы — считаем по всей закупке, как было. Хуже, чем
+    правильный ответ, но лучше пустого разбора: репозитории выкатываются
+    порознь, и расходиться они будут ещё не раз.
+    """
+    from tender_analyze.application.sheet_builder import findings_for
+
+    name = getattr(row, "position_name", "")
+    if not name:
+        return sourcing, whole or 1
+    # Цена заказчика за единицу: по ней ядро отсеивает находки, которые
+    # дешевле требуемого в разы, — это не другая модель, а другой класс
+    # товара.
+    budget = row.total / row.quantity if row.total and row.quantity else None
+    return findings_for(sourcing, name, budget), 1
 
 
 def finding_key(item: Any) -> str:

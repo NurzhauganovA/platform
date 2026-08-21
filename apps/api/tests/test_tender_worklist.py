@@ -743,3 +743,51 @@ def test_fail_staroe_yadro_bez_perechnya_ne_ronyaet_razdel(monkeypatch: Any) -> 
     assert (
         module.tone_of(SimpleNamespace(row=row, verdict=SimpleNamespace(label="Брать"))) == "good"
     )
+
+
+def test_fail_pereschet_beret_nahodki_tolko_svoey_pozicii() -> None:
+    """Строка отбора — это позиция, а находки лежат на всю закупку.
+
+    В папке бывает сорок две позиции и три десятка находок. Пока пересчёт шёл
+    по всему набору, себестоимость антенны за двести тысяч выходила в
+    девяносто семь миллионов: в неё складывались 3D-сканер, каски и
+    внедорожник из той же папки.
+
+    Сужает набор само ядро — по имени позиции, которое оно же и записало в
+    строку. Числу позиций верить нельзя: единица бывает и у закупки из одной
+    позиции, а находки у неё не сужаются.
+    """
+    import platform_api.modules.tender.worklist as module
+
+    сужено: dict[str, Any] = {}
+
+    def findings_for(sourcing: Any, name: str, budget: Any) -> Any:
+        сужено["имя"], сужено["бюджет"] = name, budget
+        return SimpleNamespace(opportunities=("своя находка",))
+
+    monkeypatch = pytest.MonkeyPatch()
+    core = SimpleNamespace(findings_for=findings_for)
+    monkeypatch.setitem(__import__("sys").modules, "tender_analyze.application.sheet_builder", core)
+    try:
+        целая = SimpleNamespace(opportunities=("чужая", "ещё чужая"))
+        строка = SimpleNamespace(
+            position_name="Антенна (Ubiquiti AirMAX Omni AMO-5G13)",
+            title="Антенна (Ubiquiti AirMAX Omni AMO-5G13)",
+            total=Decimal("226597.70"),
+            quantity=Decimal(2),
+        )
+
+        found, positions = module._for_row(строка, целая, 42)
+
+        assert found.opportunities == ("своя находка",)
+        assert positions == 1, "бюджет позиции нельзя делить на сорок две"
+        assert сужено["имя"] == строка.position_name
+        # Цена заказчика за единицу: по ней ядро отсеивает находки, которые
+        # дешевле требуемого в разы.
+        assert сужено["бюджет"] == Decimal("113298.85")
+
+        # Закупка целиком — весь набор и все её позиции.
+        закупка = SimpleNamespace(position_name="", title="Сетевое оборудование")
+        assert module._for_row(закупка, целая, 42) == (целая, 42)
+    finally:
+        monkeypatch.undo()
