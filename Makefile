@@ -26,7 +26,7 @@ PROD = docker compose -p fintend -f docker-compose.yml -f docker-compose.prod.ym
 # Имя набора (`-p`) разводит контейнеры, сети и тома. Без него Compose счёл бы
 # рабочие контейнеры своими и пересоздал бы их — вместо проверки вышла бы
 # остановка работы.
-STAGE = STACK=fintend-stage WEB_PORT=$(STAGE_WEB_PORT) POSTGRES_PORT=$(STAGE_PG_PORT) \
+STAGE = STACK=fintend-stage WEB_BIND=127.0.0.1 WEB_PORT=$(STAGE_WEB_PORT) POSTGRES_PORT=$(STAGE_PG_PORT) \
 	REDIS_PORT=$(STAGE_REDIS_PORT) API_PORT=$(STAGE_API_PORT) \
 	docker compose -p fintend-stage -f docker-compose.yml -f docker-compose.prod.yml --profile full
 
@@ -61,7 +61,7 @@ endif
 help:
 	@echo "make up       собрать и поднять платформу  ->  http://localhost:8080"
 	@echo "make prod     рабочая на сервере            ->  http://bcorp.kz"
-	@echo "make stage    проверочная рядом с ней       ->  http://<адрес>:$(STAGE_WEB_PORT)"
+	@echo "make stage    проверочная рядом с ней       ->  https://stage.bcorp.kz"
 	@echo "make backup   снять копию баз и файлов"
 	@echo "make user     завести сотрудника (на своей машине)"
 	@echo "              на сервере: make prod-user / make stage-user"
@@ -99,8 +99,8 @@ prod: sources
 	@echo "Платформа: http://bcorp.kz  (и по адресу самой машины)"
 	@echo "Журнал:    make logs"
 	@echo
-	@echo "Пока платформа отвечает по HTTP, пароли и куки идут открытым"
-	@echo "текстом. Прежде чем открывать её наружу — HTTPS: infra/README.md"
+	@echo "Снаружи — через Cloudflare Tunnel. Сертификатов на машине нет,"
+	@echo "портов открывать не надо: infra/README.md"
 
 # Проверочная среда. Поднимается из своего дерева со своим `.env`, поэтому
 # смотрит в свои базы и свои каталоги проектов: прогон в ней не должен
@@ -109,7 +109,8 @@ stage: sources
 	@test -f .env || { echo "Нет .env — скопируйте .env.example и впишите ключи"; exit 1; }
 	@$(STAGE) up -d --build
 	@echo
-	@echo "Проверочная: http://$$(hostname -I 2>/dev/null | awk '{print $$1}'):$(STAGE_WEB_PORT)"
+	@echo "Проверочная: https://stage.bcorp.kz  (через Cloudflare Tunnel)"
+	@echo "             на самой машине — http://127.0.0.1:$(STAGE_WEB_PORT)"
 	@echo "Журнал:      make stage-logs"
 	@echo
 	@echo "Рабочая среда не тронута: у наборов разные контейнеры, тома и базы."
