@@ -19,7 +19,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-CONTAINER="${CONTAINER:-fintend-api}"
+# Набор служб выбирается переменной `STACK`: рабочая — `fintend`, проверочная —
+# `fintend-stage`. Так один и тот же скрипт обслуживает обе, и проверочная не
+# заводит собственную копию, которая разойдётся с рабочей.
+#
+#   STACK=fintend-stage ./infra/check-archive.sh
+CONTAINER="${CONTAINER:-${STACK:-fintend}-api}"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   echo "Контейнер $CONTAINER не запущен. Сначала: make prod" >&2

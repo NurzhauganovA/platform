@@ -24,7 +24,12 @@ BACKUP_DIR="${BACKUP_DIR:-backups}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
 STAMP="$(date +%Y-%m-%d-%H%M)"
 OUT="$BACKUP_DIR/$STAMP"
-DB_CONTAINER="${DB_CONTAINER:-fintend-postgres}"
+# Набор служб выбирается переменной `STACK`: рабочая — `fintend`, проверочная —
+# `fintend-stage`. Так один и тот же скрипт обслуживает обе, и проверочная не
+# заводит собственную копию, которая разойдётся с рабочей.
+#
+#   STACK=fintend-stage ./infra/backup.sh
+DB_CONTAINER="${DB_CONTAINER:-${STACK:-fintend}-postgres}"
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$DB_CONTAINER"; then
   echo "База не запущена ($DB_CONTAINER). Копировать нечего." >&2

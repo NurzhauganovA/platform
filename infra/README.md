@@ -176,7 +176,7 @@ Unicode позволяет записать двумя способами, macOS
 ### 6. Сотрудники
 
 ```bash
-make user EMAIL=ivanov@bcorp.kz ROLE=analyst NAME="Иванов Иван"
+make prod-user EMAIL=ivanov@bcorp.kz ROLE=analyst NAME="Иванов Иван"
 ```
 
 Роли: `admin`, `analyst` (тендерщик — видит деньги), `buyer` (закупщик — видит,
@@ -200,6 +200,89 @@ NAS в другом здании или облачное хранилище — 
 
 Раз в квартал — проверочное восстановление на отдельную базу. Копия, которую
 ни разу не разворачивали, — это надежда, а не копия.
+
+## Проверочная среда
+
+Второй набор служб на том же сервере. Проверять правки на рабочей — это
+проверять на живых данных отдела: неудачная миграция или сломанный разбор
+останавливают работу тридцати человек, а откат занимает больше, чем проверка.
+
+Разведено всё: контейнеры (`fintend-stage-*`), сети, тома, базы и порты.
+Рабочая среда при этом не трогается — команды разных наборов не видят чужих
+контейнеров.
+
+| | рабочая | проверочная |
+|---|---|---|
+| интерфейс | 80 | 8081 |
+| API | 127.0.0.1:8000 | 127.0.0.1:8001 |
+| PostgreSQL | 127.0.0.1:5432 | 127.0.0.1:5433 |
+| Redis | 127.0.0.1:6379 | 127.0.0.1:6380 |
+| дерево | `/srv/fintend` | `/srv/fintend-stage` |
+
+### Развернуть один раз
+
+Отдельное дерево, а не общее с рабочей: у проектов свои `data` и `exports`, и
+прогон в проверочной не должен дописывать ничего в рабочие каталоги.
+
+```bash
+sudo mkdir -p /srv/fintend-stage && sudo chown "$USER" /srv/fintend-stage
+cd /srv/fintend-stage
+git clone <platform> platform && git clone <tender-analyze> tender-analyze
+git clone <skstore> skstore && git clone <omarket> omarket
+cp /srv/fintend/platform/.env platform/.env
+for p in tender-analyze skstore omarket; do cp /srv/fintend/$p/.env $p/.env; done
+cp /srv/fintend/tender-analyze/companies.toml tender-analyze/
+```
+
+В `.env` проектов адрес базы стоит через `localhost:5432` — это рабочая. Внутри
+контейнеров он всё равно переопределён и смотрит в свою, но команда из
+терминала проверочного дерева пошла бы в рабочую базу. Поправьте порт на 5433:
+
+```bash
+cd /srv/fintend-stage
+sed -i 's/localhost:5432/localhost:5433/' */.env
+```
+
+Архив тендерных папок можно оставить общий: он подключается только на чтение.
+
+### Обычный день
+
+```bash
+# ветка с правками — в проверочную
+cd /srv/fintend-stage/platform && git pull && make stage
+cd /srv/fintend-stage/tender-analyze && git pull
+
+make stage-logs        # что происходит
+make stage-ps          # что запущено
+make stage-user EMAIL=test@bcorp.kz ROLE=analyst NAME="Проверка"
+```
+
+Открывается на `http://<адрес сервера>:8081`. Данных там нет — их наливают
+копией рабочих:
+
+```bash
+cd /srv/fintend/platform && make backup
+cd /srv/fintend-stage/platform
+STACK=fintend-stage ./infra/restore.sh /srv/fintend/platform/backups/<дата>
+STACK=fintend-stage ./infra/check-archive.sh
+```
+
+`STACK` понимают все скрипты в `infra`: без него они пошли бы в рабочую базу.
+
+Убедились, что работает, — тогда в рабочее дерево:
+
+```bash
+cd /srv/fintend/platform && git pull && make prod
+```
+
+### Остановить
+
+```bash
+cd /srv/fintend-stage/platform && make stage-down
+```
+
+Тома остаются: следующий `make stage` поднимется с теми же данными. Удалить их
+целиком — `make clean` из проверочного дерева.
 
 ## Что дальше
 

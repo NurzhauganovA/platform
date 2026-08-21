@@ -16,6 +16,11 @@
 # другое подключается с машины, поэтому контейнер работает с теми же данными,
 # что и терминал, и правка настройки не требует пересборки.
 
+# Имена контейнеров и порты берутся из переменных, а не зашиты. Иначе двух
+# наборов на одной машине не бывает: у проверочной среды и рабочей совпали бы
+# имена, и Compose пересоздал бы рабочие контейнеры вместо своих. Умолчания —
+# рабочая среда, чтобы обычная команда осталась прежней.
+
 x-app: &app
   build:
     context: .
@@ -94,7 +99,7 @@ x-app: &app
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: fintend-postgres
+    container_name: ${STACK:-fintend}-postgres
     environment:
       POSTGRES_USER: fintend
       POSTGRES_PASSWORD: fintend
@@ -113,7 +118,7 @@ services:
       # Только для самой машины. К базе ходят команды подключённых проектов
       # с этого же хоста; открытый в сеть 5432 — это доступ к себестоимости
       # в обход платформы и её ролей.
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -124,10 +129,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: fintend-redis
+    container_name: ${STACK:-fintend}-redis
     command: redis-server --appendonly yes
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -145,7 +150,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: api
-    container_name: fintend-migrate
+    container_name: ${STACK:-fintend}-migrate
     profiles: ["full"]
     working_dir: /app/apps/api
     # Не только платформа: скрипт заводит недостающие базы и доводит до головы
@@ -161,14 +166,14 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: api
-    container_name: fintend-api
+    container_name: ${STACK:-fintend}-api
     profiles: ["full"]
     # Порт для самой машины: постучаться в API напрямую, минуя интерфейс, —
     # так удобнее смотреть `/api/docs` и разбираться с ответами. Браузер
     # сотрудника ходит через nginx, и второй вход в обход него означал бы
     # обход ограничения размера тела и журнала запросов.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -183,7 +188,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: worker
-    container_name: fintend-worker
+    container_name: ${STACK:-fintend}-worker
     profiles: ["full"]
     depends_on:
       postgres:
@@ -197,7 +202,7 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
-    container_name: fintend-web
+    container_name: ${STACK:-fintend}-web
     profiles: ["full"]
     # Порт задаёт слой: 8080 у разработчика (`docker-compose.dev.yml`),
     # 80 на сервере (`docker-compose.prod.yml`). Здесь его нет намеренно —

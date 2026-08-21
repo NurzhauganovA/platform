@@ -21,7 +21,12 @@ set -euo pipefail
 
 NEW="${1:-}"
 OLD="${2:-}"
-DB_CONTAINER="${DB_CONTAINER:-fintend-postgres}"
+# Набор служб выбирается переменной `STACK`: рабочая — `fintend`, проверочная —
+# `fintend-stage`. Так один и тот же скрипт обслуживает обе, и проверочная не
+# заводит собственную копию, которая разойдётся с рабочей.
+#
+#   STACK=fintend-stage ./infra/repath.sh
+DB_CONTAINER="${DB_CONTAINER:-${STACK:-fintend}-postgres}"
 DB="${DB:-fintend_tender}"
 
 if [ -z "$NEW" ]; then
