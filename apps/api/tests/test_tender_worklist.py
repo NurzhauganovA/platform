@@ -723,3 +723,23 @@ def test_fail_kod_iz_perechnya_otmenyaet_verdikt() -> None:
     # Не в перечне и без кода — обычный вердикт, а не серая строка.
     assert module.tone_of(чужой) == "good"
     assert module.tone_of(пустой) == "good"
+
+
+def test_fail_staroe_yadro_bez_perechnya_ne_ronyaet_razdel(monkeypatch: Any) -> None:
+    """Перечень появился в ядре позже платформы, и оно бывает старее.
+
+    Обращение к тому, чего в нём ещё нет, обрушило весь раздел: список
+    отвечал «данные недоступны» из-за необязательной подсказки. Без перечня
+    строки просто не помечаются.
+    """
+    import platform_api.modules.tender.core as core
+    import platform_api.modules.tender.worklist as module
+
+    # Ровно старое ядро: настройки есть, а перечня в них нет.
+    monkeypatch.setattr(core, "core_settings", lambda: SimpleNamespace())
+
+    row = SimpleNamespace(ens_code="281314.900.000076")
+    assert module.is_domestic(row) is False
+    assert (
+        module.tone_of(SimpleNamespace(row=row, verdict=SimpleNamespace(label="Брать"))) == "good"
+    )

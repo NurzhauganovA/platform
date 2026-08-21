@@ -251,11 +251,19 @@ def is_domestic(row: Any) -> bool:
     Перечень читает ядро — приказ Минпрома, три с половиной тысячи кодов в
     файле Word. Разбирать его здесь значило бы завести второй список, который
     разойдётся с первым в день, когда министерство пришлёт обновление.
+
+    Ядро старее платформы — значит, пометок не будет. Не ошибка: перечень и
+    сам по себе необязателен, а раздел, отвечающий «данные недоступны» из-за
+    отсутствующей подсказки, хуже раздела без подсказки. Репозитории у
+    платформы и ядра разные и выкатываются порознь — разойтись они будут ещё
+    не раз.
     """
     from platform_api.modules.tender.core import core_settings
 
     code = (row.ens_code or "").strip()
-    return bool(code) and code in core_settings().domestic
+    if not code:
+        return False
+    return code in getattr(core_settings(), "domestic", frozenset())
 
 
 def row_deadline(_item: RankedRow) -> str | None:
