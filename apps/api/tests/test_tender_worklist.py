@@ -758,7 +758,7 @@ def test_fail_lot_sobiraet_sosednie_pozicii_i_ih_itog() -> None:
         строка("Щит", "300000", "500000", "-66.7"),
     ]
 
-    лот = collect(rows, выгодная, merged=True, money=True)
+    лот = collect(rows, выгодная, money=True)
 
     assert лот is not None and лот.size == 3
     assert лот.total == Decimal(1_800_000)
@@ -792,7 +792,7 @@ def test_fail_lot_ne_otdaet_dengi_zakupshchiku() -> None:
         )
 
     rows = [строка("Насос"), строка("Кабель")]
-    лот = collect(rows, rows[0], merged=True, money=False)
+    лот = collect(rows, rows[0], money=False)
 
     assert лот is not None
     assert лот.total == Decimal(2000), "сумма закупки — не тайна"
@@ -817,4 +817,51 @@ def test_lot_iz_odnoy_pozicii_ne_lot() -> None:
         verdict=SimpleNamespace(label="Брать"),
     )
 
-    assert collect([одна], одна, merged=False, money=True) is None
+    assert collect([одна], одна, money=True) is None
+
+
+def test_fail_sostav_lota_silnee_papki() -> None:
+    """Разбор связывает позиции папкой, и иногда ошибается.
+
+    Заказчик раскладывает один лот по двум папкам, и признака этого в
+    документах нет. Утверждённый человеком состав должен побеждать догадку:
+    иначе исправить ошибку нечем.
+    """
+    from platform_api.modules.tender.lots import collect
+
+    def строка(папка: str, имя: str, сумма: str) -> Any:
+        return SimpleNamespace(
+            row=SimpleNamespace(
+                folder_path=папка,
+                title=имя,
+                ens_code="",
+                quantity=Decimal(1),
+                total=Decimal(сумма),
+                cost=Decimal(сумма) / 2,
+                margin_percent=Decimal("50.0"),
+            ),
+            verdict=SimpleNamespace(label="Брать"),
+        )
+
+    rows = [
+        строка("/архив/А", "Насос", "1000"),
+        строка("/архив/А", "Кабель", "2000"),
+        строка("/архив/Б", "Щит", "4000"),
+    ]
+
+    # Без состава — подсказка по папке: только соседи «Насоса».
+    подсказка = collect(rows, rows[0], money=True)
+    assert подсказка is not None and подсказка.merged is False
+    assert [p.title for p in подсказка.positions] == ["Насос", "Кабель"]
+
+    # С составом — ровно перечисленные, в том числе из другой папки.
+    свой = collect(
+        rows,
+        rows[0],
+        members=frozenset({("/архив/А", "Насос"), ("/архив/Б", "Щит")}),
+        key="лот-1",
+        money=True,
+    )
+    assert свой is not None and свой.merged is True and свой.key == "лот-1"
+    assert [p.title for p in свой.positions] == ["Насос", "Щит"]
+    assert свой.total == Decimal(5000)

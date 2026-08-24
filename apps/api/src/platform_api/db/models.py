@@ -260,23 +260,19 @@ class AuditEntry(Base, UUIDPrimaryKey):
 
 
 class TenderLot(Base, UUIDPrimaryKey, Timestamps):
-    """Закупка, которую ведут лотом — целиком, а не позициями по отдельности.
+    """Закупка, которую ведут целиком, а не позициями по отдельности.
 
     Решение человека, а не свойство данных. В заключении заказчика позиций
-    бывает три, и по одной из них заработок выглядит отличным — а поставить
-    придётся все три, и на остальных двух убыток. Пока тендерщик не сказал
-    «это один лот», платформа этого знать не может: бывает и наоборот, когда
-    позиции разыгрываются порознь.
+    бывает три. По одной из них заработок выглядит отличным, её берут в
+    работу — и там выясняется, что поставить придётся все три, а на остальных
+    двух убыток. В сумме сделка убыточна, и увидеть это надо до подачи.
 
-    Ключ — папка закупки: ею ядро и разграничивает закупки, и другого общего
-    признака у позиций одного заключения нет. Идентификаторы строк для этого
-    не годятся: они считаются от названия и меняются с каждым новым разбором.
+    Из данных лот не вывести. Позиции одного заключения иногда разыгрываются
+    порознь, а бывает и наоборот: заказчик разложил один лот по двум папкам, и
+    ни один признак в документах об этом не говорит.
     """
 
     __tablename__ = "tender_lots"
-    __table_args__ = (
-        UniqueConstraint("organization_id", "folder_path", name="organization_folder"),
-    )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"), index=True
@@ -285,8 +281,42 @@ class TenderLot(Base, UUIDPrimaryKey, Timestamps):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    positions: Mapped[list[TenderLotPosition]] = relationship(
+        back_populates="lot", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class TenderLotPosition(Base, UUIDPrimaryKey, Timestamps):
+    """Позиция в составе лота.
+
+    Хранится папкой и названием, а не идентификатором строки: тот считается
+    от них же и меняется с каждым новым разбором, и после перезапуска ядра
+    лот распался бы на пустые ссылки.
+
+    Одна позиция — не больше чем в одном лоте организации: два лота с общей
+    позицией дают два разных итога по одной и той же поставке, и какой из них
+    правда, потом не выяснить.
+    """
+
+    __tablename__ = "tender_lot_positions"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "folder_path", "title", name="organization_position"),
+    )
+
+    lot_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tender_lots.id", ondelete="CASCADE"), index=True
+    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+
     folder_path: Mapped[str] = mapped_column(String(1024))
     """Папка закупки — та же, что в базе ядра, абсолютным путём."""
+
+    title: Mapped[str] = mapped_column(String(512))
+    """Название позиции, как его дало ядро."""
+
+    lot: Mapped[TenderLot] = relationship(back_populates="positions")
 
 
 __all__ = [
@@ -299,5 +329,6 @@ __all__ = [
     "Session",
     "StoredFile",
     "TenderLot",
+    "TenderLotPosition",
     "User",
 ]

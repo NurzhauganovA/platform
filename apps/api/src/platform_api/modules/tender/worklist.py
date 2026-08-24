@@ -73,7 +73,13 @@ def worklist() -> Worklist:
     )
 
 
-def detail(item_id: str, pick: str = "", *, merged: bool = False, money: bool = True) -> Any:
+def detail(
+    item_id: str,
+    pick: str = "",
+    *,
+    members: frozenset[tuple[str, str]] | None = None,
+    money: bool = True,
+) -> Any:
     """Разбор одной строки отбора. `None` — такой строки нет.
 
     `pick` — находка, по которой считать себестоимость вместо выбранной по
@@ -82,10 +88,11 @@ def detail(item_id: str, pick: str = "", *, merged: bool = False, money: bool = 
     срок неподъёмным, а «подходит» — суждением модели, с которым тендерщик не
     согласен. Тогда он выбирает сам и сразу видит, во что это обходится.
 
-    Вместе с разбором собирается лот — остальные позиции той же закупки.
-    Собирается всегда, а не только после объединения: заработок по одной
-    позиции ничего не значит, пока не видно остальных, которые придётся
-    поставить вместе с ней.
+    Вместе с разбором собирается лот. `members` — состав, утверждённый
+    человеком; пусто — лота ещё нет, и вместо него показываются остальные
+    позиции той же папки. Показываются всегда, а не только после объединения:
+    заработок по одной позиции ничего не значит, пока не видно остальных,
+    которые придётся поставить вместе с ней.
     """
     from platform_api.modules.tender.detail import build_detail
     from platform_api.modules.tender.lots import collect
@@ -98,17 +105,26 @@ def detail(item_id: str, pick: str = "", *, merged: bool = False, money: bool = 
     # его собирают один раз и раздают.
     from dataclasses import replace
 
-    return replace(build_detail(found, pick), lot=collect(rows, found, merged, money=money))
+    return replace(
+        build_detail(found, pick),
+        lot=collect(rows, found, members=members, money=money),
+    )
 
 
-def folder_of(item_id: str) -> str:
-    """Папка закупки, к которой относится строка. Пусто — строки нет.
+def position_of(item_id: str) -> tuple[str, str] | None:
+    """Позиция строки: папка и название. `None` — строки нет.
 
-    Лот объединяют по папке, а не по строке: строк в закупке несколько, а
-    решение «ведём целиком» у неё одно.
+    Ими лот и хранится. Идентификатор строки для этого не годится: он
+    считается от них же и меняется с каждым новым разбором — лот распался бы
+    на пустые ссылки после первого же прогона ядра.
     """
     found = next((item for item in _ranked() if row_id(item) == item_id), None)
-    return (found.row.folder_path or "") if found is not None else ""
+    return None if found is None else (found.row.folder_path or "", found.row.title)
+
+
+def titles_in(folder: str) -> tuple[str, ...]:
+    """Названия позиций этой папки — то, что разбор предлагает как лот."""
+    return tuple(item.row.title for item in _ranked() if (item.row.folder_path or "") == folder)
 
 
 def recalculate(row: Any, pick: str) -> Any:

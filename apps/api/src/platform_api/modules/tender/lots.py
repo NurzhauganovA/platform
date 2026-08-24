@@ -25,12 +25,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
-from platform_api.db.models import TenderLot
+from platform_api.db.models import TenderLot, TenderLotPosition
 
 if TYPE_CHECKING:
     import uuid
+    from collections.abc import Iterable
 
     from sqlalchemy.orm import Session as DbSession
 
@@ -54,8 +55,9 @@ class Lot:
     """Закупка целиком: её позиции и сумма по ним."""
 
     key: str
-    """Короткое имя лота. Считается от папки, а не от строк: строки
-    пересобираются с каждым разбором, а папка у закупки одна."""
+    """Короткое имя лота: его собственное после объединения, иначе — от папки
+    закупки. Строки для этого не годятся: они пересобираются с каждым
+    разбором."""
 
     merged: bool
     """Объединил ли человек эти позиции. Пока нет — лот показывается только
@@ -76,51 +78,162 @@ class Lot:
 
 
 def key_of(folder_path: str) -> str:
-    """Короткое имя лота по папке закупки."""
+    """Имя подсказанного лота — по папке закупки.
+
+    Нужно до объединения: лота ещё нет, а строки в списке уже надо чем-то
+    связать между собой.
+    """
     return hashlib.sha1(folder_path.encode()).hexdigest()[:12]
 
 
-def merged_folders(db: DbSession, organization_id: uuid.UUID) -> frozenset[str]:
-    """Папки, объединённые в лоты этой организацией.
+def membership(db: DbSession, organization_id: uuid.UUID) -> dict[tuple[str, str], str]:
+    """Какая позиция в каком лоте: «папка и название» → имя лота.
 
-    Одним запросом на всю таблицу: рабочий список строит лот для каждой из
-    восьмисот строк, и обращение на строку было бы восемьюстами обращений к
-    базе ради нескольких десятков записей.
+    Одним запросом на всю организацию. Рабочий список спрашивает это для
+    каждой из восьмисот строк, и обращение на строку было бы восемьюстами
+    запросов ради нескольких десятков записей.
     """
     rows = db.execute(
-        select(TenderLot.folder_path).where(TenderLot.organization_id == organization_id)
-    ).scalars()
-    return frozenset(rows)
+        select(
+            TenderLotPosition.folder_path, TenderLotPosition.title, TenderLotPosition.lot_id
+        ).where(TenderLotPosition.organization_id == organization_id)
+    ).all()
+    return {(folder, title): str(lot_id)[:12] for folder, title, lot_id in rows}
 
 
-def merge(db: DbSession, organization_id: uuid.UUID, user_id: uuid.UUID, folder: str) -> None:
-    """Объединяет позиции закупки в лот. Повтор ничего не меняет."""
-    if folder in merged_folders(db, organization_id):
+def lot_of(db: DbSession, organization_id: uuid.UUID, folder: str, title: str) -> TenderLot | None:
+    """Лот, в котором лежит эта позиция."""
+    return db.execute(
+        select(TenderLot)
+        .join(TenderLotPosition)
+        .where(
+            TenderLotPosition.organization_id == organization_id,
+            TenderLotPosition.folder_path == folder,
+            TenderLotPosition.title == title,
+        )
+    ).scalar_one_or_none()
+
+
+def positions_of(
+    db: DbSession, organization_id: uuid.UUID, position: tuple[str, str]
+) -> frozenset[tuple[str, str]] | None:
+    """Состав лота, в котором лежит эта позиция. `None` — лота нет.
+
+    Пустое множество и «лота нет» — разные ответы: по первому разбор показал
+    бы объединённый лот без позиций, по второму — подсказку из соседей папки.
+    """
+    lot = lot_of(db, organization_id, *position)
+    if lot is None:
+        return None
+    return frozenset((item.folder_path, item.title) for item in lot.positions)
+
+
+def gather(
+    db: DbSession,
+    organization_id: uuid.UUID,
+    user_id: uuid.UUID,
+    anchor: tuple[str, str],
+    members: Iterable[tuple[str, str]],
+) -> TenderLot:
+    """Собирает лот вокруг позиции, добавляя к нему перечисленные.
+
+    Лот у позиции уже есть — дополняется он, а не заводится второй: иначе одна
+    и та же поставка оказалась бы в двух лотах с разными итогами, и какой из
+    них правда, потом не выяснить.
+
+    Позиция, занятая чужим лотом, переезжает в этот. Так человек и исправляет
+    ошибку разбора: увидел, что позиция приписана не туда, и перенёс.
+    """
+    lot = lot_of(db, organization_id, *anchor)
+    if lot is None:
+        lot = TenderLot(organization_id=organization_id, created_by_id=user_id)
+        db.add(lot)
+        db.flush()
+        _attach(db, lot, organization_id, anchor)
+    for member in members:
+        _attach(db, lot, organization_id, member)
+    return lot
+
+
+def _attach(
+    db: DbSession, lot: TenderLot, organization_id: uuid.UUID, position: tuple[str, str]
+) -> None:
+    """Переносит позицию в этот лот, откуда бы она ни была."""
+    folder, title = position
+    existing = db.execute(
+        select(TenderLotPosition).where(
+            TenderLotPosition.organization_id == organization_id,
+            TenderLotPosition.folder_path == folder,
+            TenderLotPosition.title == title,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.lot_id = lot.id
         return
     db.add(
-        TenderLot(
+        TenderLotPosition(
+            lot_id=lot.id,
             organization_id=organization_id,
-            created_by_id=user_id,
             folder_path=folder,
+            title=title,
         )
     )
 
 
-def split(db: DbSession, organization_id: uuid.UUID, folder: str) -> None:
-    """Разъединяет лот обратно на позиции."""
+def detach(db: DbSession, organization_id: uuid.UUID, position: tuple[str, str]) -> None:
+    """Убирает позицию из лота. Остался один участник — лота больше нет.
+
+    Лот из одной позиции ничем не отличается от позиции без лота, но выглядит
+    иначе: полоса в списке и карточка в разборе обещают связь, которой нет.
+    """
+    folder, title = position
+    lot = lot_of(db, organization_id, folder, title)
+    if lot is None:
+        return
     db.execute(
-        delete(TenderLot).where(
-            TenderLot.organization_id == organization_id,
-            TenderLot.folder_path == folder,
+        delete(TenderLotPosition).where(
+            TenderLotPosition.organization_id == organization_id,
+            TenderLotPosition.folder_path == folder,
+            TenderLotPosition.title == title,
         )
     )
+    db.flush()
+    осталось = db.execute(
+        select(func.count())
+        .select_from(TenderLotPosition)
+        .where(TenderLotPosition.lot_id == lot.id)
+    ).scalar_one()
+    if осталось < 2:
+        _dissolve(db, lot)
 
 
-def collect(rows: Any, current: Any, merged: bool, *, money: bool) -> Lot | None:
-    """Лот вокруг открытой позиции. `None` — позиция в закупке одна.
+def dissolve(db: DbSession, organization_id: uuid.UUID, position: tuple[str, str]) -> None:
+    """Разъединяет лот целиком — по любой его позиции."""
+    lot = lot_of(db, organization_id, *position)
+    if lot is not None:
+        _dissolve(db, lot)
 
-    `rows` — весь отбор; лот собирается по той же папке. Отдельного запроса к
-    ядру это не стоит: отбор уже собран и лежит в кэше.
+
+def _dissolve(db: DbSession, lot: TenderLot) -> None:
+    db.execute(delete(TenderLotPosition).where(TenderLotPosition.lot_id == lot.id))
+    db.execute(delete(TenderLot).where(TenderLot.id == lot.id))
+
+
+def collect(
+    rows: Any,
+    current: Any,
+    *,
+    members: frozenset[tuple[str, str]] | None = None,
+    key: str = "",
+    money: bool = True,
+) -> Lot | None:
+    """Лот вокруг открытой позиции. `None` — собирать нечего.
+
+    `members` — состав, который человек утвердил. Пусто — лота ещё нет, и
+    вместо него показывается подсказка: остальные позиции той же папки. Это
+    не одно и то же. Папка — догадка разбора, и она ошибается: заказчик
+    раскладывает один лот по двум папкам, а бывает и наоборот. Утверждённый
+    состав ошибаться не может, потому что его собрал человек.
 
     `money` закрывает суммы от тех, кому не положено видеть себестоимость.
     Итог по лоту — та же себестоимость, только сложенная: отдать её потому,
@@ -131,7 +244,15 @@ def collect(rows: Any, current: Any, merged: bool, *, money: bool) -> Lot | None
     folder = current.row.folder_path or ""
     if not folder:
         return None
-    свои = [item for item in rows if (item.row.folder_path or "") == folder]
+
+    if members is None:
+        свои = [item for item in rows if (item.row.folder_path or "") == folder]
+        merged = False
+        имя = key_of(folder)
+    else:
+        свои = [item for item in rows if (item.row.folder_path or "", item.row.title) in members]
+        merged = True
+        имя = key or key_of(folder)
     if len(свои) < 2:
         return None
 
@@ -159,7 +280,7 @@ def collect(rows: Any, current: Any, merged: bool, *, money: bool) -> Lot | None
         else None
     )
     return Lot(
-        key=key_of(folder),
+        key=имя,
         merged=merged,
         positions=позиции,
         total=сумма,
@@ -180,4 +301,15 @@ def _sum(values: Any) -> Decimal | None:
     return sum(known, Decimal(0)) if known else None
 
 
-__all__ = ["Lot", "Position", "collect", "key_of", "merge", "merged_folders", "split"]
+__all__ = [
+    "Lot",
+    "Position",
+    "collect",
+    "detach",
+    "dissolve",
+    "gather",
+    "key_of",
+    "lot_of",
+    "membership",
+    "positions_of",
+]

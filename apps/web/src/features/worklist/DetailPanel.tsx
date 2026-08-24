@@ -18,6 +18,7 @@ import {
   type DetailField,
   type DetailSection,
   type Lot,
+  type Worklist,
   type WorklistSlug,
 } from "@/api/worklist";
 import { Badge, Button, Spinner, cx, money } from "@/ui";
@@ -164,8 +165,24 @@ export function DetailPanel({
                     onDone={refresh}
                   />
                 )}
+                {data.lot?.merged && (
+                  <LotSearch
+                    slug={slug}
+                    id={id}
+                    lot={data.lot}
+                    onDone={refresh}
+                  />
+                )}
               </div>
-              {data.lot?.merged && <LotCard lot={data.lot} onOpen={onOpen} />}
+              {data.lot?.merged && (
+                <LotCard
+                  slug={slug}
+                  id={id}
+                  lot={data.lot}
+                  onOpen={onOpen}
+                  onDone={refresh}
+                />
+              )}
               {data.sections.map((section) => (
                 <SectionBlock
                   key={section.title}
@@ -429,6 +446,121 @@ function LotToggle({
 }
 
 /**
+ * Поиск позиции для лота.
+ *
+ * Ищет по уже загруженному отбору, а не запросом на сервер: список целиком
+ * лежит в кэше запросов — тот же, из которого нарисована таблица. Запрос на
+ * каждую букву дал бы задержку там, где ответ уже в памяти вкладки.
+ *
+ * Нужен потому, что разбор ошибается: он связывает позиции папкой, а заказчик
+ * раскладывает один лот по двум. Исправить это можно только руками.
+ */
+function LotSearch({
+  slug,
+  id,
+  lot,
+  onDone,
+}: {
+  slug: WorklistSlug;
+  id: string;
+  lot: Lot;
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const client = useQueryClient();
+  const list = client.getQueryData<Worklist>([slug, "worklist"]);
+
+  const add = useMutation({
+    mutationFn: (other: string) => worklists.mergeLot(slug, id, [other]),
+    onSuccess: () => {
+      setQuery("");
+      onDone();
+    },
+  });
+
+  const внутри = new Set(lot.positions.map((position) => position.id));
+  const needle = query.trim().toLowerCase();
+  const найдено = !needle
+    ? []
+    : (list?.rows ?? [])
+        .filter(
+          (row) =>
+            row.id &&
+            !внутри.has(row.id) &&
+            row.cells.some((cell) => cell.text.toLowerCase().includes(needle)),
+        )
+        .slice(0, 8);
+
+  if (!open) {
+    return (
+      <Button
+        variant="ghost"
+        onClick={() => setOpen(true)}
+        title="Добавить в лот позицию, которую разбор к нему не отнёс"
+      >
+        + Добавить позицию
+      </Button>
+    );
+  }
+
+  return (
+    <div className="w-full">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => event.key === "Escape" && setOpen(false)}
+          placeholder="Название позиции или заказчик…"
+          className={cx(
+            "min-w-0 flex-1 rounded-[8px] border border-baseline bg-surface px-3 py-1.5",
+            "text-sm text-ink placeholder:text-ink-muted",
+            "focus:border-series-1 focus:outline-none",
+          )}
+        />
+        <Button variant="ghost" onClick={() => setOpen(false)}>
+          Отмена
+        </Button>
+      </div>
+
+      {needle && (
+        <ul className="mt-2 overflow-hidden rounded-[8px] border border-hairline">
+          {найдено.length === 0 && (
+            <li className="px-3 py-2 text-sm text-ink-muted">
+              Ничего не нашлось. Ищется по всем строкам отбора, включая другие
+              папки.
+            </li>
+          )}
+          {найдено.map((row) => (
+            <li key={row.id} className="border-b border-hairline last:border-0">
+              <button
+                type="button"
+                onClick={() => add.mutate(row.id)}
+                disabled={add.isPending}
+                className="flex w-full items-start gap-3 px-3 py-2 text-left transition hover:bg-plane disabled:opacity-50"
+              >
+                <span className="mt-0.5 w-8 shrink-0 text-xs text-ink-muted tabular-nums">
+                  {row.number}
+                </span>
+                <span className="min-w-0 flex-1 text-sm break-words text-ink">
+                  {row.cells[0]?.text}
+                  {row.lot && (
+                    <span className="ml-2 text-xs text-warning">
+                      уже в другом лоте — переедет сюда
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
  * Итог по лоту и переключатель позиций.
  *
  * Сверху — общее: сумма, себестоимость и заработок по всем позициям разом.
@@ -438,7 +570,23 @@ function LotToggle({
  * Снизу — сами позиции. Открытая подсвечена, остальные открываются щелчком:
  * так их и просматривают, одну за другой, не выходя из разбора.
  */
-function LotCard({ lot, onOpen }: { lot: Lot; onOpen: (id: string) => void }) {
+function LotCard({
+  slug,
+  id,
+  lot,
+  onOpen,
+  onDone,
+}: {
+  slug: WorklistSlug;
+  id: string;
+  lot: Lot;
+  onOpen: (id: string) => void;
+  onDone: () => void;
+}) {
+  const remove = useMutation({
+    mutationFn: (only: string) => worklists.splitLot(slug, id, only),
+    onSuccess: onDone,
+  });
   const убыток = lot.margin_percent !== null && lot.margin_percent <= 0;
   const неполный = lot.priced < lot.positions.length;
 
@@ -505,13 +653,13 @@ function LotCard({ lot, onOpen }: { lot: Lot; onOpen: (id: string) => void }) {
 
       <ul className="divide-y divide-hairline">
         {lot.positions.map((position, index) => (
-          <li key={position.id}>
+          <li key={position.id} className="group/pos relative">
             <button
               type="button"
               onClick={() => !position.current && onOpen(position.id)}
               aria-current={position.current}
               className={cx(
-                "flex w-full items-start gap-3 px-4 py-2.5 text-left transition",
+                "flex w-full items-start gap-3 py-2.5 pr-10 pl-4 text-left transition",
                 position.current
                   ? "bg-series-1/8 cursor-default"
                   : "hover:bg-plane",
@@ -547,6 +695,29 @@ function LotCard({ lot, onOpen }: { lot: Lot; onOpen: (id: string) => void }) {
                   {position.margin_percent}%
                 </span>
               )}
+            </button>
+            {/* Вычеркнуть лишнее, не пересобирая состав заново: разбор
+                ошибается в обе стороны — и не связывает своё, и связывает
+                чужое. Кнопка снаружи ссылки на позицию, иначе щелчок по
+                строке и удалял бы, и открывал. */}
+            <button
+              type="button"
+              onClick={() => remove.mutate(position.id)}
+              disabled={remove.isPending || lot.positions.length < 3}
+              title={
+                lot.positions.length < 3
+                  ? "В лоте останется одна позиция — тогда это уже не лот"
+                  : "Убрать позицию из лота"
+              }
+              aria-label={`Убрать «${position.title}» из лота`}
+              className={cx(
+                "absolute top-2.5 right-2 rounded-[6px] px-1.5 py-0.5 text-xs",
+                "text-ink-muted opacity-0 transition group-hover/pos:opacity-100",
+                "hover:bg-critical/10 hover:text-critical",
+                "disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted",
+              )}
+            >
+              ✕
             </button>
           </li>
         ))}

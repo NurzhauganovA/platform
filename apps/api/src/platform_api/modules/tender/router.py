@@ -27,6 +27,7 @@ from platform_api.modules.schemas import (
     ColumnOut,
     DetailOut,
     LegendItem,
+    LotMembersIn,
     LotOut,
     RowLotOut,
     RowOut,
@@ -109,7 +110,7 @@ def get_worklist(
         roles=ROLES,
     )
     money = sees_money(identity.role)
-    marked = lots.merged_folders(db, identity.organization.id)
+    marked = lots.membership(db, identity.organization.id)
 
     return WorklistOut(
         sheet=worklist.sheet_title(),
@@ -136,7 +137,11 @@ def get_worklist(
 
 
 def _with_lots(
-    rows: Sequence[Any], source: Sequence[Any], marked: frozenset[str], *, money: bool
+    rows: Sequence[Any],
+    source: Sequence[Any],
+    marked: dict[tuple[str, str], str],
+    *,
+    money: bool,
 ) -> list[RowOut]:
     """Дописывает строкам отметку лота.
 
@@ -150,22 +155,18 @@ def _with_lots(
     """
     итоги: dict[str, tuple[int, Decimal | None, Decimal | None]] = {}
     for item in source:
-        folder = item.row.folder_path or ""
-        if folder not in marked:
+        имя = marked.get((item.row.folder_path or "", item.row.title))
+        if имя is None:
             continue
-        было = итоги.get(folder, (0, None, None))
-        итоги[folder] = (
-            было[0] + 1,
-            _add(было[1], item.row.total),
-            _add(было[2], item.row.cost),
-        )
+        было = итоги.get(имя, (0, None, None))
+        итоги[имя] = (было[0] + 1, _add(было[1], item.row.total), _add(было[2], item.row.cost))
 
     готовые: list[RowOut] = []
     for row, item in zip(rows, source, strict=True):
         out = RowOut.model_validate(asdict(row))
-        folder = item.row.folder_path or ""
-        итог = итоги.get(folder)
-        if итог is not None and итог[0] > 1:
+        имя = marked.get((item.row.folder_path or "", item.row.title))
+        итог = итоги.get(имя or "")
+        if имя is not None and итог is not None and итог[0] > 1:
             позиций, сумма, себестоимость = итог
             прибыль = (
                 сумма - себестоимость
@@ -173,7 +174,7 @@ def _with_lots(
                 else None
             )
             out.lot = RowLotOut(
-                key=lots.key_of(folder),
+                key=имя,
                 positions=позиций,
                 total=float(сумма) if сумма is not None else None,
                 margin_percent=(
@@ -193,51 +194,97 @@ def _add(left: Decimal | None, right: Decimal | None) -> Decimal | None:
     return right if left is None else left + right
 
 
-@router.post("/item/{item_id}/lot", summary="Объединить позиции закупки в лот")
+@router.post("/item/{item_id}/lot", summary="Объединить позиции в лот")
 def merge_lot(
     item_id: str,
     identity: CurrentUser,
     db: Db,
+    body: LotMembersIn | None = None,
     _guard: Annotated[None, requires_read] = None,
 ) -> LotOut:
-    """Помечает закупку как ведущуюся целиком.
+    """Собирает лот вокруг этой позиции.
 
-    Решение человека, а не свойство данных: позиции одного заключения иногда
-    разыгрываются порознь, и вывести это из документов нельзя. Доступно всем,
-    кто работает с разделом: это пометка о порядке работы, а не деньги.
+    Без списка — берутся остальные позиции той же папки: разбор их уже связал,
+    и в девяти случаях из десяти он прав. Со списком — ровно перечисленные,
+    откуда бы они ни были: заказчик раскладывает один лот по двум папкам, и
+    никакой признак в документах об этом не говорит.
+
+    Позиция, занятая другим лотом, переезжает в этот. Так и исправляют ошибку:
+    увидели, что позиция приписана не туда, и перенесли.
+
+    Доступно всем, кто работает с разделом: это пометка о порядке работы, а не
+    деньги.
     """
-    folder = _folder_or_404(item_id)
-    lots.merge(db, identity.organization.id, identity.user.id, folder)
+    anchor = _position_or_404(item_id)
+    добавить = (
+        [_position_or_404(other) for other in body.positions]
+        if body is not None and body.positions
+        else _folder_neighbours(anchor)
+    )
+    if not добавить:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Объединять не с чем: в этой закупке одна позиция",
+        )
+    lots.gather(db, identity.organization.id, identity.user.id, anchor, добавить)
     db.commit()
-    return _lot_out(item_id, identity, merged=True)
+    собран = _lot_out(item_id, identity, db)
+    if собран is None:  # pragma: no cover — состав только что записан
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Лот собран, но не читается",
+        )
+    return собран
 
 
-@router.delete("/item/{item_id}/lot", summary="Разъединить лот на позиции")
+@router.delete("/item/{item_id}/lot", summary="Разъединить лот")
 def split_lot(
     item_id: str,
     identity: CurrentUser,
     db: Db,
+    only: str = "",
     _guard: Annotated[None, requires_read] = None,
-) -> LotOut:
-    folder = _folder_or_404(item_id)
-    lots.split(db, identity.organization.id, folder)
+) -> LotOut | None:
+    """Разъединяет лот целиком или убирает из него одну позицию.
+
+    `only` — убрать перечисленную, оставив лот. Так вычёркивают лишнее, не
+    пересобирая состав заново.
+    """
+    _position_or_404(item_id)
+    if only:
+        lots.detach(db, identity.organization.id, _position_or_404(only))
+    else:
+        lots.dissolve(db, identity.organization.id, _position_or_404(item_id))
     db.commit()
-    return _lot_out(item_id, identity, merged=False)
+    return _lot_out(item_id, identity, db, missing_ok=True)
 
 
-def _folder_or_404(item_id: str) -> str:
-    folder = worklist.folder_of(item_id)
-    if not folder:
+def _position_or_404(item_id: str) -> tuple[str, str]:
+    """Позиция строки: папка и название. Ими лот и хранится."""
+    found = worklist.position_of(item_id)
+    if found is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Такой закупки нет в отборе",
         )
-    return folder
+    return found
 
 
-def _lot_out(item_id: str, identity: Any, *, merged: bool) -> LotOut:
-    found = worklist.detail(item_id, merged=merged, money=sees_money(identity.role))
+def _folder_neighbours(anchor: tuple[str, str]) -> list[tuple[str, str]]:
+    """Остальные позиции той же папки — то, что предлагает разбор."""
+    folder, title = anchor
+    return [(folder, other) for other in worklist.titles_in(folder) if other != title]
+
+
+def _lot_out(item_id: str, identity: Any, db: Db, *, missing_ok: bool = False) -> LotOut | None:
+    found = worklist.detail(
+        item_id,
+        members=lots.positions_of(db, identity.organization.id, _position_or_404(item_id)),
+        money=sees_money(identity.role),
+    )
     if found is None or found.lot is None:
+        if missing_ok:
+            return None
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="В этой закупке одна позиция — объединять нечего",
@@ -267,9 +314,9 @@ def get_worklist_item(
     считается книга.
     """
     money = sees_money(identity.role)
-    merged = worklist.folder_of(item_id) in lots.merged_folders(db, identity.organization.id)
+    состав = lots.positions_of(db, identity.organization.id, _position_or_404(item_id))
     try:
-        found = worklist.detail(item_id, pick, merged=merged, money=money)
+        found = worklist.detail(item_id, pick, members=состав, money=money)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -253,12 +253,24 @@ export const worklists = {
         (pick ? `?pick=${encodeURIComponent(pick)}` : ""),
     ),
 
-  /** Объединить позиции закупки в лот или разъединить обратно. */
-  mergeLot: (slug: WorklistSlug, id: string) =>
-    api.post<Lot>(`/api/${slug}/item/${encodeURIComponent(id)}/lot`),
+  /**
+   * Собрать лот вокруг позиции.
+   *
+   * Без списка берутся соседи по папке — то, что предложил разбор. Со
+   * списком — ровно перечисленные, откуда бы они ни были: заказчик
+   * раскладывает один лот по двум папкам, и признака этого в документах нет.
+   */
+  mergeLot: (slug: WorklistSlug, id: string, positions: string[] = []) =>
+    api.post<Lot>(`/api/${slug}/item/${encodeURIComponent(id)}/lot`, {
+      positions,
+    }),
 
-  splitLot: (slug: WorklistSlug, id: string) =>
-    api.delete<Lot>(`/api/${slug}/item/${encodeURIComponent(id)}/lot`),
+  /** Разъединить лот целиком или убрать из него одну позицию. */
+  splitLot: (slug: WorklistSlug, id: string, only = "") =>
+    api.delete<Lot | null>(
+      `/api/${slug}/item/${encodeURIComponent(id)}/lot` +
+        (only ? `?only=${encodeURIComponent(only)}` : ""),
+    ),
 
   sync: (slug: WorklistSlug) =>
     api.post<{ job_id: string }>(`/api/${slug}/sync`),
