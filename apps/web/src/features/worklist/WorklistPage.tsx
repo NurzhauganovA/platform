@@ -486,7 +486,12 @@ export function WorklistPage({
       </div>
 
       {openId && (
-        <DetailPanel slug={slug} id={openId} onClose={() => open(null)} />
+        <DetailPanel
+          slug={slug}
+          id={openId}
+          onClose={() => open(null)}
+          onOpen={open}
+        />
       )}
     </>
   );

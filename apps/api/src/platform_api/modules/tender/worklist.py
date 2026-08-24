@@ -73,7 +73,7 @@ def worklist() -> Worklist:
     )
 
 
-def detail(item_id: str, pick: str = "") -> Any:
+def detail(item_id: str, pick: str = "", *, merged: bool = False, money: bool = True) -> Any:
     """Разбор одной строки отбора. `None` — такой строки нет.
 
     `pick` — находка, по которой считать себестоимость вместо выбранной по
@@ -81,11 +81,34 @@ def detail(item_id: str, pick: str = "") -> Any:
     умолчание, но не всегда правильный ответ: поставщик может быть незнакомым,
     срок неподъёмным, а «подходит» — суждением модели, с которым тендерщик не
     согласен. Тогда он выбирает сам и сразу видит, во что это обходится.
+
+    Вместе с разбором собирается лот — остальные позиции той же закупки.
+    Собирается всегда, а не только после объединения: заработок по одной
+    позиции ничего не значит, пока не видно остальных, которые придётся
+    поставить вместе с ней.
     """
     from platform_api.modules.tender.detail import build_detail
+    from platform_api.modules.tender.lots import collect
 
+    rows = _ranked()
+    found = next((item for item in rows if row_id(item) == item_id), None)
+    if found is None:
+        return None
+    # `replace`, а не присваивание: разбор неизменяем, и это правильно —
+    # его собирают один раз и раздают.
+    from dataclasses import replace
+
+    return replace(build_detail(found, pick), lot=collect(rows, found, merged, money=money))
+
+
+def folder_of(item_id: str) -> str:
+    """Папка закупки, к которой относится строка. Пусто — строки нет.
+
+    Лот объединяют по папке, а не по строке: строк в закупке несколько, а
+    решение «ведём целиком» у неё одно.
+    """
     found = next((item for item in _ranked() if row_id(item) == item_id), None)
-    return None if found is None else build_detail(found, pick)
+    return (found.row.folder_path or "") if found is not None else ""
 
 
 def recalculate(row: Any, pick: str) -> Any:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict
-from typing import Annotated
+from decimal import Decimal
+from typing import Annotated, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse
@@ -25,11 +27,13 @@ from platform_api.modules.schemas import (
     ColumnOut,
     DetailOut,
     LegendItem,
+    LotOut,
+    RowLotOut,
     RowOut,
     WorklistOut,
 )
 from platform_api.modules.table import build_table, sees_money
-from platform_api.modules.tender import core, worklist
+from platform_api.modules.tender import core, lots, worklist
 from platform_api.modules.tender.cases import router as cases_router
 from platform_api.modules.tender.columns import COMPACT, ESSENTIAL, POLICY, ROLES
 from platform_api.modules.tender.comparison import router as comparison_router
@@ -66,6 +70,7 @@ def get_health() -> ModuleHealth:
 @router.get("/worklist", summary="Отбор закупок")
 def get_worklist(
     identity: CurrentUser,
+    db: Db,
     _guard: Annotated[None, requires_read] = None,
 ) -> WorklistOut:
     """Разобранные закупки так же, как их показывает лист «Отбор».
@@ -104,11 +109,12 @@ def get_worklist(
         roles=ROLES,
     )
     money = sees_money(identity.role)
+    marked = lots.merged_folders(db, identity.organization.id)
 
     return WorklistOut(
         sheet=worklist.sheet_title(),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=[RowOut.model_validate(asdict(row)) for row in table.rows],
+        rows=_with_lots(table.rows, data.rows, marked, money=money),
         legend=[
             LegendItem(tone=tone, title=title, hint=hint) for tone, title, hint in worklist.legend()
         ],
@@ -129,10 +135,121 @@ def get_worklist(
     )
 
 
+def _with_lots(
+    rows: Sequence[Any], source: Sequence[Any], marked: frozenset[str], *, money: bool
+) -> list[RowOut]:
+    """Дописывает строкам отметку лота.
+
+    Отметка не косметическая: у позиции может быть заработок в сорок
+    процентов, а у лота, в котором она лежит, — убыток. Видно это должно быть
+    в списке, до того как строку откроют, — иначе смысл объединения теряется.
+
+    Считается одним проходом по уже собранному отбору: строк восемьсот, и
+    обращение к базе на каждую было бы восемьюстами запросов ради нескольких
+    десятков записей.
+    """
+    итоги: dict[str, tuple[int, Decimal | None, Decimal | None]] = {}
+    for item in source:
+        folder = item.row.folder_path or ""
+        if folder not in marked:
+            continue
+        было = итоги.get(folder, (0, None, None))
+        итоги[folder] = (
+            было[0] + 1,
+            _add(было[1], item.row.total),
+            _add(было[2], item.row.cost),
+        )
+
+    готовые: list[RowOut] = []
+    for row, item in zip(rows, source, strict=True):
+        out = RowOut.model_validate(asdict(row))
+        folder = item.row.folder_path or ""
+        итог = итоги.get(folder)
+        if итог is not None and итог[0] > 1:
+            позиций, сумма, себестоимость = итог
+            прибыль = (
+                сумма - себестоимость
+                if money and сумма is not None and себестоимость is not None
+                else None
+            )
+            out.lot = RowLotOut(
+                key=lots.key_of(folder),
+                positions=позиций,
+                total=float(сумма) if сумма is not None else None,
+                margin_percent=(
+                    float((прибыль / сумма * 100).quantize(Decimal("0.1")))
+                    if прибыль is not None and сумма
+                    else None
+                ),
+            )
+        готовые.append(out)
+    return готовые
+
+
+def _add(left: Decimal | None, right: Decimal | None) -> Decimal | None:
+    """Сумма известных значений: ноль и «неизвестно» — разные вещи."""
+    if right is None:
+        return left
+    return right if left is None else left + right
+
+
+@router.post("/item/{item_id}/lot", summary="Объединить позиции закупки в лот")
+def merge_lot(
+    item_id: str,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> LotOut:
+    """Помечает закупку как ведущуюся целиком.
+
+    Решение человека, а не свойство данных: позиции одного заключения иногда
+    разыгрываются порознь, и вывести это из документов нельзя. Доступно всем,
+    кто работает с разделом: это пометка о порядке работы, а не деньги.
+    """
+    folder = _folder_or_404(item_id)
+    lots.merge(db, identity.organization.id, identity.user.id, folder)
+    db.commit()
+    return _lot_out(item_id, identity, merged=True)
+
+
+@router.delete("/item/{item_id}/lot", summary="Разъединить лот на позиции")
+def split_lot(
+    item_id: str,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> LotOut:
+    folder = _folder_or_404(item_id)
+    lots.split(db, identity.organization.id, folder)
+    db.commit()
+    return _lot_out(item_id, identity, merged=False)
+
+
+def _folder_or_404(item_id: str) -> str:
+    folder = worklist.folder_of(item_id)
+    if not folder:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Такой закупки нет в отборе",
+        )
+    return folder
+
+
+def _lot_out(item_id: str, identity: Any, *, merged: bool) -> LotOut:
+    found = worklist.detail(item_id, merged=merged, money=sees_money(identity.role))
+    if found is None or found.lot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="В этой закупке одна позиция — объединять нечего",
+        )
+    return LotOut.model_validate(asdict(found.lot))
+
+
 @router.get("/item/{item_id}", summary="Разбор одной закупки")
 def get_worklist_item(
     item_id: str,
     identity: CurrentUser,
+    db: Db,
     pick: str = "",
     _guard: Annotated[None, requires_read] = None,
 ) -> DetailOut:
@@ -149,8 +266,10 @@ def get_worklist_item(
     срок неподъёмным. Считает при этом всё равно ядро — тем же кодом, которым
     считается книга.
     """
+    money = sees_money(identity.role)
+    merged = worklist.folder_of(item_id) in lots.merged_folders(db, identity.organization.id)
     try:
-        found = worklist.detail(item_id, pick)
+        found = worklist.detail(item_id, pick, merged=merged, money=money)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

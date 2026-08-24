@@ -49,8 +49,18 @@ export interface WorklistCell {
 /** Подсветка по вердикту — та же, что заливка строки в книге. */
 export type Tone = "" | "good" | "warning" | "info" | "critical";
 
+/** Отметка лота в строке списка. Маржа здесь по всему лоту, а не по строке:
+ *  позиция с заработком 40% в лоте, который в минусе, — это ловушка. */
+export interface RowLot {
+  key: string;
+  positions: number;
+  total: number | null;
+  margin_percent: number | null;
+}
+
 export interface WorklistRow {
   cells: WorklistCell[];
+  lot: RowLot | null;
   /** Номер, которым строку называют вслух: «посмотри сорок вторую». Считает
    *  сервер по всему списку, поэтому отбор и сортировка его не сдвигают. */
   number: number;
@@ -103,6 +113,38 @@ export interface DetailSection {
   collapsed: boolean;
 }
 
+/** Позиция лота — то, чем переключаются в разборе. */
+export interface LotPosition {
+  id: string;
+  title: string;
+  quantity: number | null;
+  total: number | null;
+  cost: number | null;
+  margin_percent: number | null;
+  tone: Tone;
+  current: boolean;
+}
+
+/**
+ * Закупка целиком: её позиции и итог по ним.
+ *
+ * Приходит и до объединения. Сам факт «в этой закупке ещё две позиции» — уже
+ * предупреждение: заработок по одной ничего не значит, пока не видно
+ * остальных, которые придётся поставить вместе с ней.
+ */
+export interface Lot {
+  key: string;
+  merged: boolean;
+  positions: LotPosition[];
+  total: number | null;
+  cost: number | null;
+  profit: number | null;
+  margin_percent: number | null;
+  /** По скольким позициям себестоимость известна. Без этого числа итог врёт
+   *  в лучшую сторону: непосчитанная позиция выглядит бесплатной. */
+  priced: number;
+}
+
 export interface Detail {
   id: string;
   title: string;
@@ -113,6 +155,7 @@ export interface Detail {
   url: string | null;
   sections: DetailSection[];
   hidden_sections: number;
+  lot: Lot | null;
 }
 
 export interface LegendItem {
@@ -209,6 +252,13 @@ export const worklists = {
       `/api/${slug}/item/${encodeURIComponent(id)}` +
         (pick ? `?pick=${encodeURIComponent(pick)}` : ""),
     ),
+
+  /** Объединить позиции закупки в лот или разъединить обратно. */
+  mergeLot: (slug: WorklistSlug, id: string) =>
+    api.post<Lot>(`/api/${slug}/item/${encodeURIComponent(id)}/lot`),
+
+  splitLot: (slug: WorklistSlug, id: string) =>
+    api.delete<Lot>(`/api/${slug}/item/${encodeURIComponent(id)}/lot`),
 
   sync: (slug: WorklistSlug) =>
     api.post<{ job_id: string }>(`/api/${slug}/sync`),

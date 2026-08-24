@@ -12,14 +12,15 @@
  */
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   worklists,
   type DetailField,
   type DetailSection,
+  type Lot,
   type WorklistSlug,
 } from "@/api/worklist";
-import { Badge, Spinner, cx } from "@/ui";
+import { Badge, Button, Spinner, cx, money } from "@/ui";
 import { formatValue } from "./format";
 import { GLYPH, GLYPH_COLOR } from "./verdicts";
 import { MIN_WIDTH, maxWidth, usePanelWidth } from "./usePanelWidth";
@@ -35,10 +36,13 @@ export function DetailPanel({
   slug,
   id,
   onClose,
+  onOpen,
 }: {
   slug: WorklistSlug;
   id: string;
   onClose: () => void;
+  /** Открыть другую строку — переключение между позициями лота. */
+  onOpen: (id: string) => void;
 }) {
   // Какую находку человек выбрал для расчёта. Живёт здесь, а не в адресе:
   // это примерка «а если брать у этого», а не состояние, которым делятся, —
@@ -53,6 +57,11 @@ export function DetailPanel({
     // мигает пустотой на каждый выбор поставщика.
     placeholderData: (previous) => previous,
   });
+
+  const client = useQueryClient();
+  // Лот меняет и разбор, и отметки в таблице: после переключения перечитываем
+  // весь раздел, а не одну карточку.
+  const refresh = () => client.invalidateQueries({ queryKey: [slug] });
 
   const panel = usePanelWidth();
 
@@ -141,11 +150,22 @@ export function DetailPanel({
             </p>
           ) : data ? (
             <div className="space-y-6">
-              {data.verdict && (
-                <Badge tone={data.tone || "neutral"}>
-                  {data.tone && GLYPH[data.tone]} {data.verdict}
-                </Badge>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {data.verdict && (
+                  <Badge tone={data.tone || "neutral"}>
+                    {data.tone && GLYPH[data.tone]} {data.verdict}
+                  </Badge>
+                )}
+                {data.lot && (
+                  <LotToggle
+                    slug={slug}
+                    id={id}
+                    lot={data.lot}
+                    onDone={refresh}
+                  />
+                )}
+              </div>
+              {data.lot?.merged && <LotCard lot={data.lot} onOpen={onOpen} />}
               {data.sections.map((section) => (
                 <SectionBlock
                   key={section.title}
@@ -363,6 +383,178 @@ function FieldRow({ field }: { field: DetailField }) {
  * - **отмеченная** — та, по которой себестоимость посчитана сейчас. Без
  *   отметки непонятно, откуда взялась цифра.
  */
+/**
+ * Кнопка «Объединить в лот» рядом с вердиктом.
+ *
+ * До объединения зовёт числом: «ещё 2 позиции» — это и есть предупреждение,
+ * ради которого всё затевалось. Заработок по одной позиции ничего не значит,
+ * пока не видно остальных, которые придётся поставить вместе с ней.
+ */
+function LotToggle({
+  slug,
+  id,
+  lot,
+  onDone,
+}: {
+  slug: WorklistSlug;
+  id: string;
+  lot: Lot;
+  onDone: () => void;
+}) {
+  const toggle = useMutation({
+    mutationFn: () =>
+      lot.merged ? worklists.splitLot(slug, id) : worklists.mergeLot(slug, id),
+    onSuccess: onDone,
+  });
+
+  const others = lot.positions.length - 1;
+  return (
+    <Button
+      variant={lot.merged ? "secondary" : "primary"}
+      onClick={() => toggle.mutate()}
+      disabled={toggle.isPending}
+      title={
+        lot.merged
+          ? "Показывать позиции по отдельности"
+          : "Считать позиции этой закупки одним лотом: их придётся поставить вместе"
+      }
+    >
+      {toggle.isPending
+        ? "Минуту…"
+        : lot.merged
+          ? "Разъединить лот"
+          : `Объединить в лот · ещё ${others} ${others === 1 ? "позиция" : "позиции"}`}
+    </Button>
+  );
+}
+
+/**
+ * Итог по лоту и переключатель позиций.
+ *
+ * Сверху — общее: сумма, себестоимость и заработок по всем позициям разом.
+ * Ради этого лот и собирают: по одной позиции заработок бывает отличным, а по
+ * лоту, который придётся поставить целиком, — убыток.
+ *
+ * Снизу — сами позиции. Открытая подсвечена, остальные открываются щелчком:
+ * так их и просматривают, одну за другой, не выходя из разбора.
+ */
+function LotCard({ lot, onOpen }: { lot: Lot; onOpen: (id: string) => void }) {
+  const убыток = lot.margin_percent !== null && lot.margin_percent <= 0;
+  const неполный = lot.priced < lot.positions.length;
+
+  return (
+    <section
+      className={cx(
+        "overflow-hidden rounded-[10px] border",
+        убыток ? "border-critical/40" : "border-hairline",
+      )}
+    >
+      <header
+        className={cx(
+          "flex items-center justify-between gap-3 px-4 py-2.5",
+          убыток ? "bg-critical/10" : "bg-plane",
+        )}
+      >
+        <div className="text-sm font-medium text-ink">
+          Лот целиком · {lot.positions.length} позиции
+        </div>
+        {lot.margin_percent !== null && (
+          <div
+            className={cx(
+              "text-sm font-semibold tabular-nums",
+              убыток ? "text-critical" : "text-good",
+            )}
+          >
+            {/* Знак словом, а не только цветом: при дальтонизме «плюс» и
+                «минус» одинаковы, а разница здесь — идти в закупку или нет. */}
+            {убыток ? "убыток " : "маржа "}
+            {lot.margin_percent}%
+          </div>
+        )}
+      </header>
+
+      <dl className="grid grid-cols-3 divide-x divide-hairline border-b border-hairline">
+        {(
+          [
+            ["Сумма закупки", lot.total],
+            ["Себестоимость", lot.cost],
+            ["Заработок", lot.profit],
+          ] as const
+        ).map(([label, value]) => (
+          <div key={label} className="px-4 py-2.5">
+            <dt className="text-xs text-ink-muted">{label}</dt>
+            <dd
+              className={cx(
+                "mt-0.5 text-sm font-medium tabular-nums",
+                label === "Заработок" && убыток ? "text-critical" : "text-ink",
+              )}
+            >
+              {value === null ? "—" : `${money(value)} ₸`}
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      {неполный && (
+        <p className="border-b border-hairline bg-warning/10 px-4 py-2 text-xs text-ink-secondary">
+          ⚠ Себестоимость известна по {lot.priced} позиции из{" "}
+          {lot.positions.length}. Итог по лоту выглядит лучше, чем он есть:
+          непосчитанная позиция считается бесплатной.
+        </p>
+      )}
+
+      <ul className="divide-y divide-hairline">
+        {lot.positions.map((position, index) => (
+          <li key={position.id}>
+            <button
+              type="button"
+              onClick={() => !position.current && onOpen(position.id)}
+              aria-current={position.current}
+              className={cx(
+                "flex w-full items-start gap-3 px-4 py-2.5 text-left transition",
+                position.current
+                  ? "bg-series-1/8 cursor-default"
+                  : "hover:bg-plane",
+              )}
+            >
+              <span className="mt-0.5 w-5 shrink-0 text-xs text-ink-muted tabular-nums">
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span
+                  className={cx(
+                    "block text-sm break-words",
+                    position.current
+                      ? "font-medium text-ink"
+                      : "text-ink-secondary",
+                  )}
+                >
+                  {position.title}
+                </span>
+                <span className="mt-0.5 block text-xs text-ink-muted tabular-nums">
+                  {position.quantity !== null &&
+                    `${money(position.quantity)} шт · `}
+                  {position.total !== null && `${money(position.total)} ₸`}
+                </span>
+              </span>
+              {position.margin_percent !== null && (
+                <span
+                  className={cx(
+                    "mt-0.5 shrink-0 text-sm font-medium tabular-nums",
+                    position.margin_percent > 0 ? "text-good" : "text-critical",
+                  )}
+                >
+                  {position.margin_percent}%
+                </span>
+              )}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** Поля разбора, которые на экране не нужны. */
 const HIDDEN_FIELDS = new Set(["Предмет"]);
 

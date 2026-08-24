@@ -63,6 +63,20 @@ class CellOut(BaseModel):
     надо значение — код ЕНС, по которому есть отечественный производитель."""
 
 
+class RowLotOut(BaseModel):
+    """Отметка лота в строке рабочего списка.
+
+    Маржа здесь по всему лоту, а не по строке, и в этом весь смысл отметки:
+    позиция с заработком 40% в лоте, который в минусе, — это не находка, а
+    ловушка. Видно её должно быть в списке, до того как строку откроют.
+    """
+
+    key: str
+    positions: int
+    total: float | None = None
+    margin_percent: float | None = None
+
+
 class RowOut(BaseModel):
     """Строка таблицы вместе с подсветкой по вердикту."""
 
@@ -86,6 +100,9 @@ class RowOut(BaseModel):
     tone: str = ""
     """`good`, `warning`, `info`, `critical` или пусто. Цвет дублирует вердикт
     из первой колонки, а не заменяет его: сам по себе он смысла не несёт."""
+
+    lot: RowLotOut | None = None
+    """Лот, если строку объединили с соседними позициями закупки."""
 
 
 class LegendItem(BaseModel):
@@ -200,6 +217,39 @@ class DetailSection(BaseModel):
     """Показывать свёрнутым: заголовок и счётчик, содержимое по щелчку."""
 
 
+class LotPositionOut(BaseModel):
+    """Позиция лота — то, чем переключаются в разборе."""
+
+    id: str
+    title: str
+    quantity: float | None = None
+    total: float | None = None
+    cost: float | None = None
+    margin_percent: float | None = None
+    tone: str = ""
+    current: bool = False
+
+
+class LotOut(BaseModel):
+    """Закупка целиком: её позиции и итог по ним.
+
+    Приходит и до объединения. Сам факт «в этой закупке ещё две позиции» —
+    уже предупреждение: заработок по одной ничего не значит, пока не видно
+    остальных, которые придётся поставить вместе с ней.
+    """
+
+    key: str
+    merged: bool = False
+    positions: list[LotPositionOut] = []
+    total: float | None = None
+    cost: float | None = None
+    profit: float | None = None
+    margin_percent: float | None = None
+    priced: int = 0
+    """По скольким позициям себестоимость известна. Без этого числа итог врёт
+    в лучшую сторону: непосчитанная позиция выглядит бесплатной."""
+
+
 class DetailOut(BaseModel):
     """Разбор одной строки: откуда взялась цифра."""
 
@@ -212,6 +262,9 @@ class DetailOut(BaseModel):
     """Ссылка на карточку у площадки — то, ради чего разбор чаще всего и
     открывают. У тендерной закупки её нет: она пришла папкой, а не из
     кабинета."""
+
+    lot: LotOut | None = None
+    """Закупка целиком, если позиций в ней больше одной."""
 
     sections: list[DetailSection] = []
     hidden_sections: int = 0

@@ -726,3 +726,95 @@ def test_fail_kod_iz_perechnya_krasit_svoyu_yacheyku() -> None:
         module.tone_of(SimpleNamespace(row=свой.row, verdict=SimpleNamespace(label="Брать")))
         == "good"
     )
+
+
+def test_fail_lot_sobiraet_sosednie_pozicii_i_ih_itog() -> None:
+    """Заработок по одной позиции ничего не значит без остальных.
+
+    В заключении три позиции, по одной из них маржа отличная — её берут в
+    работу, а поставить придётся все три, и на остальных убыток. В сумме
+    сделка убыточна, и увидеть это надо до подачи.
+    """
+    from platform_api.modules.tender.lots import collect
+
+    def строка(имя: str, сумма: str, себестоимость: str, маржа: str) -> Any:
+        return SimpleNamespace(
+            row=SimpleNamespace(
+                folder_path="/архив/Закупка",
+                title=имя,
+                ens_code="",
+                quantity=Decimal(1),
+                total=Decimal(сумма),
+                cost=Decimal(себестоимость),
+                margin_percent=Decimal(маржа),
+            ),
+            verdict=SimpleNamespace(label="Брать"),
+        )
+
+    выгодная = строка("Насос", "1000000", "600000", "40.0")
+    rows = [
+        выгодная,
+        строка("Кабель", "500000", "700000", "-40.0"),
+        строка("Щит", "300000", "500000", "-66.7"),
+    ]
+
+    лот = collect(rows, выгодная, merged=True, money=True)
+
+    assert лот is not None and лот.size == 3
+    assert лот.total == Decimal(1_800_000)
+    assert лот.cost == Decimal(1_800_000)
+    # Позиция даёт 40%, а лот целиком — ноль: вот ради чего он и собирается.
+    assert лот.profit == Decimal(0)
+    assert лот.margin_percent == Decimal("0.0")
+    assert [p.current for p in лот.positions] == [True, False, False]
+
+
+def test_fail_lot_ne_otdaet_dengi_zakupshchiku() -> None:
+    """Итог по лоту — та же себестоимость, только сложенная.
+
+    Отдать её потому, что она лежит в другом поле, значило бы обойти
+    собственные права: закупщик не видит себестоимость по строке.
+    """
+    from platform_api.modules.tender.lots import collect
+
+    def строка(имя: str) -> Any:
+        return SimpleNamespace(
+            row=SimpleNamespace(
+                folder_path="/архив/Закупка",
+                title=имя,
+                ens_code="",
+                quantity=Decimal(1),
+                total=Decimal(1000),
+                cost=Decimal(600),
+                margin_percent=Decimal("40.0"),
+            ),
+            verdict=SimpleNamespace(label="Брать"),
+        )
+
+    rows = [строка("Насос"), строка("Кабель")]
+    лот = collect(rows, rows[0], merged=True, money=False)
+
+    assert лот is not None
+    assert лот.total == Decimal(2000), "сумма закупки — не тайна"
+    assert лот.cost is None and лот.profit is None and лот.margin_percent is None
+    assert all(p.cost is None and p.margin_percent is None for p in лот.positions)
+
+
+def test_lot_iz_odnoy_pozicii_ne_lot() -> None:
+    """Объединять нечего — и кнопки быть не должно."""
+    from platform_api.modules.tender.lots import collect
+
+    одна = SimpleNamespace(
+        row=SimpleNamespace(
+            folder_path="/архив/Закупка",
+            title="Насос",
+            ens_code="",
+            quantity=Decimal(1),
+            total=Decimal(1000),
+            cost=Decimal(600),
+            margin_percent=Decimal("40.0"),
+        ),
+        verdict=SimpleNamespace(label="Брать"),
+    )
+
+    assert collect([одна], одна, merged=False, money=True) is None

@@ -245,6 +245,9 @@ export function WorkTable({
               className={cx(
                 "group cursor-pointer",
                 TONES[row.tone] ?? TONES[""],
+                // Полоса слева у строк одного лота: связь надо видеть при
+                // прокрутке, а сортировка их разводит по списку.
+                row.lot && "border-l-2 border-l-series-1",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-series-1",
                 openId === row.id &&
                   "outline outline-2 -outline-offset-2 outline-series-1",
@@ -257,6 +260,7 @@ export function WorkTable({
                   после выгрузки список пересобирается вместе с номерами. */}
               <td className="border-b border-hairline px-2.5 py-1.5 text-right align-top text-ink-muted tabular-nums">
                 {row.number}
+                {row.lot && <LotMark lot={row.lot} />}
               </td>
               {shown.map(({ column, index }) => (
                 <td
@@ -283,6 +287,35 @@ export function WorkTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Отметка лота у номера строки.
+ *
+ * Не украшение и не ссылка. Позиция с заработком в сорок процентов может
+ * лежать в лоте, который целиком в минусе: поставить придётся все позиции, и
+ * прибыльная одна дела не спасает. Поэтому знак красный именно тогда, когда в
+ * минусе лот, а не строка, — и видно это в списке, до того как строку откроют.
+ */
+function LotMark({ lot }: { lot: NonNullable<WorklistRow["lot"]> }) {
+  const убыток = lot.margin_percent !== null && lot.margin_percent <= 0;
+  const итог =
+    lot.margin_percent === null
+      ? "маржа лота не посчитана"
+      : `${убыток ? "убыток" : "маржа"} по лоту ${lot.margin_percent}%`;
+  return (
+    <span
+      title={`Лот из ${lot.positions} позиций — ${итог}. Поставить придётся все.`}
+      className={cx(
+        "mt-0.5 flex items-center justify-end gap-1 text-[10px] leading-none font-medium",
+        убыток ? "text-critical" : "text-ink-muted",
+      )}
+    >
+      {/* Звено цепи: знак связи, а не оценки. Оценку несёт цвет и подпись. */}
+      <span aria-hidden>⛓</span>
+      {lot.positions}
+    </span>
   );
 }
 

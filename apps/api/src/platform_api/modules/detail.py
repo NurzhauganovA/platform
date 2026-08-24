@@ -128,6 +128,14 @@ class Detail:
     sections: tuple[Section, ...] = field(default_factory=tuple)
     hidden_sections: int = 0
 
+    lot: Any = None
+    """Закупка целиком, если позиций в ней больше одной.
+
+    Приходит и до объединения: сам факт «в этой закупке ещё две позиции» —
+    уже предупреждение. Заработок по одной позиции ничего не значит, пока не
+    видно остальных, которые придётся поставить вместе с ней.
+    """
+
 
 def for_role(detail: Detail, role: Role) -> Detail:
     """Убирает разделы, которых эта роль видеть не должна.
@@ -141,6 +149,7 @@ def for_role(detail: Detail, role: Role) -> Detail:
     )
     hidden = len(detail.sections) - len(allowed)
     return Detail(
+        lot=detail.lot,
         id=detail.id,
         title=detail.title,
         subtitle=detail.subtitle,

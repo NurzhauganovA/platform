@@ -259,6 +259,36 @@ class AuditEntry(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(index=True)
 
 
+class TenderLot(Base, UUIDPrimaryKey, Timestamps):
+    """Закупка, которую ведут лотом — целиком, а не позициями по отдельности.
+
+    Решение человека, а не свойство данных. В заключении заказчика позиций
+    бывает три, и по одной из них заработок выглядит отличным — а поставить
+    придётся все три, и на остальных двух убыток. Пока тендерщик не сказал
+    «это один лот», платформа этого знать не может: бывает и наоборот, когда
+    позиции разыгрываются порознь.
+
+    Ключ — папка закупки: ею ядро и разграничивает закупки, и другого общего
+    признака у позиций одного заключения нет. Идентификаторы строк для этого
+    не годятся: они считаются от названия и меняются с каждым новым разбором.
+    """
+
+    __tablename__ = "tender_lots"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "folder_path", name="organization_folder"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    folder_path: Mapped[str] = mapped_column(String(1024))
+    """Папка закупки — та же, что в базе ядра, абсолютным путём."""
+
+
 __all__ = [
     "AuditEntry",
     "Job",
@@ -268,5 +298,6 @@ __all__ = [
     "Role",
     "Session",
     "StoredFile",
+    "TenderLot",
     "User",
 ]
