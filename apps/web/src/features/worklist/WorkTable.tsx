@@ -151,18 +151,17 @@ export function WorkTable({
       */}
       <table className="min-w-full table-fixed border-collapse text-[13px]">
         <colgroup>
-          {/* Номер: ширина под три знака плюс поле. Строк на экране до
-              восьмисот, и четырёхзначных не бывает. */}
-          <col style={{ width: "3.25rem" }} />
+          {/* Код: «TN-00042» — восемь знаков плюс поле. */}
+          <col style={{ width: "5.5rem" }} />
           {shown.map(({ column }) => (
             <col key={column.key} style={{ width: width(column) }} />
           ))}
         </colgroup>
         <thead className="sticky top-0 z-20">
           <tr>
-            {/* Номер не сортируется: он и есть порядок, в котором строки
-                сейчас лежат. Щелчок по нему мог бы значить только «отменить
-                сортировку», а это уже есть в самой колонке. */}
+            {/* Код не сортируется: он выдан по времени появления закупки, и
+                сортировка по нему — это «сначала старые», что уже делает
+                колонка даты. */}
             <th
               scope="col"
               className={cx(
@@ -171,7 +170,7 @@ export function WorkTable({
                 "text-right",
               )}
             >
-              №
+              Код
             </th>
             {shown.map(({ column, index }) => (
               <th
@@ -253,13 +252,12 @@ export function WorkTable({
                   "outline outline-2 -outline-offset-2 outline-series-1",
               )}
             >
-              {/* Номер приходит с сервером и посчитан по всему списку. Своё
-                  место в отрисовке брать нельзя: им называют строку вслух, а
-                  у собеседника другой отбор — и «сорок вторая» у него чужая.
-                  Ссылку на строку он всё равно не заменяет, для неё `row.id`:
-                  после выгрузки список пересобирается вместе с номерами. */}
-              <td className="border-b border-hairline px-2.5 py-1.5 text-right align-top text-ink-muted tabular-nums">
-                {row.number}
+              {/* Код, а не место в списке. Место сдвигается от каждой новой
+                  закупки: сотрудник говорит «посмотри сорок вторую», а у
+                  собеседника это уже другая строка. Код выдан один раз и
+                  остаётся при позиции. */}
+              <td className="border-b border-hairline px-2.5 py-1.5 text-left align-top text-xs text-ink-muted tabular-nums">
+                {row.code || row.number}
                 {row.lot && <LotMark lot={row.lot} />}
               </td>
               {shown.map(({ column, index }) => (
@@ -308,7 +306,7 @@ function LotMark({ lot }: { lot: NonNullable<WorklistRow["lot"]> }) {
     <span
       title={`Лот из ${lot.positions} позиций — ${итог}. Поставить придётся все.`}
       className={cx(
-        "mt-0.5 flex items-center justify-end gap-1 text-[10px] leading-none font-medium",
+        "mt-1 flex items-center gap-1 text-[10px] leading-none font-medium",
         убыток ? "text-critical" : "text-ink-muted",
       )}
     >

@@ -865,3 +865,69 @@ def test_fail_sostav_lota_silnee_papki() -> None:
     assert свой is not None and свой.merged is True and свой.key == "лот-1"
     assert [p.title for p in свой.positions] == ["Насос", "Щит"]
     assert свой.total == Decimal(5000)
+
+
+def test_fail_stroki_lota_stoyat_ryadom() -> None:
+    """Позиция, добавленная вручную, должна встать к своим.
+
+    Порядок задаёт ядро — по выгоде, — и позиции лота он разбрасывает по всему
+    списку: добавленная из чужой папки оказывается через двести строк от
+    своих. Связь тогда видна только по значку, а рядом её нет.
+    """
+    from platform_api.modules.tender.router import _grouped
+
+    def строка(папка: str, имя: str) -> Any:
+        return SimpleNamespace(row=SimpleNamespace(folder_path=папка, title=имя))
+
+    rows = [
+        строка("/а", "Насос"),
+        строка("/б", "Кабель"),
+        строка("/в", "Щит"),
+        строка("/г", "Лоток"),
+    ]
+    # В лоте первая и последняя — между ними двести строк в жизни.
+    marked = {("/а", "Насос"): "лот-1", ("/г", "Лоток"): "лот-1"}
+
+    порядок = [item.row.title for item in _grouped(rows, marked)]
+
+    # Лот встал на место лучшей своей позиции, остальные не сдвинулись.
+    assert порядок == ["Насос", "Лоток", "Кабель", "Щит"]
+    # Разъединили — порядок ядра вернулся сам, ничего не запоминается.
+    assert [item.row.title for item in _grouped(rows, {})] == [
+        "Насос",
+        "Кабель",
+        "Щит",
+        "Лоток",
+    ]
+
+
+def test_fail_kod_stroki_ne_menyaetsya_ot_novyh_zakupok() -> None:
+    """Код выдаётся один раз и остаётся при позиции.
+
+    Порядковый номер сдвигается от каждой новой закупки: сотрудник говорит
+    «посмотри сорок вторую», а у собеседника это уже другая строка.
+    """
+    from platform_api.modules import codes
+
+    class Хранилище:
+        """База в памяти: проверяется правило выдачи, а не SQL."""
+
+        def __init__(self) -> None:
+            self.выдано: dict[tuple[str, str], int] = {}
+
+        def assign(self, module: str, prefix: str, keys: list[str]) -> dict[str, str]:
+            следующий = max((n for (m, _k), n in self.выдано.items() if m == module), default=0)
+            for key in keys:
+                if (module, key) not in self.выдано:
+                    следующий += 1
+                    self.выдано[(module, key)] = следующий
+            return {key: f"{prefix}-{self.выдано[(module, key)]:0{codes.WIDTH}d}" for key in keys}
+
+    склад = Хранилище()
+    сначала = склад.assign("tender", "TN", ["а", "б", "в"])
+    assert сначала == {"а": "TN-00001", "б": "TN-00002", "в": "TN-00003"}
+
+    # Новая закупка встала первой в списке — коды прежних не тронуты.
+    потом = склад.assign("tender", "TN", ["новая", "а", "б", "в"])
+    assert потом["а"] == "TN-00001" and потом["в"] == "TN-00003"
+    assert потом["новая"] == "TN-00004"

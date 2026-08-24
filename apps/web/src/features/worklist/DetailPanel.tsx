@@ -165,14 +165,15 @@ export function DetailPanel({
                     onDone={refresh}
                   />
                 )}
-                {data.lot?.merged && (
-                  <LotSearch
-                    slug={slug}
-                    id={id}
-                    lot={data.lot}
-                    onDone={refresh}
-                  />
-                )}
+                {/* Всегда, а не только у собранного лота. Разбор ошибается
+                    и в другую сторону: показывает позицию как одиночную, хотя
+                    у неё есть пара в другой папке. Без кнопки её не связать. */}
+                <LotSearch
+                  slug={slug}
+                  id={id}
+                  lot={data.lot}
+                  onDone={refresh}
+                />
               </div>
               {data.lot?.merged && (
                 <LotCard
@@ -463,7 +464,9 @@ function LotSearch({
 }: {
   slug: WorklistSlug;
   id: string;
-  lot: Lot;
+  /** Лота может не быть вовсе — тогда первая же добавленная позиция его и
+   *  заведёт, вместе с открытой. */
+  lot: Lot | null;
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -479,7 +482,13 @@ function LotSearch({
     },
   });
 
-  const внутри = new Set(lot.positions.map((position) => position.id));
+  const внутри = new Set((lot?.positions ?? []).map((position) => position.id));
+  // Какая колонка — название закупки, говорит сервер ролью. По месту в списке
+  // её не найти: первой у тендерного отбора стоит решение, у площадок номер.
+  const название = Math.max(
+    0,
+    (list?.columns ?? []).findIndex((column) => column.role === "title"),
+  );
   const needle = query.trim().toLowerCase();
   const найдено = !needle
     ? []
@@ -497,7 +506,11 @@ function LotSearch({
       <Button
         variant="ghost"
         onClick={() => setOpen(true)}
-        title="Добавить в лот позицию, которую разбор к нему не отнёс"
+        title={
+          lot?.merged
+            ? "Добавить в лот позицию, которую разбор к нему не отнёс"
+            : "Связать эту закупку с другой позицией вручную"
+        }
       >
         + Добавить позицию
       </Button>
@@ -540,11 +553,11 @@ function LotSearch({
                 disabled={add.isPending}
                 className="flex w-full items-start gap-3 px-3 py-2 text-left transition hover:bg-plane disabled:opacity-50"
               >
-                <span className="mt-0.5 w-8 shrink-0 text-xs text-ink-muted tabular-nums">
-                  {row.number}
+                <span className="mt-0.5 w-16 shrink-0 text-xs text-ink-muted tabular-nums">
+                  {row.code || row.number}
                 </span>
                 <span className="min-w-0 flex-1 text-sm break-words text-ink">
-                  {row.cells[0]?.text}
+                  {row.cells[название]?.text || "—"}
                   {row.lot && (
                     <span className="ml-2 text-xs text-warning">
                       уже в другом лоте — переедет сюда
@@ -585,7 +598,16 @@ function LotCard({
 }) {
   const remove = useMutation({
     mutationFn: (only: string) => worklists.splitLot(slug, id, only),
-    onSuccess: onDone,
+    onSuccess: (_result, only) => {
+      // Убрали ту позицию, что открыта, — остаёмся в лоте, а не уезжаем
+      // вместе с ней. Человек вычёркивает лишнее и продолжает смотреть
+      // остальные; выкидывать его на только что убранную незачем.
+      if (only === id) {
+        const другая = lot.positions.find((position) => position.id !== only);
+        if (другая) onOpen(другая.id);
+      }
+      onDone();
+    },
   });
   const убыток = lot.margin_percent !== null && lot.margin_percent <= 0;
   const неполный = lot.priced < lot.positions.length;
@@ -703,18 +725,20 @@ function LotCard({
             <button
               type="button"
               onClick={() => remove.mutate(position.id)}
-              disabled={remove.isPending || lot.positions.length < 3}
+              disabled={remove.isPending}
               title={
                 lot.positions.length < 3
-                  ? "В лоте останется одна позиция — тогда это уже не лот"
+                  ? "Убрать из лота. Останется одна позиция — лот распадётся"
                   : "Убрать позицию из лота"
               }
               aria-label={`Убрать «${position.title}» из лота`}
               className={cx(
-                "absolute top-2.5 right-2 rounded-[6px] px-1.5 py-0.5 text-xs",
-                "text-ink-muted opacity-0 transition group-hover/pos:opacity-100",
-                "hover:bg-critical/10 hover:text-critical",
-                "disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted",
+                // Виден всегда. Появляющийся на наведении не найти ни с
+                // клавиатуры, ни пальцем, а искать способ убрать лишнее
+                // человек будет именно тогда, когда разбор ошибся.
+                "absolute top-2.5 right-2 rounded-[6px] px-1.5 py-0.5 text-xs leading-none",
+                "text-ink-muted transition hover:bg-critical/10 hover:text-critical",
+                "disabled:cursor-not-allowed disabled:opacity-40",
               )}
             >
               ✕

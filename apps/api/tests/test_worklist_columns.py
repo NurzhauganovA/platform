@@ -406,3 +406,19 @@ def test_rol_ne_povtoryaetsya_v_predelah_razdela(columns_module: str) -> None:
     roles = list(importlib.import_module(columns_module).ROLES.values())
 
     assert len(roles) == len(set(roles)), f"повторяющиеся роли: {roles}"
+
+
+def test_fail_kolonka_nazvaniya_obyavlena_v_kazhdom_razdele() -> None:
+    """Какая колонка — название закупки, должен сказать сам раздел.
+
+    По месту в списке её не найти: у тендерного отбора первым идёт решение, у
+    площадок номер. Поиск позиции для лота показывал из-за этого «Проверить»
+    и «Мимо» вместо названий — искать по такому списку нечем.
+    """
+    from platform_api.modules.omarket.columns import ROLES as OMARKET
+    from platform_api.modules.skstore.columns import ROLES as SKSTORE
+    from platform_api.modules.tender.columns import ROLES as TENDER
+
+    for имя, roles in (("тендеры", TENDER), ("skstore", SKSTORE), ("omarket", OMARKET)):
+        названия = [column for column, role in roles.items() if role == "title"]
+        assert len(названия) == 1, f"{имя}: колонок с ролью «title» должно быть ровно одна"

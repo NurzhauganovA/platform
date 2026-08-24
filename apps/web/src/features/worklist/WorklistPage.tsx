@@ -179,16 +179,14 @@ export function WorklistPage({
   // итог снизу. Посчитай его в трёх местах — и однажды они разойдутся.
   const inScope = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    // Одни цифры в поиске — это номер строки, а не кусок названия. Так им и
-    // пользуются: коллега сказал «сорок вторая», её набирают и находят. Ровно,
-    // а не «содержит»: иначе «4» вытащила бы четвёртую, сороковые и все
-    // четырёхсотые разом.
-    const wanted = /^\d+$/.test(needle) ? Number(needle) : null;
     return (data?.rows ?? []).filter(
       (row) =>
         (scope === "all" || row.focus) &&
         (!needle ||
-          row.number === wanted ||
+          // По коду: его называют вслух и присылают в переписке, целиком
+          // («TN-00042») или одними цифрами («42»).
+          row.code.toLowerCase().includes(needle) ||
+          row.code.replace(/^\D+0*/, "") === needle ||
           row.cells.some((cell) => cell.text.toLowerCase().includes(needle))),
     );
   }, [data?.rows, filter, scope]);
@@ -376,7 +374,7 @@ export function WorklistPage({
               <input
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
-                placeholder="Найти по номеру, названию или заказчику…"
+                placeholder="Найти по коду, названию или заказчику…"
                 className="w-64 rounded-[8px] border border-baseline bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-ink-muted"
               />
               <Switch<Scope>

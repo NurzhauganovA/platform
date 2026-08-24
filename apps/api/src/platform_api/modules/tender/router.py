@@ -22,6 +22,7 @@ from platform_api.config import Settings
 from platform_api.db.models import StoredFile
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
+from platform_api.modules import codes
 from platform_api.modules.detail import for_role
 from platform_api.modules.schemas import (
     ColumnOut,
@@ -36,7 +37,13 @@ from platform_api.modules.schemas import (
 from platform_api.modules.table import build_table, sees_money
 from platform_api.modules.tender import core, lots, worklist
 from platform_api.modules.tender.cases import router as cases_router
-from platform_api.modules.tender.columns import COMPACT, ESSENTIAL, POLICY, ROLES
+from platform_api.modules.tender.columns import (
+    CODE_PREFIX,
+    COMPACT,
+    ESSENTIAL,
+    POLICY,
+    ROLES,
+)
 from platform_api.modules.tender.comparison import router as comparison_router
 from platform_api.modules.tender.health import check as check_health
 from platform_api.modules.tender.schemas import (
@@ -95,9 +102,19 @@ def get_worklist(
             detail=f"Данные тендерного разбора недоступны: {exc}",
         ) from exc
 
+    marked = lots.membership(db, identity.organization.id)
+    порядок = _grouped(data.rows, marked)
+    коды = codes.assign(
+        db,
+        "tender",
+        CODE_PREFIX,
+        [worklist.row_id(item) for item in порядок],
+    )
+    db.commit()
+
     table = build_table(
         worklist.columns(),
-        data.rows,
+        порядок,
         policy=POLICY,
         role=identity.role,
         tone=worklist.tone_of,
@@ -110,12 +127,11 @@ def get_worklist(
         roles=ROLES,
     )
     money = sees_money(identity.role)
-    marked = lots.membership(db, identity.organization.id)
 
     return WorklistOut(
         sheet=worklist.sheet_title(),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=_with_lots(table.rows, data.rows, marked, money=money),
+        rows=_with_lots(table.rows, порядок, marked, коды, money=money),
         legend=[
             LegendItem(tone=tone, title=title, hint=hint) for tone, title, hint in worklist.legend()
         ],
@@ -136,10 +152,42 @@ def get_worklist(
     )
 
 
+def _grouped(rows: Sequence[Any], marked: dict[tuple[str, str], str]) -> list[Any]:
+    """Ставит строки одного лота подряд, на место самой высокой из них.
+
+    Порядок задаёт ядро — по выгоде, — и позиции лота он разбрасывает по всему
+    списку: добавленная вручную из чужой папки оказывается через двести строк
+    от своих. Связь тогда видна только по значку, а рядом её нет.
+
+    Место лота — там, где стояла его лучшая позиция: лот читают как одну
+    строку, и падать вниз из-за слабого участника он не должен. Разъединили —
+    порядок ядра вернулся сам, здесь ничего не запоминается.
+    """
+    свои: dict[str, list[Any]] = {}
+    for item in rows:
+        имя = marked.get((item.row.folder_path or "", item.row.title))
+        if имя is not None:
+            свои.setdefault(имя, []).append(item)
+
+    порядок: list[Any] = []
+    показанные: set[str] = set()
+    for item in rows:
+        имя = marked.get((item.row.folder_path or "", item.row.title))
+        if имя is None:
+            порядок.append(item)
+            continue
+        if имя in показанные:
+            continue
+        показанные.add(имя)
+        порядок.extend(свои[имя])
+    return порядок
+
+
 def _with_lots(
     rows: Sequence[Any],
     source: Sequence[Any],
     marked: dict[tuple[str, str], str],
+    коды: dict[str, str],
     *,
     money: bool,
 ) -> list[RowOut]:
@@ -164,6 +212,7 @@ def _with_lots(
     готовые: list[RowOut] = []
     for row, item in zip(rows, source, strict=True):
         out = RowOut.model_validate(asdict(row))
+        out.code = коды.get(worklist.row_id(item), "")
         имя = marked.get((item.row.folder_path or "", item.row.title))
         итог = итоги.get(имя or "")
         if имя is not None and итог is not None and итог[0] > 1:

@@ -24,6 +24,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -259,6 +260,34 @@ class AuditEntry(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(index=True)
 
 
+class WorklistCode(Base, UUIDPrimaryKey, Timestamps):
+    """Постоянный код строки рабочего списка: «TN-00042».
+
+    Порядковый номер для этого не годится. Он считается по списку, а список
+    пересобирается: появилась одна закупка — и всё, что ниже, сдвинулось на
+    единицу. Сотрудник говорит «посмотри сорок вторую», а у собеседника это
+    уже другая строка.
+
+    Код выдаётся один раз и остаётся при позиции. Приставка своя у каждого
+    раздела — впереди площадки Mitwork и госзакупки, и «сорок второй» без
+    приставки будет в каждой из них.
+
+    Ключ — то же, чем платформа опознаёт строку: папка, название и код ЕНС.
+    Переименует заказчик позицию — код сменится, и это честно: это уже другая
+    позиция, а не та же под новым именем.
+    """
+
+    __tablename__ = "worklist_codes"
+    __table_args__ = (
+        UniqueConstraint("module", "row_key", name="module_row"),
+        UniqueConstraint("module", "number", name="module_number"),
+    )
+
+    module: Mapped[str] = mapped_column(String(32), index=True)
+    row_key: Mapped[str] = mapped_column(String(64))
+    number: Mapped[int] = mapped_column(Integer)
+
+
 class TenderLot(Base, UUIDPrimaryKey, Timestamps):
     """Закупка, которую ведут целиком, а не позициями по отдельности.
 
@@ -331,4 +360,5 @@ __all__ = [
     "TenderLot",
     "TenderLotPosition",
     "User",
+    "WorklistCode",
 ]
