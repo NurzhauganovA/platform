@@ -24,6 +24,7 @@ import {
 import { Badge, Button, Spinner, cx, money } from "@/ui";
 import { formatValue } from "./format";
 import { GLYPH, GLYPH_COLOR } from "./verdicts";
+import { FileViewer } from "./FileViewer";
 import { MIN_WIDTH, maxWidth, usePanelWidth } from "./usePanelWidth";
 
 const FIELD_TONE: Record<string, string> = {
@@ -50,6 +51,14 @@ export function DetailPanel({
   // и сбрасывается вместе со сменой строки.
   const [pick, setPick] = useState("");
   useEffect(() => setPick(""), [id]);
+
+  // Какой документ открыт во весь экран. Ключ файла и имя: имя нужно, чтобы
+  // показать его в шапке, пока разбор ещё идёт.
+  const [document, setDocument] = useState<{
+    sha256: string;
+    name: string;
+  } | null>(null);
+  useEffect(() => setDocument(null), [id]);
 
   const { data, isLoading, isFetching, isError, error } = useQuery({
     queryKey: [slug, "detail", id, pick],
@@ -189,6 +198,7 @@ export function DetailPanel({
                   key={section.title}
                   section={hide(section)}
                   onPick={setPick}
+                  onOpenFile={setDocument}
                   busy={isFetching}
                 />
               ))}
@@ -203,6 +213,16 @@ export function DetailPanel({
           ) : null}
         </div>
       </aside>
+
+      {document && (
+        <FileViewer
+          slug={slug}
+          itemId={id}
+          sha256={document.sha256}
+          name={document.name}
+          onClose={() => setDocument(null)}
+        />
+      )}
     </>
   );
 }
@@ -266,11 +286,14 @@ function ResizeHandle({ panel }: { panel: ReturnType<typeof usePanelWidth> }) {
 function SectionBlock({
   section,
   onPick,
+  onOpenFile,
   busy,
 }: {
   section: DetailSection;
   /** Выбрать находку для пересчёта себестоимости. */
   onPick?: (key: string) => void;
+  /** Открыть документ закупки во весь экран. */
+  onOpenFile?: (file: { sha256: string; name: string }) => void;
   busy?: boolean;
 }) {
   const empty = !section.fields.length && !section.table;
@@ -326,7 +349,11 @@ function SectionBlock({
           {section.fields.length > 0 && (
             <dl className="divide-y divide-hairline rounded-[8px] border border-hairline">
               {section.fields.map((field, index) => (
-                <FieldRow key={`${field.label}-${index}`} field={field} />
+                <FieldRow
+                  key={`${field.label}-${index}`}
+                  field={field}
+                  onOpenFile={onOpenFile}
+                />
               ))}
             </dl>
           )}
@@ -343,8 +370,23 @@ function SectionBlock({
   );
 }
 
-function FieldRow({ field }: { field: DetailField }) {
+/**
+ * Ссылка на документ закупки: «…/file/<sha256>».
+ *
+ * Опознаётся по виду адреса, а не по названию раздела: раздел переименуют, и
+ * документы снова начнут скачиваться, а заметит это тот, кто откроет ТЗ.
+ */
+const FILE_LINK = /\/file\/([0-9a-f]{64})$/;
+
+function FieldRow({
+  field,
+  onOpenFile,
+}: {
+  field: DetailField;
+  onOpenFile?: (file: { sha256: string; name: string }) => void;
+}) {
   const value = formatValue(field, field.format);
+  const файл = field.link ? FILE_LINK.exec(field.link) : null;
 
   // Без подписи — это замечание, а не поле: перед подачей их выводят списком.
   if (!field.label) {
@@ -367,7 +409,18 @@ function FieldRow({ field }: { field: DetailField }) {
           FIELD_TONE[field.tone] ?? "text-ink",
         )}
       >
-        {field.link ? (
+        {файл && onOpenFile ? (
+          // Документ открывается в платформе, а не уезжает в загрузки:
+          // скачанный файл открывается чужой программой, и обратно к строке
+          // человек возвращается руками. Скачать можно из самого окна.
+          <button
+            type="button"
+            onClick={() => onOpenFile({ sha256: файл[1], name: field.text })}
+            className="text-left text-series-1 underline decoration-series-1/30 underline-offset-2 hover:decoration-series-1"
+          >
+            {value}
+          </button>
+        ) : field.link ? (
           <a
             href={field.link}
             target="_blank"

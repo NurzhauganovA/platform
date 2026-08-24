@@ -300,3 +300,46 @@ export const worklists = {
   exportUrl: (slug: WorklistSlug) =>
     slug === "tender" ? "/api/tender/worklist/export" : `/api/${slug}/export`,
 };
+
+/** Кусок документа: заголовок, абзац или таблица. */
+export interface PreviewBlock {
+  kind: "heading" | "text" | "table";
+  text: string;
+  rows: string[][];
+}
+
+/** Лист книги. */
+export interface PreviewSheet {
+  title: string;
+  rows: string[][];
+  truncated: boolean;
+}
+
+/**
+ * Чем показать документ, не выходя из платформы.
+ *
+ * Приходит разобранным, а не размёткой: собери сервер HTML — и содержимое
+ * чужого документа стало бы кодом на нашей странице.
+ */
+export interface Preview {
+  kind: "pdf" | "image" | "document" | "sheet" | "none";
+  name: string;
+  size_bytes: number;
+  blocks: PreviewBlock[];
+  sheets: PreviewSheet[];
+  truncated: boolean;
+  /** Почему показать нельзя. Молчание читается как поломка платформы. */
+  note: string;
+}
+
+export const files = {
+  /** Разбор документа для показа. */
+  preview: (slug: WorklistSlug, id: string, sha256: string) =>
+    api.get<Preview>(
+      `/api/${slug}/item/${encodeURIComponent(id)}/file/${sha256}/view`,
+    ),
+
+  /** Сам файл: показывается в окне просмотра и скачивается по кнопке. */
+  url: (slug: WorklistSlug, id: string, sha256: string) =>
+    `/api/${slug}/item/${encodeURIComponent(id)}/file/${sha256}`,
+};

@@ -265,6 +265,41 @@ class LotMembersIn(BaseModel):
     positions: list[str] = []
 
 
+class PreviewBlockOut(BaseModel):
+    """Кусок документа: заголовок, абзац или таблица."""
+
+    kind: str
+    text: str = ""
+    rows: list[list[str]] = []
+
+
+class PreviewSheetOut(BaseModel):
+    """Лист книги."""
+
+    title: str
+    rows: list[list[str]] = []
+    truncated: bool = False
+
+
+class PreviewOut(BaseModel):
+    """Чем показать документ закупки, не выходя из платформы.
+
+    Отдаётся разобранное, а не размётка: собери сервер HTML — и содержимое
+    чужого документа стало бы кодом на нашей странице.
+    """
+
+    kind: str
+    """`pdf`, `image`, `document`, `sheet` или `none`."""
+
+    name: str = ""
+    size_bytes: int = 0
+    blocks: list[PreviewBlockOut] = []
+    sheets: list[PreviewSheetOut] = []
+    truncated: bool = False
+    note: str = ""
+    """Почему показать нельзя. Молчание читается как поломка платформы."""
+
+
 class DetailOut(BaseModel):
     """Разбор одной строки: откуда взялась цифра."""
 

@@ -22,7 +22,7 @@ from platform_api.config import Settings
 from platform_api.db.models import StoredFile
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
-from platform_api.modules import codes
+from platform_api.modules import codes, preview
 from platform_api.modules.detail import for_role
 from platform_api.modules.schemas import (
     ColumnOut,
@@ -30,6 +30,9 @@ from platform_api.modules.schemas import (
     LegendItem,
     LotMembersIn,
     LotOut,
+    PreviewBlockOut,
+    PreviewOut,
+    PreviewSheetOut,
     RowLotOut,
     RowOut,
     WorklistOut,
@@ -378,6 +381,53 @@ def get_worklist_item(
             detail="Такой закупки нет в отборе",
         )
     return DetailOut.model_validate(asdict(for_role(found, identity.role)))
+
+
+@router.get("/item/{item_id}/file/{sha256}/view", summary="Показать документ в платформе")
+def preview_case_file(
+    item_id: str,
+    sha256: str,
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_read] = None,
+) -> PreviewOut:
+    """Разбирает документ на то, чем его показать: абзацы, таблицы, листы.
+
+    Без этого из платформы приходится выходить: в браузере открывается только
+    PDF, а «.docx» и «.xlsx» уезжают в загрузки и открываются чужой
+    программой. За смену таких выходов десятки — ТЗ смотрят по каждой закупке.
+
+    Файл ищется в пределах своей закупки, той же проверкой, что и при
+    скачивании: путь приходит из базы ядра, но между «не может выйти за папку»
+    и «проверено, что не вышел» разница в одну строку.
+    """
+    file = worklist.find_file(item_id, sha256)
+    if file is None or not file.available:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Такого документа в этой закупке нет",
+        )
+    разобран = preview.build(file.path)
+    return PreviewOut(
+        kind=разобран.kind,
+        name=file.name,
+        size_bytes=file.size_bytes,
+        blocks=[
+            PreviewBlockOut(
+                kind=block.kind, text=block.text, rows=[list(row) for row in block.rows]
+            )
+            for block in разобран.blocks
+        ],
+        sheets=[
+            PreviewSheetOut(
+                title=sheet.title,
+                rows=[list(row) for row in sheet.rows],
+                truncated=sheet.truncated,
+            )
+            for sheet in разобран.sheets
+        ],
+        truncated=разобран.truncated,
+        note=разобран.note,
+    )
 
 
 @router.get("/item/{item_id}/file/{sha256}", summary="Открыть документ закупки")

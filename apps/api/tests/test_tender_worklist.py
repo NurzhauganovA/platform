@@ -931,3 +931,64 @@ def test_fail_kod_stroki_ne_menyaetsya_ot_novyh_zakupok() -> None:
     потом = склад.assign("tender", "TN", ["новая", "а", "б", "в"])
     assert потом["а"] == "TN-00001" and потом["в"] == "TN-00003"
     assert потом["новая"] == "TN-00004"
+
+
+def test_fail_dokument_word_razbiraetsya_na_abzacy_i_tablicy(tmp_path: Path) -> None:
+    """Word и Excel должны открываться в платформе, а не уезжать в загрузки.
+
+    Скачанный файл открывается чужой программой, и обратно к строке человек
+    возвращается руками. За смену таких выходов десятки — ТЗ смотрят по
+    каждой закупке.
+    """
+    from docx import Document as WordDocument
+    from platform_api.modules import preview
+
+    файл = tmp_path / "ТЗ.docx"
+    документ = WordDocument()
+    документ.add_heading("Техническое задание", level=1)
+    документ.add_paragraph("Пикобур 3-х лопастной с резцами PDC Ø190,5")
+    таблица = документ.add_table(rows=2, cols=2)
+    таблица.cell(0, 0).text = "Наименование"
+    таблица.cell(0, 1).text = "Кол-во"
+    таблица.cell(1, 0).text = "Пикобур"
+    таблица.cell(1, 1).text = "105"
+    документ.save(файл)
+
+    разобран = preview.build(файл)
+
+    assert разобран.kind == "document"
+    виды = [block.kind for block in разобран.blocks]
+    # По порядку, как в файле: таблица идёт за своим заголовком, и разложенные
+    # порознь они теряют смысл.
+    assert виды == ["heading", "text", "table"]
+    assert разобран.blocks[2].rows[0] == ("Наименование", "Кол-во")
+
+
+def test_fail_neizvestnyy_format_govorit_pochemu(tmp_path: Path) -> None:
+    """Старые «.doc» платформа не читает — и должна сказать это словами.
+
+    Пустое окно читается как поломка платформы, а не как «этот формат мы не
+    умеем».
+    """
+    from platform_api.modules import preview
+
+    файл = tmp_path / "Старое ТЗ.doc"
+    файл.write_bytes(b"\xd0\xcf\x11\xe0")
+
+    разобран = preview.build(файл)
+
+    assert разобран.kind == "none"
+    assert "doc" in разобран.note and "Word" in разобран.note
+
+
+def test_fail_bityy_fayl_ne_ronyaet_prosmotr(tmp_path: Path) -> None:
+    """Битый файл — повод сказать и предложить скачать, а не отдать пятисотую."""
+    from platform_api.modules import preview
+
+    файл = tmp_path / "Обрезано.docx"
+    файл.write_bytes(b"PK\x03\x04 truncated")
+
+    разобран = preview.build(файл)
+
+    assert разобран.kind == "none"
+    assert "повреждён" in разобран.note

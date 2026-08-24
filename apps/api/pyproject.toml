@@ -27,6 +27,11 @@ dependencies = [
     "typer>=0.12",
     "python-dotenv>=1.0",
     "email-validator>=2.2",
+    # Показ документов закупки прямо в платформе. Библиотеки те же, которыми
+    # их читают подключённые проекты, — в образе они уже есть, но зависеть от
+    # чужого пакета нельзя: отпадёт ядро, и просмотр отвалится вместе с ним.
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +56,9 @@ warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*"]
+# `openpyxl` идёт без описаний типов, а ставить их отдельным пакетом ради
+# одного модуля просмотра — лишняя зависимость в образе.
+module = ["arq.*", "openpyxl.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
