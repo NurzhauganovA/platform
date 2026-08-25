@@ -14,6 +14,7 @@ import pytest
 from conftest import FakeRedis
 from fastapi import APIRouter
 from platform_api.db.models import Job, JobStatus, Organization
+from platform_api.errors import SpokenError
 from platform_api.jobs.contract import JobSpec
 from platform_api.jobs.runner import JobRunner, collect_handlers, recover_stale_jobs
 from platform_api.jobs.service import JobService
@@ -90,7 +91,10 @@ def test_failed_job_does_not_stop_the_queue(
     """Один битый архив не должен останавливать разбор для всех остальных."""
 
     def handler(ctx: Any, **_: Any) -> dict[str, Any]:
-        raise RuntimeError("битый архив")
+        # Обработчик говорит человеку сам: текст написан для него и доходит
+        # как есть. Внутренние поломки так не делают — их текст заменяется
+        # фразой с кодом обращения, и на это есть свой тест.
+        raise SpokenError("битый архив")
 
     job = _queue(db, redis)
 
@@ -249,3 +253,27 @@ def test_duplicate_job_in_one_module_is_refused() -> None:
 
     with pytest.raises(ValueError, match="дважды"):
         collect_handlers(registry)
+
+
+def test_fail_vnutrennyaya_polomka_ne_pokazyvaetsya_slovami_pitona(
+    db: DbSession, factory: sessionmaker[DbSession], redis: FakeRedis, tmp_path: Any
+) -> None:
+    """Сотрудники — закупщики, а не программисты.
+
+    «TypeError: 'NoneType' object is not subscriptable» на экране выглядит
+    так, будто человек что-то испортил сам, и заканчивается звонком «у меня
+    всё сломалось». Наружу уходит фраза и код обращения, по которому запись
+    находится в журнале одним поиском.
+    """
+
+    def handler(ctx: Any, **_: Any) -> dict[str, Any]:
+        raise TypeError("'NoneType' object is not subscriptable")
+
+    job = _queue(db, redis)
+
+    _runner(factory, redis, tmp_path, handler).run(job.id)
+
+    db.refresh(job)
+    assert job.error is not None
+    assert "NoneType" not in job.error and "TypeError" not in job.error
+    assert "код" in job.error

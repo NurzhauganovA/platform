@@ -54,6 +54,11 @@ def engine() -> Iterator[Engine]:
         admin.dispose()
 
     test_engine = create_engine(test_url)
+    # Сносим и создаём заново, а не только создаём. `create_all` существующие
+    # таблицы не трогает: добавили колонку в модель — тесты валятся на
+    # «column does not exist», и выглядит это как ошибка в коде, хотя устарела
+    # база, оставшаяся от прошлого запуска.
+    Base.metadata.drop_all(test_engine)
     Base.metadata.create_all(test_engine)
     yield test_engine
     test_engine.dispose()

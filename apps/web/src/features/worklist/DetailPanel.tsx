@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   worklists,
@@ -20,6 +21,7 @@ import {
   type Lot,
   type Worklist,
   type WorklistSlug,
+  worksApi,
 } from "@/api/worklist";
 import { Badge, Button, Spinner, cx, money } from "@/ui";
 import { formatValue } from "./format";
@@ -130,6 +132,9 @@ export function DetailPanel({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {/* Взять в работу — рядом с закрытием: это последнее движение
+                после разбора, и искать его в другом месте экрана незачем. */}
+            {slug === "tender" && data && <TakeIntoWork id={id} />}
             {data?.url && (
               <a
                 href={data.url}
@@ -800,6 +805,44 @@ function LotCard({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * «Взять в работу»: лот уходит отделу разбора в раздел «В работе».
+ *
+ * Берётся лот целиком, а не одна позиция: поставить придётся все, и вести их
+ * порознь значит однажды выиграть выгодную и уйти в минус на соседней.
+ */
+function TakeIntoWork({ id }: { id: string }) {
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  const [problem, setProblem] = useState("");
+
+  const take = useMutation({
+    mutationFn: () => worksApi.take(id),
+    onSuccess: (work) => {
+      client.invalidateQueries({ queryKey: ["works"] });
+      navigate(`/tender/works/${work.id}`);
+    },
+    onError: (error) =>
+      setProblem(error instanceof Error ? error.message : "Не получилось"),
+  });
+
+  return (
+    <div className="flex items-center gap-2">
+      {problem && (
+        <span className="max-w-64 text-xs text-critical">{problem}</span>
+      )}
+      <Button
+        variant="primary"
+        onClick={() => take.mutate()}
+        disabled={take.isPending}
+        title="Передать лот в работу: подтвердить поставщиков и отправить снабжению"
+      >
+        {take.isPending ? "Берём…" : "Взять в работу"}
+      </Button>
+    </div>
   );
 }
 

@@ -283,7 +283,7 @@ def test_nedostupnoe_yadro_ne_pyatisotit(
     response = client.get(f"/api/{module}/worklist")
 
     assert response.status_code == 503
-    assert "недоступн" in response.json()["detail"]
+    assert "не отвечает" in response.json()["detail"]
 
 
 # --- действия --------------------------------------------------------------

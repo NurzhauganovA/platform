@@ -340,3 +340,112 @@ __all__ = [
     "StartedJobOut",
     "WorklistOut",
 ]
+
+
+# --- лот в работе ----------------------------------------------------------
+
+
+class WorkOptionOut(BaseModel):
+    """Где купить позицию — один вариант.
+
+    `source` говорит, чьё это суждение: `found` нашла модель, `asked` — заявка
+    разбора «найдите вот это», `supply` добавило снабжение. Пустые поля у
+    заявки не недоделка, а смысл.
+    """
+
+    id: str
+    source: str
+    name: str = ""
+    supplier: str = ""
+    marketplace: str = ""
+    country: str = ""
+    url: str = ""
+    price: float | None = None
+    delivery_days: int | None = None
+    note: str = ""
+    chosen: bool = False
+    """Разбор подтвердил этот вариант: снабжению его проверять, а не искать
+    заново."""
+
+
+class WorkPositionOut(BaseModel):
+    """Позиция работы: что поставить и где это брать."""
+
+    id: str
+    code: str = ""
+    title: str
+    quantity: float | None = None
+    unit: str = ""
+    total: float | None = None
+    """Сумма закупки. Снабжению не уходит: сравнивать с ней — работа разбора."""
+
+    options: list[WorkOptionOut] = []
+    documents: list[DetailField] = []
+    """Техническое задание и прочие бумаги позиции — то, по чему снабжение
+    и поймёт, что именно искать."""
+
+
+class WorkOut(BaseModel):
+    """Лот в работе целиком."""
+
+    id: str
+    code: str
+    title: str
+    customer: str = ""
+    stage: str
+    """`analysis` — у разбора, `supply` — у снабжения, `returned` — вернулось."""
+
+    analysis_note: str = ""
+    supply_note: str = ""
+    sent_at: str | None = None
+    positions: list[WorkPositionOut] = []
+    total: float | None = None
+    cost: float | None = None
+    """Себестоимость по подтверждённым вариантам. Считается по тем, у кого
+    есть цена: остальные ещё не выяснены, и молчаливый ноль сделал бы лот
+    выгоднее, чем он есть."""
+
+    priced: int = 0
+    """По скольким позициям цена уже известна."""
+
+
+class WorkListItemOut(BaseModel):
+    """Строка списка работ."""
+
+    id: str
+    code: str
+    title: str
+    customer: str = ""
+    stage: str
+    positions: int = 0
+    total: float | None = None
+    sent_at: str | None = None
+    waiting_days: int | None = None
+    """Сколько дней лот лежит у нынешнего отдела. Главный вопрос по списку —
+    не «что там», а «что стоит»."""
+
+
+class WorkOptionIn(BaseModel):
+    """Поля варианта. Не переданное не трогается: правка приходит по одному
+    полю, и поправленная цена не должна обнулять ссылку."""
+
+    name: str | None = None
+    supplier: str | None = None
+    marketplace: str | None = None
+    country: str | None = None
+    url: str | None = None
+    price: float | None = None
+    delivery_days: int | None = None
+    note: str | None = None
+
+
+class WorkAskIn(BaseModel):
+    """Заявка снабжению: что искать."""
+
+    name: str
+
+
+class WorkHandOverIn(BaseModel):
+    """Что сказать другому отделу при передаче."""
+
+    note: str = ""

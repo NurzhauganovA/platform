@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_money, requires_read
 from platform_api.config import Settings
+from platform_api.errors import broke, unavailable
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.modules.detail import for_role
@@ -64,10 +65,7 @@ def get_worklist(
     except Exception as exc:
         # База ядра может быть ещё не создана — это не поломка платформы,
         # а состояние, о котором должна сказать сводка готовности.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Данные SKStore недоступны: {exc}",
-        ) from exc
+        raise unavailable("Закупы SKStore", exc) from exc
 
     table = build_table(
         core.focus_columns(),
@@ -124,10 +122,7 @@ def get_detail(
     try:
         found = core.detail(item_id)
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Данные недоступны: {exc}",
-        ) from exc
+        raise unavailable("Разбор закупа", exc) from exc
 
     if found is None:
         raise HTTPException(
@@ -226,10 +221,7 @@ def export(
     try:
         path = core.export_workbook()
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Книга не собралась: {exc}",
-        ) from exc
+        raise broke("Книга не собралась", exc) from exc
 
     return FileResponse(
         path,

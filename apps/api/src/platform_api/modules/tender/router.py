@@ -20,6 +20,7 @@ from platform_api.auth.dependencies import (
 )
 from platform_api.config import Settings
 from platform_api.db.models import StoredFile
+from platform_api.errors import broke, unavailable
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.modules import codes, preview
@@ -61,10 +62,12 @@ from platform_api.modules.tender.schemas import (
     UploadedFileOut,
     UploadPlan,
 )
+from platform_api.modules.tender.works_router import router as works_router
 from platform_api.storage import ChecksumMismatchError, FileStorage, FileTooLargeError
 
 router = APIRouter(prefix="/tender", tags=["Тендеры"])
 router.include_router(cases_router)
+router.include_router(works_router)
 router.include_router(comparison_router)
 
 
@@ -100,10 +103,7 @@ def get_worklist(
     except Exception as exc:
         # База ядра может быть недоступна или пуста — это не поломка
         # платформы, а состояние, о котором должна сказать сводка готовности.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Данные тендерного разбора недоступны: {exc}",
-        ) from exc
+        raise unavailable("Отбор закупок", exc) from exc
 
     marked = lots.membership(db, identity.organization.id)
     порядок = _grouped(data.rows, marked)
@@ -370,10 +370,7 @@ def get_worklist_item(
     try:
         found = worklist.detail(item_id, pick, members=состав, money=money)
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Данные недоступны: {exc}",
-        ) from exc
+        raise unavailable("Разбор закупки", exc) from exc
 
     if found is None:
         raise HTTPException(
@@ -454,10 +451,7 @@ def get_case_file(
     try:
         found = worklist.find_file(item_id, sha256)
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Данные недоступны: {exc}",
-        ) from exc
+        raise unavailable("Разбор закупки", exc) from exc
 
     if found is None:
         raise HTTPException(
@@ -501,10 +495,7 @@ def export_worklist(
     try:
         path = worklist.export_workbook()
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Книга не собралась: {exc}",
-        ) from exc
+        raise broke("Книга не собралась", exc) from exc
 
     return FileResponse(
         path,

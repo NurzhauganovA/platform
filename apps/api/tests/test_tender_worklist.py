@@ -992,3 +992,131 @@ def test_fail_bityy_fayl_ne_ronyaet_prosmotr(tmp_path: Path) -> None:
 
     assert разобран.kind == "none"
     assert "повреждён" in разобран.note
+
+
+# --- лот в работе между отделами -------------------------------------------
+
+
+@pytest.fixture
+def organization(db: Any) -> Any:
+    """Организация, которой принадлежит работа."""
+    import uuid as _uuid
+
+    from platform_api.db.models import Organization
+
+    org = Organization(name="Fintend", slug=f"fintend-{_uuid.uuid4().hex[:6]}")
+    db.add(org)
+    db.flush()
+    return org
+
+
+def _work(db: Any, org: Any, позиций: int = 2) -> Any:
+    from platform_api.modules.tender import works
+
+    return works.take(
+        db,
+        org.id,
+        None,
+        code="TN-00042",
+        title="Пикобуры",
+        customer="АО «Волковгеология»",
+        positions=[
+            works.Draft(
+                folder_path="/архив/Пикобуры",
+                title=f"Пикобур Ø{190 + n}",
+                code=f"TN-0004{n}",
+                quantity=Decimal(5),
+                unit="шт",
+                total=Decimal(1000),
+                options=(
+                    {"name": "Пикобур", "supplier": "Первый", "price": Decimal(100)},
+                    {"name": "Пикобур", "supplier": "Второй", "price": Decimal(90)},
+                ),
+            )
+            for n in range(позиций)
+        ],
+    )
+
+
+def test_fail_zakaz_poiska_ubiraet_otvergnutye_nahodki(db: Any, organization: Any) -> None:
+    """«Найденное не подходит, поищите сами» — и найденное уходит.
+
+    Иначе снабжение потратит день на то, что разбор уже посмотрел и отверг, —
+    а ради того, чтобы этого не было, процесс и заводили.
+    """
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    позиция = work.positions[0]
+    assert len(позиция.options) == 2
+
+    works.ask(db, work, позиция.id, "Пикобур PDC Ø215, 3 лопасти")
+    db.refresh(позиция)
+
+    остались = [option.source.value for option in позиция.options]
+    assert остались == ["asked"]
+
+
+def test_fail_podtverzhdennyy_variant_perezhivaet_zakaz_poiska(db: Any, organization: Any) -> None:
+    """Подтверждённого поставщика заказ поиска не стирает.
+
+    Разбор может и подтвердить одного, и попросить поискать ещё: первое —
+    решение, второе — просьба, и одно не отменяет другого.
+    """
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    позиция = work.positions[0]
+    works.choose(db, work, позиция.options[0].id)
+    db.refresh(позиция)
+    assert len(позиция.options) == 1 and позиция.options[0].chosen
+
+    works.ask(db, work, позиция.id, "Ещё вариант поищите")
+    db.refresh(позиция)
+
+    assert sorted(option.source.value for option in позиция.options) == ["asked", "found"]
+
+
+def test_fail_lot_ne_uhodit_s_nemoy_poziciey(db: Any, organization: Any) -> None:
+    """Позиция без единого варианта — это молчание.
+
+    Снабжение получит строку и не поймёт, искать по ней или она попала
+    случайно. Спросить об этом оно сможет только письмом, а ради письма
+    процесс и заводили.
+    """
+    import pytest as _pytest
+    from platform_api.errors import SpokenError
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    for option in list(work.positions[1].options):
+        works.drop(db, work, option.id)
+    db.refresh(work)
+
+    with _pytest.raises(SpokenError, match="не выбран поставщик"):
+        works.hand_over(db, work, "")
+
+
+def test_fail_snabzhenie_ne_vidit_summ_zakupki(db: Any, organization: Any) -> None:
+    """Снабжению суммы не уходят даже в ответе.
+
+    По ним считают маржу, а это не его работа и не его сведения. Спрятать в
+    браузере и отдать в JSON — значит отдать.
+    """
+    from platform_api.db.models import Role
+    from platform_api.modules.tender import works
+    from platform_api.modules.tender.works_router import _work_out
+
+    work = _work(db, organization)
+    works.choose(db, work, work.positions[0].options[0].id)
+    works.choose(db, work, work.positions[1].options[0].id)
+    works.hand_over(db, work, "проверьте")
+
+    у_снабжения = _work_out(work, Role.BUYER)
+    assert у_снабжения.total is None and у_снабжения.cost is None
+    assert all(position.total is None for position in у_снабжения.positions)
+    # А «где купить» — уходит: без него работать нечем.
+    assert all(position.options for position in у_снабжения.positions)
+
+    у_razbora = _work_out(work, Role.ANALYST)
+    assert у_razbora.total is not None and у_razbora.cost is not None

@@ -33,6 +33,7 @@ module = ModuleSpec(
     # решает, что сломался вход, и перестаёт верить остальным пунктам тоже.
     nav=(
         NavItem(title="Отбор закупок", path="/tender/worklist", icon="target"),
+        NavItem(title="В работе", path="/tender/works", icon="briefcase"),
         NavItem(title="Аналитика", path="/tender/analytics", icon="chart"),
     ),
     jobs=jobs,

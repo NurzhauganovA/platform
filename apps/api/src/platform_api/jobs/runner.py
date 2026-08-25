@@ -22,6 +22,7 @@ from sqlalchemy.orm import sessionmaker
 
 from platform_api.db.base import utcnow
 from platform_api.db.models import Job, JobStatus
+from platform_api.errors import job_failure
 from platform_api.jobs.contract import CancelledError, JobSpec
 from platform_api.jobs.service import JobService, stale_running_jobs
 from platform_api.logging import get_logger
@@ -126,8 +127,11 @@ class JobRunner:
                 logger.info("Задача отменена", job_id=str(job_id))
                 return
             except Exception as exc:
-                logger.exception("Задача упала", job_id=str(job_id))
-                service.fail(job_id, f"{type(exc).__name__}: {exc}")
+                # Человеку — фраза, которую можно прочитать; трассировка — в
+                # журнал. «TypeError: 'NoneType' object is not subscriptable»
+                # на экране закупщика выглядит так, будто он что-то испортил
+                # сам, и заканчивается звонком «у меня всё сломалось».
+                service.fail(job_id, job_failure(exc))
                 return
 
             payload = dict(result or {})

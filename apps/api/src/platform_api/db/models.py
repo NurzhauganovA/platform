@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -25,6 +26,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -260,6 +262,151 @@ class AuditEntry(Base, UUIDPrimaryKey):
     created_at: Mapped[datetime] = mapped_column(index=True)
 
 
+class WorkStage(StrEnum):
+    """У кого сейчас лот, взятый в работу.
+
+    Не «статус задачи», а именно «у кого на столе»: процесс идёт между двумя
+    отделами, и главный вопрос по любому лоту — чьего хода ждут.
+    """
+
+    ANALYSIS = "analysis"
+    """У отдела разбора: выбирает поставщиков, отмечает, что искать снабжению."""
+
+    SUPPLY = "supply"
+    """У снабжения: проверяет цены и ссылки, ищет то, чего не нашли, ставит
+    сроки поставки."""
+
+    RETURNED = "returned"
+    """Снабжение вернуло разбору: цены подтверждены, можно готовить КП."""
+
+
+class OptionSource(StrEnum):
+    """Откуда взялся вариант закупки. По нему видно, чьё это суждение."""
+
+    FOUND = "found"
+    """Нашла модель при разборе — цена с площадки, требует проверки."""
+
+    ASKED = "asked"
+    """Разбор попросил снабжение найти: есть только название товара."""
+
+    SUPPLY = "supply"
+    """Добавило снабжение — то, что оно нашло само."""
+
+
+class TenderWork(Base, UUIDPrimaryKey, Timestamps):
+    """Лот, взятый в работу: сквозной процесс между отделами.
+
+    Отдельно от лота, а не полем в нём. Лот — это связь позиций в отборе, её
+    пересобирают и распускают; работа — событие с историей, и терять её вместе
+    с изменением состава нельзя.
+
+    Позиции переписываются в работу целиком, а не ссылкой. Отбор
+    пересобирается при каждом разборе, названия у позиций меняются — а работа
+    должна остаться той же, с теми же позициями, по которым её и взяли.
+    """
+
+    __tablename__ = "tender_works"
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    code: Mapped[str] = mapped_column(String(32), index=True)
+    """Код работы: «TN-00042» открытой позиции. По нему её и зовут."""
+
+    title: Mapped[str] = mapped_column(String(512))
+    customer: Mapped[str] = mapped_column(String(255), default="")
+
+    stage: Mapped[WorkStage] = mapped_column(
+        Enum(WorkStage, native_enum=False, length=16), default=WorkStage.ANALYSIS, index=True
+    )
+
+    analysis_note: Mapped[str] = mapped_column(Text, default="")
+    """Что разбор просит у снабжения — словами, помимо самих позиций."""
+
+    supply_note: Mapped[str] = mapped_column(Text, default="")
+    """Что снабжение отвечает разбору."""
+
+    sent_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    """Когда лот ушёл другому отделу. По нему видно, сколько он лежит."""
+
+    positions: Mapped[list[TenderWorkPosition]] = relationship(
+        back_populates="work", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class TenderWorkPosition(Base, UUIDPrimaryKey, Timestamps):
+    """Позиция в работе — то, что придётся поставить."""
+
+    __tablename__ = "tender_work_positions"
+
+    work_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tender_works.id", ondelete="CASCADE"), index=True
+    )
+
+    folder_path: Mapped[str] = mapped_column(String(1024))
+    title: Mapped[str] = mapped_column(String(512))
+    code: Mapped[str] = mapped_column(String(32), default="")
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)
+    unit: Mapped[str] = mapped_column(String(32), default="")
+    total: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    """Сумма закупки по позиции — то, с чем сравнивают себестоимость."""
+
+    ordering: Mapped[int] = mapped_column(Integer, default=0)
+
+    options: Mapped[list[TenderWorkOption]] = relationship(
+        back_populates="position", cascade="all, delete-orphan", lazy="selectin"
+    )
+    work: Mapped[TenderWork] = relationship(back_populates="positions")
+
+
+class TenderWorkOption(Base, UUIDPrimaryKey, Timestamps):
+    """Где купить эту позицию — один вариант.
+
+    Отобранные разбором находки, его же заявки «найдите вот это» и то, что
+    добавило снабжение, — всё это варианты. Различает их `source`: по нему
+    видно, чьё это суждение и насколько ему верить.
+    """
+
+    __tablename__ = "tender_work_options"
+
+    position_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tender_work_positions.id", ondelete="CASCADE"), index=True
+    )
+    source: Mapped[OptionSource] = mapped_column(Enum(OptionSource, native_enum=False, length=16))
+
+    name: Mapped[str] = mapped_column(String(512), default="")
+    """Что именно покупаем. У заявки снабжению это единственное заполненное
+    поле: остальное они и должны выяснить."""
+
+    supplier: Mapped[str] = mapped_column(String(255), default="")
+    marketplace: Mapped[str] = mapped_column(String(255), default="")
+    country: Mapped[str] = mapped_column(String(64), default="")
+    url: Mapped[str] = mapped_column(String(2048), default="")
+    price: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    delivery_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Через сколько дней товар у нас. Заполняет снабжение — до него этого
+    никто не знает, а от срока зависит, беремся ли мы вообще."""
+
+    note: Mapped[str] = mapped_column(Text, default="")
+
+    chosen: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """Разбор подтвердил этот вариант.
+
+    Снабжению это главный признак: подтверждённого поставщика проверяют, а не
+    ищут заново. Без отметки оба отдела делают одну и ту же работу дважды.
+    """
+
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    position: Mapped[TenderWorkPosition] = relationship(back_populates="options")
+
+
 class WorklistCode(Base, UUIDPrimaryKey, Timestamps):
     """Постоянный код строки рабочего списка: «TN-00042».
 
@@ -353,12 +500,17 @@ __all__ = [
     "Job",
     "JobStatus",
     "Membership",
+    "OptionSource",
     "Organization",
     "Role",
     "Session",
     "StoredFile",
     "TenderLot",
     "TenderLotPosition",
+    "TenderWork",
+    "TenderWorkOption",
+    "TenderWorkPosition",
     "User",
+    "WorkStage",
     "WorklistCode",
 ]

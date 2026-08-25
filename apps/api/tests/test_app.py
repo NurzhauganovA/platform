@@ -20,6 +20,7 @@ def test_modules_describe_themselves(client: TestClient) -> None:
     # живы, но разбор пока идёт на машине тендерщика.
     assert [item["path"] for item in tender["nav"]] == [
         "/tender/worklist",
+        "/tender/works",
         "/tender/analytics",
     ]
 

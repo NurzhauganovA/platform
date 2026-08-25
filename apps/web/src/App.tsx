@@ -22,6 +22,8 @@ import { LoginPage } from "@/features/auth/LoginPage";
 import { BargainsPage } from "@/features/worklist/BargainsPage";
 import { PreordersPage } from "@/features/worklist/PreordersPage";
 import { TenderPage } from "@/features/worklist/TenderPage";
+import { WorkPage } from "@/features/works/WorkPage";
+import { WorksPage } from "@/features/works/WorksPage";
 import {
   BargainsAnalytics,
   PreordersAnalytics,
@@ -79,6 +81,8 @@ function Routing() {
         <Route path="skstore/analytics" element={<BargainsAnalytics />} />
         <Route path="omarket/analytics" element={<PreordersAnalytics />} />
         <Route path="tender/analytics" element={<TenderAnalytics />} />
+        <Route path="tender/works" element={<WorksPage />} />
+        <Route path="tender/works/:id" element={<WorkPage role={me.role} />} />
         {/*
           Заведение закупки папкой убрано с глаз, а не удалено: страницы
           (`features/tender/CasesPage` и соседние) и эндпоинты

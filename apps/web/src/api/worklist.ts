@@ -343,3 +343,111 @@ export const files = {
   url: (slug: WorklistSlug, id: string, sha256: string) =>
     `/api/${slug}/item/${encodeURIComponent(id)}/file/${sha256}`,
 };
+
+// --- лот в работе ----------------------------------------------------------
+
+/** У кого сейчас лот. Не «статус задачи», а «чьего хода ждут». */
+export type WorkStage = "analysis" | "supply" | "returned";
+
+/** Откуда взялся вариант: нашла модель, попросил разбор, добавило снабжение. */
+export type OptionSource = "found" | "asked" | "supply";
+
+export interface WorkOption {
+  id: string;
+  source: OptionSource;
+  name: string;
+  supplier: string;
+  marketplace: string;
+  country: string;
+  url: string;
+  price: number | null;
+  delivery_days: number | null;
+  note: string;
+  /** Разбор подтвердил: снабжению его проверять, а не искать заново. */
+  chosen: boolean;
+}
+
+export interface WorkPosition {
+  id: string;
+  code: string;
+  title: string;
+  quantity: number | null;
+  unit: string;
+  /** Сумма закупки. Снабжению не приходит вовсе. */
+  total: number | null;
+  options: WorkOption[];
+  documents: DetailField[];
+}
+
+export interface Work {
+  id: string;
+  code: string;
+  title: string;
+  customer: string;
+  stage: WorkStage;
+  analysis_note: string;
+  supply_note: string;
+  sent_at: string | null;
+  positions: WorkPosition[];
+  total: number | null;
+  cost: number | null;
+  priced: number;
+}
+
+export interface WorkListItem {
+  id: string;
+  code: string;
+  title: string;
+  customer: string;
+  stage: WorkStage;
+  positions: number;
+  total: number | null;
+  sent_at: string | null;
+  /** Сколько дней лот лежит у нынешнего отдела. */
+  waiting_days: number | null;
+}
+
+/** Поля варианта. Не переданное не трогается: правка идёт по одному полю. */
+export interface OptionFields {
+  name?: string;
+  supplier?: string;
+  marketplace?: string;
+  country?: string;
+  url?: string;
+  price?: number | null;
+  delivery_days?: number | null;
+  note?: string;
+}
+
+export const worksApi = {
+  list: () => api.get<WorkListItem[]>("/api/tender/works"),
+
+  one: (id: string) => api.get<Work>(`/api/tender/works/${id}`),
+
+  /** Взять лот, в котором лежит эта позиция, в работу. */
+  take: (itemId: string) =>
+    api.post<Work>(`/api/tender/item/${encodeURIComponent(itemId)}/work`),
+
+  choose: (workId: string, optionId: string) =>
+    api.post<Work>(`/api/tender/works/${workId}/options/${optionId}/choose`),
+
+  ask: (workId: string, positionId: string, name: string) =>
+    api.post<Work>(`/api/tender/works/${workId}/positions/${positionId}/ask`, {
+      name,
+    }),
+
+  addOption: (workId: string, positionId: string, fields: OptionFields) =>
+    api.post<Work>(
+      `/api/tender/works/${workId}/positions/${positionId}/options`,
+      fields,
+    ),
+
+  editOption: (workId: string, optionId: string, fields: OptionFields) =>
+    api.patch<Work>(`/api/tender/works/${workId}/options/${optionId}`, fields),
+
+  dropOption: (workId: string, optionId: string) =>
+    api.delete<Work>(`/api/tender/works/${workId}/options/${optionId}`),
+
+  handOver: (workId: string, note: string) =>
+    api.post<Work>(`/api/tender/works/${workId}/hand-over`, { note }),
+};
