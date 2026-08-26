@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
 
+from platform_api.auth.dependencies import CurrentUser
 from platform_api.auth.router import router as auth_router
 from platform_api.config import Settings, get_settings
 from platform_api.db.session import create_db_engine, create_session_factory
@@ -106,8 +107,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @api.get("/modules", summary="Подключённые проекты", tags=["Платформа"])
-    def modules() -> list[ModuleOut]:
-        """То, из чего оболочка строит навигацию."""
+    def modules(identity: CurrentUser) -> list[ModuleOut]:
+        """То, из чего оболочка строит навигацию.
+
+        Пункты отбираются по роли здесь, а не в браузере. Снабжению незачем
+        видеть отбор закупок и аналитику: там деньги, которых ему всё равно не
+        покажут, и раздел, в который он зайдёт один раз и больше не вернётся.
+
+        Защита это не заменяет — права проверяются на эндпоинтах. Здесь речь
+        про порядок на экране: пункт, ведущий в закрытый или бесполезный
+        раздел, человек нажимает ровно один раз, а потом перестаёт верить
+        всему меню.
+        """
         return [
             ModuleOut(
                 slug=module.slug,
@@ -116,6 +127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 nav=[
                     {"title": item.title, "path": item.path, "icon": item.icon}
                     for item in module.nav
+                    if not item.roles or identity.role.value in item.roles
                 ],
             )
             for module in registry.all()

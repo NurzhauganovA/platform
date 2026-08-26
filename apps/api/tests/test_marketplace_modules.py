@@ -338,9 +338,10 @@ def test_zadacha_zapisyvaetsya_za_svoim_modulem(
 # --- меню ------------------------------------------------------------------
 
 
-def test_oba_razdela_est_v_menyu(client: TestClient) -> None:
+def test_oba_razdela_est_v_menyu(client: TestClient, db: DbSession) -> None:
     """Меню строится из `/api/modules`: захардкоженный пункт означает, что
     контракт модулей сломан."""
+    sign_in(db, client, Role.ANALYST)
     modules = {item["slug"]: item for item in client.get("/api/modules").json()}
 
     assert modules["skstore"]["nav"][0]["path"] == "/skstore/bargains"
@@ -349,7 +350,7 @@ def test_oba_razdela_est_v_menyu(client: TestClient) -> None:
     assert list(modules) == ["skstore", "omarket", "tender"]
 
 
-def test_v_menyu_net_punktov_kotorye_nikuda_ne_vedut(client: TestClient) -> None:
+def test_v_menyu_net_punktov_kotorye_nikuda_ne_vedut(client: TestClient, db: DbSession) -> None:
     """Пункт, молча уводящий на чужой раздел, хуже отсутствующего: человек
     решает, что сломался вход, и перестаёт верить остальным пунктам тоже.
 
@@ -358,6 +359,7 @@ def test_v_menyu_net_punktov_kotorye_nikuda_ne_vedut(client: TestClient) -> None
     забыли бы про него ровно тогда, когда он нужен: пункт добавили, страницу
     не завели, тест продолжает зеленеть.
     """
+    sign_in(db, client, Role.ANALYST)
     app_tsx = Path(__file__).resolve().parents[3] / "apps/web/src/App.tsx"
     if not app_tsx.is_file():
         pytest.skip("фронтенд не рядом — сверять меню не с чем")
@@ -643,3 +645,17 @@ def test_fail_ischerpannyy_srok_ne_prosit_podat() -> None:
     assert left(5) == ""
     assert "меньше чем через три часа" in left(2)
     assert "приём закрыт" in left(-1)
+
+
+def test_fail_snabzhenie_ne_vidit_chuzhih_razdelov(client: TestClient, db: DbSession) -> None:
+    """Отбор и аналитика — работа отдела разбора.
+
+    Снабжению там нечего делать: суммы и маржа ему не показываются, а без них
+    отбор пуст. Пункт, ведущий в бесполезный раздел, человек нажимает ровно
+    один раз, а потом перестаёт верить всему меню.
+    """
+    sign_in(db, client, Role.BUYER)
+    tender = next(item for item in client.get("/api/modules").json() if item["slug"] == "tender")
+
+    # Остался общий стол двух отделов — и только он.
+    assert [item["path"] for item in tender["nav"]] == ["/tender/works"]

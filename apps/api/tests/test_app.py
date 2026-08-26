@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi.testclient import TestClient
+from platform_api.db.models import Role
+from tests.conftest import sign_in
 
 
-def test_modules_describe_themselves(client: TestClient) -> None:
+def test_modules_describe_themselves(client: TestClient, db: Any) -> None:
     """Оболочка строит меню по этому ответу, а не по своему списку разделов."""
+    sign_in(db, client, Role.ANALYST)
     modules = client.get("/api/modules").json()
 
     tender = next(item for item in modules if item["slug"] == "tender")

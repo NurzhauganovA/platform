@@ -32,9 +32,22 @@ module = ModuleSpec(
     # который молча уводит на чужой раздел, хуже отсутствующего: человек
     # решает, что сломался вход, и перестаёт верить остальным пунктам тоже.
     nav=(
-        NavItem(title="Отбор закупок", path="/tender/worklist", icon="target"),
+        # Отбор и аналитика — работа отдела разбора. Снабжению там нечего
+        # делать: суммы и маржа ему не показываются, а без них отбор пуст.
+        # «В работе» видят оба — это их общий стол.
+        NavItem(
+            title="Отбор закупок",
+            path="/tender/worklist",
+            icon="target",
+            roles=("admin", "analyst"),
+        ),
         NavItem(title="В работе", path="/tender/works", icon="briefcase"),
-        NavItem(title="Аналитика", path="/tender/analytics", icon="chart"),
+        NavItem(
+            title="Аналитика",
+            path="/tender/analytics",
+            icon="chart",
+            roles=("admin", "analyst"),
+        ),
     ),
     jobs=jobs,
     health=health.check,
