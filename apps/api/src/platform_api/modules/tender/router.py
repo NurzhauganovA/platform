@@ -36,10 +36,11 @@ from platform_api.modules.schemas import (
     PreviewSheetOut,
     RowLotOut,
     RowOut,
+    RowWorkOut,
     WorklistOut,
 )
 from platform_api.modules.table import build_table, sees_money
-from platform_api.modules.tender import core, lots, worklist
+from platform_api.modules.tender import core, lots, worklist, works
 from platform_api.modules.tender.cases import router as cases_router
 from platform_api.modules.tender.columns import (
     CODE_PREFIX,
@@ -106,7 +107,8 @@ def get_worklist(
         raise unavailable("Отбор закупок", exc) from exc
 
     marked = lots.membership(db, identity.organization.id)
-    порядок = _grouped(data.rows, marked)
+    в_работе = works.in_progress(db, identity.organization.id)
+    порядок = _grouped(data.rows, marked, в_работе)
     коды = codes.assign(
         db,
         "tender",
@@ -134,7 +136,7 @@ def get_worklist(
     return WorklistOut(
         sheet=worklist.sheet_title(),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=_with_lots(table.rows, порядок, marked, коды, money=money),
+        rows=_with_lots(table.rows, порядок, marked, коды, в_работе, money=money),
         legend=[
             LegendItem(tone=tone, title=title, hint=hint) for tone, title, hint in worklist.legend()
         ],
@@ -155,8 +157,12 @@ def get_worklist(
     )
 
 
-def _grouped(rows: Sequence[Any], marked: dict[tuple[str, str], str]) -> list[Any]:
-    """Ставит строки одного лота подряд, на место самой высокой из них.
+def _grouped(
+    rows: Sequence[Any],
+    marked: dict[tuple[str, str], str],
+    в_работе: dict[tuple[str, str], Any],
+) -> list[Any]:
+    """Ставит строки одного лота подряд, а взятые в работу — в конец списка.
 
     Порядок задаёт ядро — по выгоде, — и позиции лота он разбрасывает по всему
     списку: добавленная вручную из чужой папки оказывается через двести строк
@@ -173,17 +179,25 @@ def _grouped(rows: Sequence[Any], marked: dict[tuple[str, str], str]) -> list[An
             свои.setdefault(имя, []).append(item)
 
     порядок: list[Any] = []
+    взятые: list[Any] = []
     показанные: set[str] = set()
     for item in rows:
-        имя = marked.get((item.row.folder_path or "", item.row.title))
+        ключ = (item.row.folder_path or "", item.row.title)
+        имя = marked.get(ключ)
+        # Взятое в работу опускается вниз: решение по нему принято, а место в
+        # начале списка занято тем, что уже не выбирают. Наверху должно стоять
+        # то, по чему ещё предстоит решить.
+        куда = взятые if ключ in в_работе else порядок
         if имя is None:
-            порядок.append(item)
+            куда.append(item)
             continue
         if имя in показанные:
             continue
         показанные.add(имя)
-        порядок.extend(свои[имя])
-    return порядок
+        # Лот целиком идёт туда же, куда его первая позиция: половина лота
+        # наверху и половина внизу — это два лота на вид.
+        куда.extend(свои[имя])
+    return порядок + взятые
 
 
 def _with_lots(
@@ -191,6 +205,7 @@ def _with_lots(
     source: Sequence[Any],
     marked: dict[tuple[str, str], str],
     коды: dict[str, str],
+    в_работе: dict[tuple[str, str], Any],
     *,
     money: bool,
 ) -> list[RowOut]:
@@ -216,7 +231,11 @@ def _with_lots(
     for row, item in zip(rows, source, strict=True):
         out = RowOut.model_validate(asdict(row))
         out.code = коды.get(worklist.row_id(item), "")
-        имя = marked.get((item.row.folder_path or "", item.row.title))
+        ключ = (item.row.folder_path or "", item.row.title)
+        взята = в_работе.get(ключ)
+        if взята is not None:
+            out.work = RowWorkOut(id=взята.id, code=взята.code, stage=взята.stage)
+        имя = marked.get(ключ)
         итог = итоги.get(имя or "")
         if имя is not None and итог is not None and итог[0] > 1:
             позиций, сумма, себестоимость = итог

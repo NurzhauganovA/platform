@@ -19,6 +19,7 @@ import {
   type DetailField,
   type DetailSection,
   type Lot,
+  type RowWork,
   type Worklist,
   type WorklistSlug,
   worksApi,
@@ -39,11 +40,14 @@ const FIELD_TONE: Record<string, string> = {
 export function DetailPanel({
   slug,
   id,
+  work,
   onClose,
   onOpen,
 }: {
   slug: WorklistSlug;
   id: string;
+  /** Взята ли эта строка в работу. Приходит из списка: там она уже есть. */
+  work: RowWork | null;
   onClose: () => void;
   /** Открыть другую строку — переключение между позициями лота. */
   onOpen: (id: string) => void;
@@ -134,7 +138,7 @@ export function DetailPanel({
           <div className="flex shrink-0 items-center gap-2">
             {/* Взять в работу — рядом с закрытием: это последнее движение
                 после разбора, и искать его в другом месте экрана незачем. */}
-            {slug === "tender" && data && <TakeIntoWork id={id} />}
+            {slug === "tender" && data && <TakeIntoWork id={id} work={work} />}
             {data?.url && (
               <a
                 href={data.url}
@@ -814,7 +818,14 @@ function LotCard({
  * Берётся лот целиком, а не одна позиция: поставить придётся все, и вести их
  * порознь значит однажды выиграть выгодную и уйти в минус на соседней.
  */
-function TakeIntoWork({ id }: { id: string }) {
+function TakeIntoWork({
+  id,
+  work,
+}: {
+  id: string;
+  /** Уже взято — тогда не берём заново, а показываем дорогу к лоту. */
+  work: RowWork | null;
+}) {
   const navigate = useNavigate();
   const client = useQueryClient();
   const [problem, setProblem] = useState("");
@@ -828,6 +839,19 @@ function TakeIntoWork({ id }: { id: string }) {
     onError: (error) =>
       setProblem(error instanceof Error ? error.message : "Не получилось"),
   });
+
+  // Уже взято — предлагать взять снова незачем: сервер такое отклонит, а
+  // человек узнает об этом, уже нажав. Вместо кнопки — дорога к самому лоту.
+  if (work)
+    return (
+      <Button
+        variant="secondary"
+        onClick={() => navigate(`/tender/works/${work.id}`)}
+        title={`Лот ${work.code} уже в работе. Открыть его.`}
+      >
+        Открыть {work.code} в работе
+      </Button>
+    );
 
   return (
     <div className="flex items-center gap-2">

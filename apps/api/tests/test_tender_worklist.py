@@ -888,12 +888,12 @@ def test_fail_stroki_lota_stoyat_ryadom() -> None:
     # В лоте первая и последняя — между ними двести строк в жизни.
     marked = {("/а", "Насос"): "лот-1", ("/г", "Лоток"): "лот-1"}
 
-    порядок = [item.row.title for item in _grouped(rows, marked)]
+    порядок = [item.row.title for item in _grouped(rows, marked, {})]
 
     # Лот встал на место лучшей своей позиции, остальные не сдвинулись.
     assert порядок == ["Насос", "Лоток", "Кабель", "Щит"]
     # Разъединили — порядок ядра вернулся сам, ничего не запоминается.
-    assert [item.row.title for item in _grouped(rows, {})] == [
+    assert [item.row.title for item in _grouped(rows, {}, {})] == [
         "Насос",
         "Кабель",
         "Щит",
@@ -1188,7 +1188,9 @@ def test_fail_zadanie_sobirayetsya_po_svoey_pozicii() -> None:
     assert "289221.500.000015" in текст
     assert "замок З-88" in текст
     # Требования у закупки общие — они и должны быть в задании каждой позиции.
-    assert "8000 часов" in текст and "DDP" in текст
+    assert "8000 часов" in текст
+    # А место поставки — нет: по руднику поставщик найдёт закупку в реестре.
+    assert "Мынкудук" not in текст and "рудник" not in текст
 
 
 def test_fail_v_zadanie_ne_popadayut_dengi() -> None:
@@ -1314,7 +1316,7 @@ def test_fail_zadanie_faylom_otkryvayetsya(db: Any, organization: Any) -> None:
     work = _work(db, organization)
     позиция = work.positions[0]
 
-    файл = Document(BytesIO(spec.document(позиция.title, позиция.code, позиция.spec)))
+    файл = Document(BytesIO(spec.document(позиция.code, [(позиция.title, позиция.spec)])))
     текст = "\n".join(абзац.text for абзац in файл.paragraphs)
     assert позиция.code in текст and "ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in текст
 
@@ -1434,7 +1436,8 @@ def test_fail_zadanie_beryotsya_iz_teksta_tz() -> None:
     assert "1.4401 (316 AISI)" in текст and "IP 68" in текст
     # Таблицы наравне с текстом: в ТЗ размеры и допуски стоят именно в них.
     assert "Напор · 150 м" in текст
-    assert "ТЗ насосы.pdf" in текст
+    # Имя файла не печатается: «ТЗ ПНА. Западный Мынкудук.pdf» называет рудник.
+    assert "ТЗ насосы.pdf" not in текст
 
 
 def test_fail_bez_tz_beryotsya_mz() -> None:
@@ -1451,7 +1454,7 @@ def test_fail_bez_tz_beryotsya_mz() -> None:
     )
     текст = spec.render(spec.gather(только_мз), "Насос ЦНС-60")
 
-    assert "напор не менее 150 м" in текст and "МЗ.docx" in текст
+    assert "напор не менее 150 м" in текст
     # Текст поставщика в задание не идёт: там написано то, что удобно ему.
     assert "выгодной цене" not in текст
 
@@ -1651,3 +1654,291 @@ def test_fail_zakaz_poiska_ubirayet_i_podtverzhdyonnuyu_nahodku(db: Any, organiz
     источники = {option.source for option in позиция.options}
     assert источники == {OptionSource.ASKED}
     assert not any(option.chosen for option in позиция.options)
+
+
+def test_fail_zadanie_ne_nazyvayet_zakazchika_i_mesta() -> None:
+    """Задание не называет ни заказчика, ни куда везти.
+
+    Снабжение пересылает его поставщику. Узнав заказчика и рудник, поставщик
+    находит закупку в реестре, видит цену заключения — и либо поднимает свою
+    до неё, либо идёт на торги сам. Это единственное, чем мы отличаемся от
+    него в этой сделке: купить у завода он умеет не хуже.
+    """
+    from platform_api.modules.tender import spec
+
+    исходное = (
+        "УТВЕРЖДАЮ\n"
+        "Директор департамента Қайыргелды Б.К.\n"
+        "Насос центробежный, напор не менее 150 м\n"
+        "Место поставки: рудник «Западный Мынкудук», Туркестанская область\n"
+        "Заказчик: ТОО «Семизбай-U»\n"
+        "Поставка осуществляется в адрес ТОО «Семизбай-U» по заявке\n"
+        "Контакты: zakup@kazatomprom.kz, +7 (7172) 45-90-58\n"
+        "Закупка № 12345678-1\n"
+    )
+    чистое = spec.limited(исходное)
+
+    assert "напор не менее 150 м" in чистое
+    for тайна in (
+        "Мынкудук",
+        "Туркестанская",
+        "Семизбай",
+        "Қайыргелды",
+        "kazatomprom.kz",
+        "45-90-58",
+        "12345678-1",
+        "УТВЕРЖДАЮ",
+    ):
+        assert тайна not in чистое, f"в задании осталось: {тайна}"
+
+
+def test_fail_oblast_primeneniya_ne_prinimayut_za_adres() -> None:
+    """«Область применения» — заголовок задания, а не адрес.
+
+    Правило по одному слову «область» унесло бы начало половины технических
+    заданий. Областью считается только «Туркестанская область» — с названием
+    перед ней.
+    """
+    from platform_api.modules.tender import spec
+
+    чистое = spec.limited(
+        "1. Область применения\nДиапазон измерений в области низких давлений\n"
+        "Кызылординская область, город Байконур"
+    )
+
+    assert "Область применения" in чистое and "области низких давлений" in чистое
+    assert "Кызылординская" not in чистое
+
+
+def test_fail_organizaciya_v_trebovanii_zamenyayetsya_a_ne_stirayet_stroku() -> None:
+    """Организация посреди требования заменяется, а не уносит требование.
+
+    «Согласовать с ТОО «Икс» до отгрузки» — это требование к поставке.
+    Вычеркнутое целиком, оно исчезает вместе с обязанностью согласовывать.
+    """
+    from platform_api.modules.tender import spec
+
+    чистое = spec.limited("Отгрузка согласовывается с ТОО «Семизбай-U» за 5 дней")
+
+    assert "Отгрузка согласовывается" in чистое and "за 5 дней" in чистое
+    assert "Семизбай" not in чистое
+
+
+def test_fail_pravki_razbora_chistyatsya_pri_otpravke(db: Any, organization: Any) -> None:
+    """Дописанное разбором вычищается в момент отправки.
+
+    Собранное платформой задание обезличено с самого начала, но разбор правит
+    его руками и вполне может вписать «доставка в Кызылорду» — по делу для
+    себя и во вред в письме поставщику.
+    """
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    for позиция in work.positions:
+        works.choose(db, work, позиция.options[0].id)
+    works.set_spec(
+        db,
+        work,
+        work.positions[0].id,
+        "ТЕХНИЧЕСКОЕ ЗАДАНИЕ\n\nПикобур PDC\nМесто поставки: рудник Каратау\nЗамок З-88",
+    )
+    assert "Каратау" in work.positions[0].spec
+
+    works.hand_over(db, work, "проверьте цены")
+
+    assert "Каратау" not in work.positions[0].spec
+    assert "Замок З-88" in work.positions[0].spec
+
+
+def test_fail_snabzhenie_ne_vidit_zakazchika(db: Any, organization: Any) -> None:
+    """Заказчик не уходит снабжению и в шапке лота.
+
+    Обезличенное задание рядом с именем заказчика на той же странице — это
+    незакрытая дверь с табличкой «закрыто»: снабженец видит и то и другое.
+    """
+    from platform_api.db.models import Role
+    from platform_api.modules.tender.works_router import _work_out
+
+    work = _work(db, organization)
+
+    assert _work_out(work, Role.ANALYST).customer == "АО «Волковгеология»"
+    у_снабжения = _work_out(work, Role.BUYER)
+    assert у_снабжения.customer == ""
+    # Имя исходного файла тоже говорящее: «ТЗ ПНА. Западный Мынкудук.pdf».
+    assert all(position.spec_source == "" for position in у_снабжения.positions)
+
+
+def test_fail_zadanie_po_lotu_odnim_faylom(client: Any, db: Any) -> None:
+    """По лоту — один файл со всеми позициями, а не шесть.
+
+    Поставщику пишут одно письмо. Шесть вложений он прочтёт как шесть разных
+    запросов и ответит на первое.
+    """
+    from io import BytesIO
+
+    from docx import Document
+    from platform_api.db.models import Role
+    from tests.conftest import sign_in
+
+    org = sign_in(db, client, Role.ANALYST)
+    work = _work(db, org)
+    db.commit()
+
+    ответ = client.get(f"/api/tender/works/{work.id}/spec.docx")
+    assert ответ.status_code == 200
+    assert "filename*=UTF-8''" in ответ.headers["content-disposition"]
+
+    текст = "\n".join(абзац.text for абзац in Document(BytesIO(ответ.content)).paragraphs)
+    for позиция in work.positions:
+        assert позиция.title in текст
+
+
+def test_fail_imya_zakazchika_vychishchayetsya_pricelno(db: Any, organization: Any) -> None:
+    """Заказчика этого лота платформа знает и убирает точно.
+
+    Общие правила закрывают то, чего мы заранее не знаем. Имя заказчика мы
+    знаем: оно записано в самой работе, и в документе встречается во всех
+    написаниях сразу — «ТОО «Волковгеология»», «Волковгеология», «АО
+    Волковгеология». Гадать по написанию, имея точное имя, незачем.
+    """
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    assert work.customer == "АО «Волковгеология»"
+    for позиция in work.positions:
+        works.choose(db, work, позиция.options[0].id)
+    works.set_spec(
+        db,
+        work,
+        work.positions[0].id,
+        "ТЗ\n\nПикобур PDC Ø190,5\nПоставка по заявке Волковгеология, замок З-88",
+    )
+
+    works.hand_over(db, work, "")
+
+    задание = work.positions[0].spec
+    assert "Волковгеология" not in задание
+    # Товар при этом на месте: вычищается заказчик, а не наименование.
+    assert "Пикобур PDC Ø190,5" in задание and "замок З-88" in задание
+
+
+def test_fail_nazvaniye_tovara_perezhivayet_vychistku(db: Any, organization: Any) -> None:
+    """Наименование позиции переживает вычистку.
+
+    Соблазн вычистить заодно и название лота стоит дорого: это и есть товар, и
+    задание без него — лист бумаги с требованиями неизвестно к чему.
+    """
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    for позиция in work.positions:
+        works.choose(db, work, позиция.options[0].id)
+    works.hand_over(db, work, "")
+
+    for позиция in work.positions:
+        assert позиция.title.split()[0] in позиция.spec
+
+
+def _row_stub(папка: str, имя: str) -> Any:
+    """Строка отбора настолько, насколько её видит раскладка по лотам."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(row=SimpleNamespace(folder_path=папка, title=имя))
+
+
+def test_fail_vzyatoye_v_rabotu_uhodit_vniz_spiska() -> None:
+    """Взятое в работу опускается в конец отбора.
+
+    Решение по нему принято, а место наверху занято тем, что уже не выбирают.
+    Наверху должно стоять то, по чему ещё предстоит решить.
+    """
+    from platform_api.modules.tender.router import _grouped
+    from platform_api.modules.tender.works import Taken
+
+    строка = _row_stub
+    rows = [строка("/архив/А", "Насос"), строка("/архив/Б", "Кран"), строка("/архив/В", "Задвижка")]
+    взята = {("/архив/А", "Насос"): Taken(id="1", code="TN-00001", stage="analysis")}
+
+    assert [item.row.title for item in _grouped(rows, {}, взята)] == [
+        "Кран",
+        "Задвижка",
+        "Насос",
+    ]
+
+
+def test_fail_lot_uhodit_vniz_celikom() -> None:
+    """Лот опускается вниз целиком, а не той позицией, которую взяли.
+
+    Половина лота наверху и половина внизу — это два лота на вид, и вторую
+    половину возьмут в работу ещё раз.
+    """
+    from platform_api.modules.tender.router import _grouped
+    from platform_api.modules.tender.works import Taken
+
+    rows = [
+        _row_stub("/архив/А", "Пикобур Ø190"),
+        _row_stub("/архив/Б", "Кран"),
+        _row_stub("/архив/А", "Пикобур Ø215"),
+    ]
+    лот = {("/архив/А", "Пикобур Ø190"): "лот-1", ("/архив/А", "Пикобур Ø215"): "лот-1"}
+    взята = {("/архив/А", "Пикобур Ø190"): Taken(id="1", code="TN-00001", stage="supply")}
+
+    assert [item.row.title for item in _grouped(rows, лот, взята)] == [
+        "Кран",
+        "Пикобур Ø190",
+        "Пикобур Ø215",
+    ]
+
+
+def test_fail_lot_ubirayet_tolko_administrator(client: Any, db: Any) -> None:
+    """Убрать лот из работы может только администратор.
+
+    Вместе с лотом уходят подтверждённые поставщики, найденные снабжением цены
+    и правки заданий — работа двух отделов за неделю. Кнопка, доступная всем,
+    однажды будет нажата вместо соседней.
+    """
+    import uuid as _uuid
+
+    from platform_api.auth import passwords
+    from platform_api.auth.service import open_session
+    from platform_api.config import Settings
+    from platform_api.db.models import (
+        Membership,
+        Role,
+        TenderWork,
+        TenderWorkOption,
+        User,
+    )
+    from sqlalchemy import func, select
+    from tests.conftest import sign_in
+
+    org = sign_in(db, client, Role.ANALYST)
+    work = _work(db, org)
+    db.commit()
+    # Имя запоминаем заранее: после удаления обращение к объекту поднимет
+    # ObjectDeletedError, и тест упадёт на проверке вместо проверки.
+    work_id = work.id
+
+    assert client.delete(f"/api/tender/works/{work_id}").status_code == 403
+
+    админ = User(
+        email=f"{_uuid.uuid4().hex[:8]}@fintend.kz",
+        password_hash=passwords.hash_password("закупки-2026-каратау"),
+    )
+    db.add(админ)
+    db.flush()
+    db.add(Membership(user_id=админ.id, organization_id=org.id, role=Role.ADMIN))
+    db.flush()
+    _, token = open_session(db, админ, org, ttl_hours=12)
+    db.commit()
+    client.cookies.set(Settings().auth.session_cookie, token)
+
+    assert client.delete(f"/api/tender/works/{work_id}").status_code == 204
+
+    # Насовсем, вместе с позициями и вариантами: смысл в том, чтобы взять лот
+    # заново, а сохранённая работа заняла бы его код.
+    db.expire_all()
+    assert (
+        db.execute(select(TenderWork).where(TenderWork.id == work_id)).scalar_one_or_none() is None
+    )
+    assert db.execute(select(func.count()).select_from(TenderWorkOption)).scalar() == 0

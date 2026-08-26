@@ -487,6 +487,7 @@ export function WorklistPage({
         <DetailPanel
           slug={slug}
           id={openId}
+          work={data?.rows.find((row) => row.id === openId)?.work ?? null}
           onClose={() => open(null)}
           onOpen={open}
         />

@@ -64,7 +64,7 @@ def list_works(
             id=str(work.id),
             code=work.code,
             title=work.title,
-            customer=work.customer,
+            customer=work.customer if money else "",
             stage=work.stage.value,
             positions=len(work.positions),
             total=_money(_sum(position.total for position in work.positions)) if money else None,
@@ -229,6 +229,33 @@ def drop_option(
     return _work_out(work, identity.role)
 
 
+@router.delete("/works/{work_id}", summary="Убрать лот из работы", status_code=204)
+def remove_work(
+    work_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> None:
+    """Убирает лот из работы: строки возвращаются в отбор на своё место.
+
+    Только администратору. Это отмена решения, а не шаг процесса: вместе с
+    лотом уходят подтверждённые поставщики, найденные снабжением цены и
+    правки заданий — работа двух отделов за неделю. Кнопка, доступная всем,
+    однажды будет нажата вместо соседней.
+
+    Насовсем, а не в архив: смысл в том, чтобы взять лот заново, а
+    сохранённая работа заняла бы его код и заставила выяснять, какая из двух
+    настоящая.
+    """
+    if identity.role is not Role.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Убрать лот из работы может только администратор",
+        )
+    works.remove(db, _mine(db, identity, work_id))
+    db.commit()
+
+
 @router.patch("/works/{work_id}/positions/{position_id}/spec", summary="Поправить задание")
 def edit_spec(
     work_id: uuid.UUID,
@@ -289,8 +316,6 @@ def download_spec(
     себестоимость, и «просто не открывайте соседнюю вкладку» отделом снабжения
     не обеспечивается.
     """
-    from urllib.parse import quote
-
     from platform_api.modules.tender import spec
 
     work = _mine(db, identity, work_id)
@@ -300,12 +325,37 @@ def download_spec(
             status_code=status.HTTP_404_NOT_FOUND, detail="У этой позиции задания нет"
         )
 
-    имя = f"ТЗ {position.code or work.code} {position.title[:60]}.docx".replace("/", "-")
-    return Response(
-        content=spec.document(position.title, position.code, position.spec),
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"content-disposition": f"attachment; filename*=UTF-8''{quote(имя)}"},
+    return _as_docx(
+        f"ТЗ {position.code or work.code} {position.title[:60]}",
+        spec.document(f"{position.code} · {position.title}".strip(" ·"), [("", position.spec)]),
     )
+
+
+@router.get("/works/{work_id}/spec.docx", summary="Задание по лоту файлом")
+def download_lot_spec(
+    work_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> Response:
+    """Задания всех позиций одним файлом — тем, что уходит поставщику.
+
+    Одним, а не шестью: по лоту поставщику пишут одно письмо. Шесть вложений
+    он прочитает как шесть разных запросов и ответит на первое.
+    """
+    from platform_api.modules.tender import spec
+
+    work = _mine(db, identity, work_id)
+    разделы = [
+        (f"{position.code} · {position.title}".strip(" ·"), position.spec)
+        for position in sorted(work.positions, key=lambda item: item.ordering)
+        if position.spec.strip()
+    ]
+    if not разделы:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="В этом лоте ещё нет заданий"
+        )
+    return _as_docx(f"Задание на закупку {work.code}", spec.document(work.code, разделы))
 
 
 @router.post("/works/{work_id}/hand-over", summary="Передать другому отделу")
@@ -328,6 +378,22 @@ def hand_over(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _as_docx(name: str, content: bytes) -> Response:
+    """Файл .docx с русским именем.
+
+    Имя кодируется: кириллице в заголовке ответа места нет, и без кодирования
+    браузер сохраняет файл как «download» без расширения.
+    """
+    from urllib.parse import quote
+
+    безопасное = f"{name}.docx".replace("/", "-")
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"content-disposition": f"attachment; filename*=UTF-8''{quote(безопасное)}"},
+    )
 
 
 def _at_desk(work: TenderWork, role: Role) -> bool:
@@ -409,7 +475,10 @@ def _work_out(work: TenderWork, role: Role) -> WorkOut:
         id=str(work.id),
         code=work.code,
         title=work.title,
-        customer=work.customer,
+        # Заказчик снабжению не уходит — ни в шапке, ни в задании. Снабжение
+        # пересылает задание поставщику, а поставщик по имени заказчика
+        # находит закупку в реестре и видит цену заключения.
+        customer=work.customer if money else "",
         stage=work.stage.value,
         analysis_note=work.analysis_note,
         supply_note=work.supply_note,
@@ -450,7 +519,8 @@ def _position_out(position: Any, *, money: bool) -> WorkPositionOut:
             for option in position.options
         ],
         spec=position.spec,
-        spec_source=position.spec_source,
+        # Имя исходного файла тоже говорящее: «ТЗ ПНА. Западный Мынкудук.pdf».
+        spec_source=position.spec_source if money else "",
         note=position.note,
         # Исходные бумаги — только разбору. В ТЗ заказчика стоят цены ценового
         # заключения, реквизиты сторон и печати; увидев цену заказчика,

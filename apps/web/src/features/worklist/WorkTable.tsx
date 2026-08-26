@@ -12,6 +12,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import type {
   ColumnSet,
   Worklist,
@@ -247,6 +248,9 @@ export function WorkTable({
                 // Полоса слева у строк одного лота: связь надо видеть при
                 // прокрутке, а сортировка их разводит по списку.
                 row.lot && "border-l-2 border-l-series-1",
+                // Взятое в работу приглушается: решение по нему принято, и
+                // взгляд не должен возвращаться к нему при просмотре списка.
+                row.work && "opacity-60",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-series-1",
                 openId === row.id &&
                   "outline outline-2 -outline-offset-2 outline-series-1",
@@ -259,6 +263,7 @@ export function WorkTable({
               <td className="border-b border-hairline px-2.5 py-1.5 text-left align-top text-xs text-ink-muted tabular-nums">
                 {row.code || row.number}
                 {row.lot && <LotMark lot={row.lot} />}
+                {row.work && <WorkMark work={row.work} />}
               </td>
               {shown.map(({ column, index }) => (
                 <td
@@ -285,6 +290,31 @@ export function WorkTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * Отметка «в работе» у номера строки.
+ *
+ * Со ссылкой: увидев её, человек хочет посмотреть, что там, — и без ссылки
+ * пойдёт искать лот в соседнем разделе по названию. Щелчок по ней не должен
+ * открывать разбор, поэтому событие до строки не доходит.
+ */
+function WorkMark({ work }: { work: NonNullable<WorklistRow["work"]> }) {
+  const где = {
+    analysis: "у разбора",
+    supply: "у снабжения",
+    returned: "цены подтверждены",
+  }[work.stage];
+  return (
+    <Link
+      to={`/tender/works/${work.id}`}
+      onClick={(event) => event.stopPropagation()}
+      title={`Взято в работу как ${work.code} — ${где}. Открыть лот.`}
+      className="mt-1 flex items-center gap-1 text-[10px] leading-none font-medium text-good hover:underline"
+    >
+      <span aria-hidden>▸</span>в работе
+    </Link>
   );
 }
 

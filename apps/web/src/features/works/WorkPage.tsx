@@ -18,7 +18,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Role } from "@/api/tender";
 import {
   worksApi,
@@ -89,6 +89,7 @@ export function WorkPage({ role }: { role: Role }) {
             onDone={refresh}
           />
           {мой && <HandOver work={data} analysis={analysis} onDone={refresh} />}
+          {role === "admin" && <Remove work={data} />}
         </div>
         {открыта && (
           <DocsPanel
@@ -405,19 +406,28 @@ function Positions({
             {work.positions.length}
           </span>
         </h3>
-        <button
-          type="button"
-          onClick={() =>
-            setOpen(
-              все
-                ? new Set()
-                : new Set(work.positions.map((position) => position.id)),
-            )
-          }
-          className="text-xs text-series-1 transition hover:underline"
-        >
-          {все ? "Свернуть все" : "Раскрыть все"}
-        </button>
+        <div className="flex items-center gap-4">
+          <a
+            href={worksApi.lotSpecFile(work.id)}
+            className="text-xs text-series-1 transition hover:underline"
+            title="Задания всех позиций одним файлом — тем, что уходит поставщику"
+          >
+            Задание по лоту .docx
+          </a>
+          <button
+            type="button"
+            onClick={() =>
+              setOpen(
+                все
+                  ? new Set()
+                  : new Set(work.positions.map((position) => position.id)),
+              )
+            }
+            className="text-xs text-series-1 transition hover:underline"
+          >
+            {все ? "Свернуть все" : "Раскрыть все"}
+          </button>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -740,6 +750,61 @@ function Note({
   );
 }
 
+/**
+ * Убрать лот из работы — начать сначала.
+ *
+ * Только администратору и в два нажатия. Вместе с лотом уходят подтверждённые
+ * поставщики, найденные снабжением цены и правки заданий: работа двух отделов
+ * за неделю. Кнопка в один щелчок рядом с «Отправить» однажды будет нажата
+ * вместо неё.
+ */
+function Remove({ work }: { work: Work }) {
+  const navigate = useNavigate();
+  const [точно, setТочно] = useState(false);
+  const drop = useMutation({
+    mutationFn: () => worksApi.remove(work.id),
+    onSuccess: () => navigate("/tender/works"),
+  });
+
+  return (
+    <Card className="border-critical/30 px-5 py-3">
+      {!точно ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="danger" onClick={() => setТочно(true)}>
+            Убрать лот из работы
+          </Button>
+          <span className="text-xs text-ink-muted">
+            Позиции вернутся в отбор на своё место, и лот можно будет взять
+            заново
+          </span>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm text-ink">
+            Уйдут {work.positions.length} позиций вместе с выбранными
+            поставщиками, ценами и заданиями. Это не отменить.
+          </span>
+          <Button
+            variant="danger"
+            onClick={() => drop.mutate()}
+            disabled={drop.isPending}
+          >
+            {drop.isPending ? "Убираем…" : "Да, убрать"}
+          </Button>
+          <Button variant="ghost" onClick={() => setТочно(false)}>
+            Отмена
+          </Button>
+        </div>
+      )}
+      {drop.isError && (
+        <p className="mt-2 text-sm text-critical">
+          {drop.error instanceof Error ? drop.error.message : "Не убралось"}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 /** Передача другому отделу: комментарий и одна кнопка. */
 function HandOver({
   work,
@@ -807,7 +872,7 @@ function HandOver({
         </Button>
         <span className="text-xs text-ink-muted">
           {analysis
-            ? "Снабжение увидит задание и «где купить». Суммы и документы заказчика ему не уходят"
+            ? "Перед отправкой из заданий уберём заказчика, адреса и контакты: снабжение пересылает задание поставщику"
             : "Лот вернётся разбору с подтверждёнными ценами"}
         </span>
       </div>

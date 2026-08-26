@@ -137,6 +137,54 @@ def taken(db: DbSession, organization_id: uuid.UUID) -> frozenset[str]:
     return frozenset(rows)
 
 
+def in_progress(db: DbSession, organization_id: uuid.UUID) -> dict[tuple[str, str], Taken]:
+    """Позиции, уже взятые в работу, — по папке и названию.
+
+    Ключ тот же, каким размечены лоты в отборе: работа хранит позиции своими
+    копиями, и связать её со строкой можно только тем, чем позиция и записана.
+
+    Одним запросом на весь отбор, а не по строке: строк восемьсот, а работ
+    десятки, и обращение на каждую строку было бы восемьюстами запросов ради
+    нескольких десятков записей.
+    """
+    rows = db.execute(
+        select(
+            TenderWorkPosition.folder_path,
+            TenderWorkPosition.title,
+            TenderWork.id,
+            TenderWork.code,
+            TenderWork.stage,
+        )
+        .join(TenderWork, TenderWork.id == TenderWorkPosition.work_id)
+        .where(TenderWork.organization_id == organization_id)
+    )
+    return {
+        (folder, title): Taken(id=str(work_id), code=code, stage=stage.value)
+        for folder, title, work_id, code, stage in rows
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class Taken:
+    """Работа, в которую уже взята эта строка отбора."""
+
+    id: str
+    code: str
+    stage: str
+
+
+def remove(db: DbSession, work: TenderWork) -> None:
+    """Убирает работу целиком — вместе с позициями, вариантами и заданиями.
+
+    Насовсем, а не в архив. Смысл удаления в том, чтобы начать сначала: строки
+    возвращаются в отбор на своё место, и лот берут заново. Оставленная в
+    архиве работа помешала бы взять его снова — код занят, — а разбираться,
+    какая из двух настоящая, пришлось бы человеку.
+    """
+    db.delete(work)
+    db.flush()
+
+
 def one(db: DbSession, organization_id: uuid.UUID, work_id: uuid.UUID) -> TenderWork:
     """Работа по имени. Чужой организации — как будто её нет."""
     work = db.execute(
@@ -293,11 +341,34 @@ def hand_over(db: DbSession, work: TenderWork, note: str) -> TenderWork:
         work.stage = WorkStage.RETURNED
     else:
         _require_ready(work)
+        _depersonalize(work)
         work.analysis_note = note.strip()
         work.stage = WorkStage.SUPPLY
     work.sent_at = utcnow()
     db.flush()
     return work
+
+
+def _depersonalize(work: TenderWork) -> None:
+    """Перед отправкой убирает из заданий заказчика, адреса и подписантов.
+
+    Собранное платформой задание обезличено с самого начала, но разбор его
+    правит руками и вполне может вписать «доставка в Кызылорду» — по делу для
+    себя и во вред в письме поставщику. Проверка стоит здесь, в единственной
+    точке, через которую задание попадает к снабжению: перед отправкой.
+    """
+    from platform_api.modules.tender.spec import limited
+
+    # Имя заказчика этого лота известно точно — вычищаем прицельно, не гадая
+    # по написанию: в документе оно встречается и «ТОО «РУ-6»», и «РУ-6», и
+    # «РУ‑6» с неразрывным дефисом.
+    # Только заказчик. Название лота сюда попасть не должно: это и есть товар,
+    # и вычистив его, мы отправили бы снабжению задание без предмета.
+    известные = (work.customer,)
+    for position in work.positions:
+        чистое = limited(position.spec, известные)
+        if чистое != position.spec:
+            position.spec = чистое
 
 
 def _require_ready(work: TenderWork) -> None:
@@ -409,13 +480,16 @@ def _cleaned(fields: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "Draft",
+    "Taken",
     "add",
     "ask",
     "choose",
     "drop",
     "edit",
     "hand_over",
+    "in_progress",
     "one",
+    "remove",
     "set_note",
     "set_spec",
     "take",

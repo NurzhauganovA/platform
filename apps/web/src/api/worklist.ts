@@ -51,6 +51,13 @@ export type Tone = "" | "good" | "warning" | "info" | "critical";
 
 /** Отметка лота в строке списка. Маржа здесь по всему лоту, а не по строке:
  *  позиция с заработком 40% в лоте, который в минусе, — это ловушка. */
+/** Отметка «в работе» в строке отбора — со ссылкой на сам лот. */
+export interface RowWork {
+  id: string;
+  code: string;
+  stage: WorkStage;
+}
+
 export interface RowLot {
   key: string;
   positions: number;
@@ -61,6 +68,8 @@ export interface RowLot {
 export interface WorklistRow {
   cells: WorklistCell[];
   lot: RowLot | null;
+  /** Работа, если строку уже взяли: такие стоят в конце списка. */
+  work: RowWork | null;
   /** Место в списке. Показывать нечего: сдвигается от каждой новой закупки. */
   number: number;
   /** Постоянный код: «TN-00042». Им строку и называют — он выдан один раз и
@@ -475,6 +484,12 @@ export const worksApi = {
   /** Ссылка на задание файлом — тем, что снабжение перешлёт поставщику. */
   specFile: (workId: string, positionId: string) =>
     `/api/tender/works/${workId}/positions/${positionId}/spec.docx`,
+
+  /** Задания всех позиций одним файлом: поставщику пишут одно письмо. */
+  lotSpecFile: (workId: string) => `/api/tender/works/${workId}/spec.docx`,
+
+  /** Убрать лот из работы. Только администратору: строки вернутся в отбор. */
+  remove: (workId: string) => api.delete<void>(`/api/tender/works/${workId}`),
 
   handOver: (workId: string, note: string) =>
     api.post<Work>(`/api/tender/works/${workId}/hand-over`, { note }),

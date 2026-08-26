@@ -77,6 +77,18 @@ class RowLotOut(BaseModel):
     margin_percent: float | None = None
 
 
+class RowWorkOut(BaseModel):
+    """Отметка «в работе» в строке отбора.
+
+    Со ссылкой, а не одним словом: увидев отметку, человек хочет посмотреть,
+    что там, — и без ссылки пойдёт искать лот в соседнем разделе по названию.
+    """
+
+    id: str
+    code: str
+    stage: str
+
+
 class RowOut(BaseModel):
     """Строка таблицы вместе с подсветкой по вердикту."""
 
@@ -107,6 +119,10 @@ class RowOut(BaseModel):
 
     lot: RowLotOut | None = None
     """Лот, если строку объединили с соседними позициями закупки."""
+
+    work: RowWorkOut | None = None
+    """Работа, если строку уже взяли. Такие уходят в конец списка: решение по
+    ним принято, и рассматривать их заново незачем."""
 
 
 class LegendItem(BaseModel):
