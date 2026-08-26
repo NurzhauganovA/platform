@@ -171,7 +171,7 @@ def choose(db: DbSession, work: TenderWork, option_id: uuid.UUID) -> None:
             TenderWorkOption.chosen.is_(False),
         )
     )
-    db.flush()
+    _resync(db)
 
 
 def ask(db: DbSession, work: TenderWork, position_id: uuid.UUID, name: str) -> TenderWorkOption:
@@ -185,15 +185,19 @@ def ask(db: DbSession, work: TenderWork, position_id: uuid.UUID, name: str) -> T
     if not имя:
         raise SpokenError("Напишите, что искать: без названия снабжению не с чем работать")
 
-    # Заказ поиска — это и есть слова «найденное не подходит». Неподтверждённые
-    # находки уходят: снабжение иначе потратит день на то, что разбор уже
-    # посмотрел и отверг. Подтверждённое остаётся — его проверяют.
+    # Заказ поиска — это и есть слова «найденное не подходит», и относятся они
+    # ко всему найденному, включая подтверждённое. «Найдите сами» рядом с
+    # «этот поставщик подтверждён» — два указания, противоречащих друг другу:
+    # снабжение проверяет одного, пока разбор ждёт другого.
+    #
+    # Подтверждение здесь не ценность, которую жалко: находку модели можно
+    # найти заново тем же поиском. А добавленное руками остаётся — стереть
+    # чужую работу нажатием соседней кнопки нельзя.
     position = _position(work, position_id)
     db.execute(
         delete(TenderWorkOption).where(
             TenderWorkOption.position_id == position.id,
             TenderWorkOption.source == OptionSource.FOUND,
-            TenderWorkOption.chosen.is_(False),
         )
     )
 
@@ -203,7 +207,7 @@ def ask(db: DbSession, work: TenderWork, position_id: uuid.UUID, name: str) -> T
         name=имя,
     )
     db.add(option)
-    db.flush()
+    _resync(db)
     return option
 
 
@@ -219,7 +223,7 @@ def add(
         **_cleaned(fields),
     )
     db.add(option)
-    db.flush()
+    _resync(db)
     return option
 
 
@@ -249,6 +253,7 @@ def drop(db: DbSession, work: TenderWork, option_id: uuid.UUID) -> None:
             " Если товара нет, напишите об этом в комментарии"
         )
     db.execute(delete(TenderWorkOption).where(TenderWorkOption.id == option.id))
+    _resync(db)
 
 
 def set_spec(db: DbSession, work: TenderWork, position_id: uuid.UUID, body: str) -> None:
@@ -346,6 +351,22 @@ _ANALYSIS_DESK = (WorkStage.ANALYSIS, WorkStage.RETURNED)
 возвращённый лот закрытым значило бы, что передумать можно только заведя
 второй лот по тем же позициям.
 """
+
+
+def _resync(db: DbSession) -> None:
+    """Сбрасывает загруженные коллекции после правки состава вариантов.
+
+    Удаление идёт одним запросом, а не по объекту: перебирать сотню вариантов
+    ради удаления половины значит сто запросов вместо одного. Но такой запрос
+    проходит мимо сессии — уже загруженный список вариантов позиции о нём не
+    знает, и `expire_on_commit=False` не даёт ему обновиться на коммите.
+
+    В ответ уходил прежний состав: человек заказывал поиск, заявка в ответе не
+    появлялась, он жал ещё раз и обновлял страницу — где обнаруживал два
+    сработавших нажатия.
+    """
+    db.flush()
+    db.expire_all()
 
 
 def _at_stage(work: TenderWork, stages: tuple[WorkStage, ...], refusal: str) -> None:

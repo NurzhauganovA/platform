@@ -1059,26 +1059,6 @@ def test_fail_zakaz_poiska_ubiraet_otvergnutye_nahodki(db: Any, organization: An
     assert остались == ["asked"]
 
 
-def test_fail_podtverzhdennyy_variant_perezhivaet_zakaz_poiska(db: Any, organization: Any) -> None:
-    """Подтверждённого поставщика заказ поиска не стирает.
-
-    Разбор может и подтвердить одного, и попросить поискать ещё: первое —
-    решение, второе — просьба, и одно не отменяет другого.
-    """
-    from platform_api.modules.tender import works
-
-    work = _work(db, organization)
-    позиция = work.positions[0]
-    works.choose(db, work, позиция.options[0].id)
-    db.refresh(позиция)
-    assert len(позиция.options) == 1 and позиция.options[0].chosen
-
-    works.ask(db, work, позиция.id, "Ещё вариант поищите")
-    db.refresh(позиция)
-
-    assert sorted(option.source.value for option in позиция.options) == ["asked", "found"]
-
-
 def test_fail_lot_ne_uhodit_s_nemoy_poziciey(db: Any, organization: Any) -> None:
     """Позиция без единого варианта — это молчание.
 
@@ -1608,3 +1588,66 @@ def test_fail_zametka_pishetsya_tem_u_kogo_lot(client: Any, db: Any) -> None:
     assert ответ.status_code == 200
     # Одна строка: перевод строки и лишние пробелы схлопываются.
     assert ответ.json()["positions"][0]["note"] == "дороже, но успеет к сроку"
+
+
+def test_fail_otvet_pokazyvayet_novyy_sostav_srazu(client: Any, db: Any) -> None:
+    """Ответ на действие показывает уже новый состав вариантов.
+
+    Страница рисуется тем, что вернул сервер. Ответ с прежним составом
+    означает, что человек нажал кнопку, ничего не изменилось, и он жмёт ещё
+    раз — а потом обновляет страницу руками и обнаруживает, что оба нажатия
+    сработали.
+    """
+    from platform_api.db.models import Role
+    from tests.conftest import sign_in
+
+    org = sign_in(db, client, Role.ANALYST)
+    work = _work(db, org)
+    db.commit()
+    позиция = work.positions[0]
+    было = len(позиция.options)
+
+    ответ = client.post(
+        f"/api/tender/works/{work.id}/positions/{позиция.id}/ask",
+        json={"name": "Пикобур PDC Ø215, 3 лопасти"},
+    )
+    assert ответ.status_code == 200
+
+    строка = ответ.json()["positions"][0]
+    источники = [option["source"] for option in строка["options"]]
+    assert "asked" in источники, "заявки нет в ответе — состав отдан прежний"
+    assert len(строка["options"]) != было or источники != ["found"] * было
+
+    # И то же самое при подтверждении: отвергнутые уходят сразу, а не после F5.
+    вторая = work.positions[1]
+    ответ = client.post(f"/api/tender/works/{work.id}/options/{вторая.options[0].id}/choose")
+    выбор = ответ.json()["positions"][1]["options"]
+    assert len(выбор) == 1 and выбор[0]["chosen"]
+
+    # И при удалении: убранный вариант не должен вернуться в том же ответе.
+    ответ = client.delete(f"/api/tender/works/{work.id}/options/{выбор[0]['id']}")
+    assert ответ.status_code == 200
+    assert ответ.json()["positions"][1]["options"] == []
+
+
+def test_fail_zakaz_poiska_ubirayet_i_podtverzhdyonnuyu_nahodku(db: Any, organization: Any) -> None:
+    """Заказ поиска убирает и подтверждённую находку модели.
+
+    «Найдите сами» и «этот поставщик подтверждён» — противоречащие друг другу
+    указания, и оставленные рядом они означают, что снабжение проверяет одного,
+    пока разбор ждёт другого. Подтверждение — не сохранённая ценность: находку
+    модели можно найти заново, а вот добавленное руками остаётся.
+    """
+    from platform_api.db.models import OptionSource
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    позиция = work.positions[0]
+    works.choose(db, work, позиция.options[0].id)
+    assert any(option.chosen for option in позиция.options)
+
+    works.ask(db, work, позиция.id, "Пикобур PDC Ø215")
+
+    источники = {option.source for option in позиция.options}
+    assert источники == {OptionSource.ASKED}
+    assert not any(option.chosen for option in позиция.options)
