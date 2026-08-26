@@ -16,7 +16,7 @@ from dataclasses import asdict
 from decimal import Decimal
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_read
 from platform_api.db.base import utcnow
@@ -31,6 +31,7 @@ from platform_api.modules.schemas import (
     WorkOptionOut,
     WorkOut,
     WorkPositionOut,
+    WorkSpecIn,
 )
 from platform_api.modules.table import sees_money
 from platform_api.modules.tender import works
@@ -227,6 +228,60 @@ def drop_option(
     return _work_out(work, identity.role)
 
 
+@router.patch("/works/{work_id}/positions/{position_id}/spec", summary="Поправить задание")
+def edit_spec(
+    work_id: uuid.UUID,
+    position_id: uuid.UUID,
+    body: WorkSpecIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> WorkOut:
+    """Разбор правит задание, которое увидит снабжение.
+
+    Черновик собран из разобранных требований и потому неполон там, где неполон
+    разбор. Дописать «искать только с сертификатом» должен человек: отвечает за
+    то, что прочтёт снабжение, отдел разбора, а не сборщик текста.
+    """
+    work = _mine(db, identity, work_id)
+    _do(lambda: works.set_spec(db, work, position_id, body.spec))
+    db.commit()
+    return _work_out(work, identity.role)
+
+
+@router.get("/works/{work_id}/positions/{position_id}/spec.docx", summary="Задание файлом")
+def download_spec(
+    work_id: uuid.UUID,
+    position_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> Response:
+    """Задание файлом — тем, что снабжение перешлёт поставщику.
+
+    Пересылать ссылку на платформу нельзя: за той же позицией там стоит
+    себестоимость, и «просто не открывайте соседнюю вкладку» отделом снабжения
+    не обеспечивается.
+    """
+    from urllib.parse import quote
+
+    from platform_api.modules.tender import spec
+
+    work = _mine(db, identity, work_id)
+    position = next((item for item in work.positions if item.id == position_id), None)
+    if position is None or not position.spec.strip():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="У этой позиции задания нет"
+        )
+
+    имя = f"ТЗ {position.code or work.code} {position.title[:60]}.docx".replace("/", "-")
+    return Response(
+        content=spec.document(position.title, position.code, position.spec),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"content-disposition": f"attachment; filename*=UTF-8''{quote(имя)}"},
+    )
+
+
 @router.post("/works/{work_id}/hand-over", summary="Передать другому отделу")
 def hand_over(
     work_id: uuid.UUID,
@@ -270,13 +325,20 @@ def _do(action: Any) -> None:
 
 
 def _draft(item: Any, коды: dict[str, str]) -> works.Draft:
+    from platform_api.modules.tender import spec
     from platform_api.modules.tender.worklist import row_id
 
     row = item.row
+    # Задание собирается один раз, при взятии в работу, и дальше живёт в самой
+    # работе. Собирать его на каждый показ значило бы, что переданное снабжению
+    # задание меняется само — папку разобрали заново, и требования другие.
+    задание, источник = spec.draft(row.folder_path or "", row.title)
     return works.Draft(
         folder_path=row.folder_path or "",
         title=row.title,
         code=коды.get(row_id(item), ""),
+        spec=задание,
+        spec_source=источник,
         quantity=row.quantity,
         unit="",
         total=row.total,
@@ -350,10 +412,18 @@ def _position_out(position: Any, *, money: bool) -> WorkPositionOut:
             )
             for option in position.options
         ],
+        spec=position.spec,
+        spec_source=position.spec_source,
+        # Исходные бумаги — только разбору. В ТЗ заказчика стоят цены ценового
+        # заключения, реквизиты сторон и печати; увидев цену заказчика,
+        # снабженец знает потолок, по которому с ним же и будут торговаться.
+        # Прятать их вёрсткой нельзя: отданное в ответе считается отданным.
         documents=[
             DetailField.model_validate(asdict(field))
             for field in documents_of(position.folder_path, position.title)
-        ],
+        ]
+        if money
+        else [],
     )
 
 

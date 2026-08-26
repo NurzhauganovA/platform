@@ -357,6 +357,18 @@ class TenderWorkPosition(Base, UUIDPrimaryKey, Timestamps):
 
     ordering: Mapped[int] = mapped_column(Integer, default=0)
 
+    spec: Mapped[str] = mapped_column(Text, default="", server_default="")
+    """Техническое задание позиции — то единственное, что видит снабжение.
+
+    Лежит в самой работе, а не собирается на каждый показ. Черновик пишется
+    при взятии в работу, дальше его правит разбор, и переданное снабжению
+    задание не должно меняться от того, что папку разобрали заново.
+    """
+
+    spec_source: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    """Из какого документа собран черновик. Спорное требование нужно уметь
+    проверить — разбору исходный документ по-прежнему открыт."""
+
     options: Mapped[list[TenderWorkOption]] = relationship(
         back_populates="position", cascade="all, delete-orphan", lazy="selectin"
     )

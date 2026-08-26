@@ -412,7 +412,7 @@ class CaseFile:
             return False
 
 
-_CACHE: dict[str, Any] = {"stamp": None, "rows": (), "files": {}, "found": {}}
+_CACHE: dict[str, Any] = {"stamp": None, "rows": (), "files": {}, "found": {}, "specs": {}}
 """Собранный отбор и отпечаток базы, по которому он собран.
 
 Сборка идёт девять секунд: сто двадцать три корня, из каждого строится
@@ -492,11 +492,13 @@ def _ranked() -> list[RankedRow]:
 
         files: dict[str, tuple[CaseFile, ...]] = {}
         sourcings: dict[str, Any] = {}
-        rows = _build(files, sourcings)
+        specs: dict[str, Any] = {}
+        rows = _build(files, sourcings, specs)
         if stamp is not None:
             _CACHE["stamp"] = stamp
             _CACHE["rows"], _CACHE["files"] = tuple(rows), files
             _CACHE["found"] = sourcings
+            _CACHE["specs"] = specs
         return rows
 
 
@@ -510,6 +512,16 @@ def case_sourcing(folder_path: str) -> Any:
     """
     _ranked()
     return _CACHE["found"].get(folder_path)
+
+
+def case_spec(folder_path: str) -> Any:
+    """Требования закупки — то, из чего собирается задание снабжению.
+
+    Собраны попутно со строками: закупка в тот момент уже построена из тех же
+    документов, и отдельного обращения к базе ядра это не стоит.
+    """
+    _ranked()
+    return _CACHE["specs"].get(folder_path)
 
 
 def case_files(item_id: str) -> tuple[CaseFile, ...]:
@@ -571,7 +583,11 @@ def _same(text: str) -> str:
     return unicodedata.normalize("NFC", text)
 
 
-def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) -> list[RankedRow]:
+def _build(
+    files: dict[str, tuple[CaseFile, ...]],
+    sourcings: dict[str, Any],
+    specs: dict[str, Any],
+) -> list[RankedRow]:
     """Строки отбора из базы ядра.
 
     Обход идёт по корням, и на каждый корень открывается своя единица работы.
@@ -592,6 +608,7 @@ def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) ->
     from tender_analyze.application.sourcing import SourcingResult
     from tender_analyze.domain.models import CaseAnalysis, Opportunity
 
+    from platform_api.modules.tender import spec
     from platform_api.modules.tender.core import core_settings
 
     settings = core_settings()
@@ -630,6 +647,7 @@ def _build(files: dict[str, tuple[CaseFile, ...]], sourcings: dict[str, Any]) ->
                     if built:
                         where = built[0].folder_path
                         _attach_files(files, built, case)
+                        specs[where] = spec.gather(decided)
                         if sourcing:
                             # Позиции считает ядро. Своя такая же функция
                             # сосчитала бы по названиям находок — а модель
@@ -882,6 +900,7 @@ __all__ = [
     "Worklist",
     "case_files",
     "case_sourcing",
+    "case_spec",
     "columns",
     "detail",
     "export_workbook",

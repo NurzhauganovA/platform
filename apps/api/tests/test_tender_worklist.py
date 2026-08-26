@@ -1028,6 +1028,8 @@ def _work(db: Any, org: Any, позиций: int = 2) -> Any:
                 quantity=Decimal(5),
                 unit="шт",
                 total=Decimal(1000),
+                spec="ТЕХНИЧЕСКОЕ ЗАДАНИЕ\n\nПикобур PDC, 3 лопасти",
+                spec_source="ТЗ.pdf",
                 options=(
                     {"name": "Пикобур", "supplier": "Первый", "price": Decimal(100)},
                     {"name": "Пикобур", "supplier": "Второй", "price": Decimal(90)},
@@ -1120,3 +1122,267 @@ def test_fail_snabzhenie_ne_vidit_summ_zakupki(db: Any, organization: Any) -> No
 
     у_razbora = _work_out(work, Role.ANALYST)
     assert у_razbora.total is not None and у_razbora.cost is not None
+
+
+# ---------------------------------------------------------------------------
+# Техническое задание позиции
+# ---------------------------------------------------------------------------
+
+
+def _case_spec() -> Any:
+    """Требования закупки, собранные из разобранных ядром документов.
+
+    Через `gather`, а не руками: белый список полей и отсев денег живут именно
+    там, и собранный в обход них образец проверял бы не тот код.
+    """
+    from types import SimpleNamespace
+
+    from platform_api.modules.tender import spec
+
+    def документ(kind: str, name: str, **поля: Any) -> Any:
+        return SimpleNamespace(
+            source=SimpleNamespace(name=name),
+            insight=SimpleNamespace(
+                kind=kind,
+                requirements=поля.get("requirements", []),
+                delivery_terms=поля.get("delivery_terms"),
+                warranty=поля.get("warranty"),
+            ),
+        )
+
+    def позиция(name: str, spec_text: str, count: int, ens: str) -> Any:
+        return SimpleNamespace(
+            name=name, specification=spec_text, quantity=Decimal(count), unit="шт", ens_code=ens
+        )
+
+    case = SimpleNamespace(
+        subject="Пикобуры PDC",
+        requirements=(),
+        documents=(
+            документ(
+                "ТЗ",
+                "ТЗ Пикобуры.pdf",
+                requirements=[
+                    "Наработка на отказ не менее 8000 часов",
+                    "Сертификат качества на изделие",
+                    "Цена не выше 350 000 тенге за штуку",
+                ],
+                delivery_terms="DDP, рудник «Западный Мынкудук»",
+                warranty="не менее 12 месяцев",
+            ),
+            # То же требование в МЗ — слово в слово, как это и бывает.
+            документ("МЗ", "МЗ.docx", requirements=["Наработка на отказ не менее 8000 часов"]),
+            # КП поставщика: его условия требованиями закупки не являются.
+            документ("КП", "КП Сервис-А.pdf", requirements=["Оплата 100% предоплата"]),
+        ),
+        requested=(
+            позиция(
+                "Пикобур PDC Ø190,5", "3 лопасти, резцы PDC, замок З-88", 105, "289221.500.000015"
+            ),
+            позиция("Пикобур PDC Ø215", "3 лопасти", 5, "289221.500.000016"),
+        ),
+    )
+    return spec.gather(case)
+
+
+def test_fail_zadanie_sobirayetsya_po_svoey_pozicii() -> None:
+    """Задание собирается по своей позиции, а не по всей папке.
+
+    В папке пять служебных записок на пять разных нужд. Задание, в котором
+    перечислены все пять, снабжение читает как «купите всё» — и покупает.
+    """
+    from platform_api.modules.tender import spec
+
+    текст = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
+
+    assert "Пикобур PDC Ø190,5" in текст
+    assert "Пикобур PDC Ø215" not in текст
+    assert "Количество: 105 шт" in текст
+    assert "289221.500.000015" in текст
+    assert "замок З-88" in текст
+    # Требования у закупки общие — они и должны быть в задании каждой позиции.
+    assert "8000 часов" in текст and "DDP" in текст
+
+
+def test_fail_v_zadanie_ne_popadayut_dengi() -> None:
+    """Денежное условие в задание не уходит.
+
+    «Цена не выше стольких-то» — это наш потолок, а не свойство товара.
+    Ушедшая снабжению цена заказчика торгует против нас: поставщик узнаёт её
+    в первом же письме.
+    """
+    from platform_api.modules.tender import spec
+
+    текст = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
+
+    assert "350 000" not in текст and "тенге" not in текст
+    # Условия из чужого КП — тоже не требования закупки: там поставщик пишет
+    # то, что удобно ему, и снабжение приняло бы это за требование заказчика.
+    assert "предоплата" not in текст.casefold()
+    # Техническое требование при этом остаётся.
+    assert "Сертификат качества" in текст
+
+
+def test_fail_povtoryayushcheesya_trebovanie_odno() -> None:
+    """Одно и то же требование печатается один раз.
+
+    Оно дословно повторяется в ТЗ и МЗ, и без сведения задание начинается с
+    трёх одинаковых абзацев — их перестают читать вместе со всем остальным.
+    """
+    from platform_api.modules.tender import spec
+
+    текст = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
+
+    assert текст.count("Наработка на отказ не менее 8000 часов") == 1
+
+
+def test_fail_odna_poziciya_v_papke_beryotsya_bez_sravneniya() -> None:
+    """Закупка одной позиции: у строки название всей закупки, а не позиции.
+
+    Сравнение имён здесь не сойдётся никогда, и задание вышло бы пустым при
+    полностью разобранной закупке.
+    """
+    from dataclasses import replace
+
+    from platform_api.modules.tender import spec
+
+    целая = _case_spec()
+    одна = replace(целая, positions=целая.positions[:1])
+
+    текст = spec.render(одна, "Закупка пикобуров для нужд рудника")
+
+    assert "Пикобур PDC Ø190,5" in текст and "Количество: 105 шт" in текст
+
+
+def test_fail_snabzhenie_ne_vidit_ishodnyh_dokumentov(db: Any, organization: Any) -> None:
+    """Снабжению уходит задание, а исходные бумаги — нет.
+
+    В ТЗ заказчика стоят цены ценового заключения, реквизиты и печати. Увидев
+    цену заказчика, снабженец знает потолок, по которому с ним же и будут
+    торговаться поставщики.
+    """
+    from platform_api.db.models import Role
+    from platform_api.modules.tender.works_router import _work_out
+
+    work = _work(db, organization)
+
+    у_снабжения = _work_out(work, Role.BUYER)
+    assert all(not position.documents for position in у_снабжения.positions)
+    assert all("ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in position.spec for position in у_снабжения.positions)
+
+
+def test_fail_lot_bez_zadaniya_ne_peredayotsya(db: Any, organization: Any) -> None:
+    """Позиция без задания не уезжает в снабжение.
+
+    Исходных документов там не будет, вариант может быть один и без описания —
+    снабжение получит строку и не поймёт, что искать. Спросить оно сможет
+    только письмом, а ради письма процесс и заводили.
+    """
+    import pytest as _pytest
+    from platform_api.errors import SpokenError
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    works.choose(db, work, work.positions[0].options[0].id)
+    works.choose(db, work, work.positions[1].options[0].id)
+    work.positions[1].spec = "   "
+
+    with _pytest.raises(SpokenError, match="пустое техническое задание"):
+        works.hand_over(db, work, "")
+
+    works.set_spec(db, work, work.positions[1].id, "ТЕХНИЧЕСКОЕ ЗАДАНИЕ\n\nПикобур Ø215")
+    assert works.hand_over(db, work, "").stage.value == "supply"
+
+
+def test_fail_zadanie_pravit_tolko_razbor(db: Any, organization: Any) -> None:
+    """Снабжение задание читает, но не правит.
+
+    Иначе исчезает единственное место, где записано, что именно просили
+    купить, — и отчитывается снабжение по условиям, которые само же и внесло.
+    """
+    import pytest as _pytest
+    from platform_api.errors import SpokenError
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    works.choose(db, work, work.positions[0].options[0].id)
+    works.choose(db, work, work.positions[1].options[0].id)
+    works.hand_over(db, work, "")
+
+    with _pytest.raises(SpokenError, match="отдел разбора"):
+        works.set_spec(db, work, work.positions[0].id, "куплю что подешевле")
+
+
+def test_fail_zadanie_faylom_otkryvayetsya(db: Any, organization: Any) -> None:
+    """Файл задания — настоящий .docx, а не текст с расширением.
+
+    Снабжение пересылает его поставщику; файл, который не открылся, означает
+    письмо «пришлите нормальный» и потерянный день.
+    """
+    from io import BytesIO
+
+    from docx import Document
+    from platform_api.modules.tender import spec
+
+    work = _work(db, organization)
+    позиция = work.positions[0]
+
+    файл = Document(BytesIO(spec.document(позиция.title, позиция.code, позиция.spec)))
+    текст = "\n".join(абзац.text for абзац in файл.paragraphs)
+    assert позиция.code in текст and "ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in текст
+
+
+def test_fail_zadanie_otdayotsya_faylom_cherez_endpoint(client: Any, db: Any) -> None:
+    """Задание скачивается файлом, и имя файла не ломает заголовок.
+
+    Имя русское, а в заголовке ответа кириллице места нет — без кодирования
+    браузер получает битую строку и сохраняет файл как «download».
+    """
+    from platform_api.db.models import Role
+    from tests.conftest import sign_in
+
+    org = sign_in(db, client, Role.ANALYST)
+    work = _work(db, org)
+    db.commit()
+
+    позиция = work.positions[0]
+    ответ = client.get(f"/api/tender/works/{work.id}/positions/{позиция.id}/spec.docx")
+
+    assert ответ.status_code == 200
+    assert ответ.headers["content-type"].endswith("wordprocessingml.document")
+    assert "filename*=UTF-8''" in ответ.headers["content-disposition"]
+    assert ответ.content[:2] == b"PK"
+
+    # Позиции без задания файла нет — пустой .docx хуже отсутствующего:
+    # снабжение решит, что требований к товару нет.
+    from platform_api.modules.tender import works
+
+    works.set_spec(db, work, позиция.id, "")
+    db.commit()
+    assert (
+        client.get(f"/api/tender/works/{work.id}/positions/{позиция.id}/spec.docx").status_code
+        == 404
+    )
+
+
+def test_fail_vernuvshiysya_lot_snova_stol_razbora(db: Any, organization: Any) -> None:
+    """Возврат от снабжения — это стол разбора, а не готовый результат.
+
+    Снабжение прислало цены; разбор их читает и вполне может передумать:
+    подтверждённый поставщик оказался дороже соседнего или не успевает к сроку.
+    Закрытый на правку возвращённый лот означал бы, что передумать можно только
+    заведя второй лот по тем же позициям.
+    """
+    from platform_api.modules.tender import works
+
+    work = _work(db, organization)
+    works.choose(db, work, work.positions[0].options[0].id)
+    works.choose(db, work, work.positions[1].options[0].id)
+    works.hand_over(db, work, "проверьте")
+    works.hand_over(db, work, "цены подтвердили")
+    assert work.stage.value == "returned"
+
+    # Разбор передумал: берём второго поставщика и правим задание.
+    works.set_spec(db, work, work.positions[0].id, "ТЗ\n\nПикобур, уточнено")
+    works.ask(db, work, work.positions[1].id, "Пикобур Ø215, поищите ещё")
+    assert works.hand_over(db, work, "ещё раз").stage.value == "supply"

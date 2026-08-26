@@ -59,6 +59,10 @@ class Draft:
     options: tuple[dict[str, Any], ...]
     """Находки ядра по этой позиции — то, из чего разбор будет выбирать."""
 
+    spec: str = ""
+    spec_source: str = ""
+    """Черновик задания снабжению и документ, из которого он собран."""
+
 
 def take(
     db: DbSession,
@@ -108,6 +112,8 @@ def take(
             unit=draft.unit,
             total=draft.total,
             ordering=порядок,
+            spec=draft.spec,
+            spec_source=draft.spec_source,
         )
         db.add(position)
         db.flush()
@@ -154,7 +160,7 @@ def choose(db: DbSession, work: TenderWork, option_id: uuid.UUID) -> None:
     Своё и добавленное снабжением не трогаем: их добавляли руками, и стереть
     чужую работу одним щелчком по соседней строке нельзя.
     """
-    _at_stage(work, WorkStage.ANALYSIS, "Выбирать поставщика может отдел разбора")
+    _at_stage(work, _ANALYSIS_DESK, "Выбирать поставщика может отдел разбора")
     выбран = _option(work, option_id)
     выбран.chosen = True
     db.execute(
@@ -174,7 +180,7 @@ def ask(db: DbSession, work: TenderWork, position_id: uuid.UUID, name: str) -> T
     Так и выглядит заявка: «вот это найдите сами». Пустые поля здесь не
     недоделка, а смысл — цену и поставщика выясняет снабжение.
     """
-    _at_stage(work, WorkStage.ANALYSIS, "Заказывать поиск может отдел разбора")
+    _at_stage(work, _ANALYSIS_DESK, "Заказывать поиск может отдел разбора")
     имя = name.strip()
     if not имя:
         raise SpokenError("Напишите, что искать: без названия снабжению не с чем работать")
@@ -205,7 +211,7 @@ def add(
     db: DbSession, work: TenderWork, position_id: uuid.UUID, user_id: uuid.UUID, **fields: Any
 ) -> TenderWorkOption:
     """Снабжение добавляет свой вариант."""
-    _at_stage(work, WorkStage.SUPPLY, "Добавлять варианты может снабжение")
+    _at_stage(work, (WorkStage.SUPPLY,), "Добавлять варианты может снабжение")
     option = TenderWorkOption(
         position_id=_position(work, position_id).id,
         source=OptionSource.SUPPLY,
@@ -225,7 +231,7 @@ def edit(
     Правит любой, включая найденный моделью, — за тем его и передавали:
     цена с площадки бывает вчерашней, а ссылка ведёт на раздел, а не на товар.
     """
-    _at_stage(work, WorkStage.SUPPLY, "Править варианты может снабжение")
+    _at_stage(work, (WorkStage.SUPPLY,), "Править варианты может снабжение")
     option = _option(work, option_id)
     for имя, значение in _cleaned(fields).items():
         setattr(option, имя, значение)
@@ -243,6 +249,21 @@ def drop(db: DbSession, work: TenderWork, option_id: uuid.UUID) -> None:
             " Если товара нет, напишите об этом в комментарии"
         )
     db.execute(delete(TenderWorkOption).where(TenderWorkOption.id == option.id))
+
+
+def set_spec(db: DbSession, work: TenderWork, position_id: uuid.UUID, body: str) -> None:
+    """Разбор правит задание, которое увидит снабжение.
+
+    Правит только разбор, и только пока лот у него. Снабжение задание читает:
+    дать ему исправлять условия, по которым оно же и отчитывается, значит
+    убрать единственное место, где записано, что именно просили купить.
+    """
+    from platform_api.modules.tender.spec import MAX_LENGTH
+
+    _at_stage(work, _ANALYSIS_DESK, "Править задание может отдел разбора")
+    position = _position(work, position_id)
+    position.spec = body.strip()[:MAX_LENGTH]
+    db.flush()
 
 
 def hand_over(db: DbSession, work: TenderWork, note: str) -> TenderWork:
@@ -272,12 +293,26 @@ def _require_ready(work: TenderWork) -> None:
     """
     немые = [position.title for position in work.positions if not position.options]
     if немые:
-        первая = немые[0]
-        сколько = f" и ещё {len(немые) - 1}" if len(немые) > 1 else ""
         raise SpokenError(
-            f"По позиции «{первая[:60]}»{сколько} не выбран поставщик и не заказан поиск."
+            f"По позиции «{_enumerate(немые)} не выбран поставщик и не заказан поиск."
             " Выберите вариант или нажмите «Заказать поиск»"
         )
+
+    # Снабжение не видит исходных документов: в них цены заключения и печати.
+    # Задание — единственное, по чему оно поймёт, что искать, и позиция без
+    # него уходит немой ровно так же, как позиция без вариантов.
+    безмолвные = [position.title for position in work.positions if not position.spec.strip()]
+    if безмолвные:
+        raise SpokenError(
+            f"У позиции «{_enumerate(безмолвные)} пустое техническое задание."
+            " Снабжение исходных документов не видит — опишите, что нужно купить"
+        )
+
+
+def _enumerate(titles: list[str]) -> str:
+    """«Насос» или «Насос» и ещё 3 — начало жалобы на список позиций."""
+    сколько = f" и ещё {len(titles) - 1}" if len(titles) > 1 else ""
+    return f"{titles[0][:60]}»{сколько}"
 
 
 def visible_for(work: TenderWork, role: Role) -> bool:
@@ -291,8 +326,19 @@ def visible_for(work: TenderWork, role: Role) -> bool:
     return work.stage is WorkStage.SUPPLY
 
 
-def _at_stage(work: TenderWork, stage: WorkStage, refusal: str) -> None:
-    if work.stage is not stage:
+_ANALYSIS_DESK = (WorkStage.ANALYSIS, WorkStage.RETURNED)
+"""Когда лот на столе у разбора.
+
+Возврат от снабжения — это тоже стол разбора, а не готовый результат. Оно
+прислало цены; разбор их читает и вполне может передумать: подтверждённый
+поставщик оказался дороже соседнего или не успевает к сроку. Считать
+возвращённый лот закрытым значило бы, что передумать можно только заведя
+второй лот по тем же позициям.
+"""
+
+
+def _at_stage(work: TenderWork, stages: tuple[WorkStage, ...], refusal: str) -> None:
+    if work.stage not in stages:
         raise SpokenError(f"{refusal}, и только пока лот у него")
 
 
@@ -338,6 +384,7 @@ __all__ = [
     "edit",
     "hand_over",
     "one",
+    "set_spec",
     "take",
     "taken",
     "visible_for",

@@ -376,6 +376,16 @@ export interface WorkPosition {
   /** Сумма закупки. Снабжению не приходит вовсе. */
   total: number | null;
   options: WorkOption[];
+  /**
+   * Техническое задание позиции — то единственное, что видит снабжение.
+   *
+   * Собрано платформой из разобранных требований, а не взято из документа
+   * заказчика: в исходном ТЗ стоят цены заключения, реквизиты и печати.
+   */
+  spec: string;
+  /** Документ, из которого собран черновик задания. */
+  spec_source: string;
+  /** Исходные бумаги. Снабжению приходят пустыми. */
   documents: DetailField[];
 }
 
@@ -447,6 +457,16 @@ export const worksApi = {
 
   dropOption: (workId: string, optionId: string) =>
     api.delete<Work>(`/api/tender/works/${workId}/options/${optionId}`),
+
+  editSpec: (workId: string, positionId: string, spec: string) =>
+    api.patch<Work>(
+      `/api/tender/works/${workId}/positions/${positionId}/spec`,
+      { spec },
+    ),
+
+  /** Ссылка на задание файлом — тем, что снабжение перешлёт поставщику. */
+  specFile: (workId: string, positionId: string) =>
+    `/api/tender/works/${workId}/positions/${positionId}/spec.docx`,
 
   handOver: (workId: string, note: string) =>
     api.post<Work>(`/api/tender/works/${workId}/hand-over`, { note }),

@@ -81,7 +81,7 @@ function Routing() {
         <Route path="skstore/analytics" element={<BargainsAnalytics />} />
         <Route path="omarket/analytics" element={<PreordersAnalytics />} />
         <Route path="tender/analytics" element={<TenderAnalytics />} />
-        <Route path="tender/works" element={<WorksPage />} />
+        <Route path="tender/works" element={<WorksPage role={me.role} />} />
         <Route path="tender/works/:id" element={<WorkPage role={me.role} />} />
         {/*
           Заведение закупки папкой убрано с глаз, а не удалено: страницы
