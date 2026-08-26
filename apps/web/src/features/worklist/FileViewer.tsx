@@ -98,7 +98,7 @@ export function FileViewer({
             url={url}
           />
         ) : data ? (
-          <Body data={data} url={url} name={name} />
+          <PreviewBody data={data} url={url} name={name} />
         ) : null}
       </div>
     </div>
@@ -113,7 +113,12 @@ const KINDS: Record<Preview["kind"], string> = {
   none: "Показать нельзя",
 };
 
-function Body({
+/**
+ * Тело документа. Вынесено отдельно, потому что тот же документ показывается
+ * и во весь экран, и в боковой панели работы над лотом: два способа рисовать
+ * одну таблицу разойдутся на первой же книге с объединёнными ячейками.
+ */
+export function PreviewBody({
   data,
   url,
   name,

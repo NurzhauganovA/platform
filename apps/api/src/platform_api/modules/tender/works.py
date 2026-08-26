@@ -266,6 +266,17 @@ def set_spec(db: DbSession, work: TenderWork, position_id: uuid.UUID, body: str)
     db.flush()
 
 
+def set_note(db: DbSession, work: TenderWork, position_id: uuid.UUID, body: str) -> None:
+    """Заметка снабжения по позиции — короткая, в одну строку.
+
+    Пишет её тот, у кого лот: объясняет решение тот, кто его принял. Разбор
+    свои соображения кладёт в задание, снабжение — сюда.
+    """
+    position = _position(work, position_id)
+    position.note = " ".join(body.split())[:500]
+    db.flush()
+
+
 def hand_over(db: DbSession, work: TenderWork, note: str) -> TenderWork:
     """Передаёт лот другому отделу.
 
@@ -384,6 +395,7 @@ __all__ = [
     "edit",
     "hand_over",
     "one",
+    "set_note",
     "set_spec",
     "take",
     "taken",

@@ -390,6 +390,9 @@ class WorkPositionOut(BaseModel):
     spec_source: str = ""
     """Из какого документа собран черновик задания."""
 
+    note: str = ""
+    """Заметка снабжения по позиции: почему взяли дороже, почему ждать месяц."""
+
     documents: list[DetailField] = []
     """Исходные бумаги позиции. Снабжению не уходят: в них цены заключения,
     реквизиты и печати, а от цены заказчика считается наша."""
@@ -459,6 +462,12 @@ class WorkSpecIn(BaseModel):
     """Правка технического задания позиции."""
 
     spec: str
+
+
+class WorkNoteIn(BaseModel):
+    """Заметка по позиции."""
+
+    note: str
 
 
 class WorkHandOverIn(BaseModel):

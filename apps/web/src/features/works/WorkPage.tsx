@@ -30,11 +30,14 @@ import { PageHeader } from "@/shell/AppShell";
 import { Button, Card, Spinner, cx, money } from "@/ui";
 import { formatDate } from "@/features/worklist/format";
 import { Sourcing } from "./Sourcing";
-import { Spec } from "./Spec";
+import { DocsPanel } from "./DocsPanel";
 
 export function WorkPage({ role }: { role: Role }) {
   const { id = "" } = useParams();
   const client = useQueryClient();
+  // Какая позиция открыта в боковой панели. Помнит страница, а не документ:
+  // перешли к соседней позиции — панель показывает её задание.
+  const [shown, setShown] = useState("");
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["works", id],
     queryFn: () => worksApi.one(id),
@@ -56,6 +59,7 @@ export function WorkPage({ role }: { role: Role }) {
     );
 
   const мой = analysis ? data.stage !== "supply" : data.stage === "supply";
+  const открыта = data.positions.find((position) => position.id === shown);
 
   return (
     <>
@@ -72,16 +76,29 @@ export function WorkPage({ role }: { role: Role }) {
         }
       />
 
-      <div className="space-y-4 px-8 py-6">
-        <Summary work={data} analysis={analysis} mine={мой} />
-        <Notes work={data} />
-        <Positions
-          work={data}
-          analysis={analysis}
-          editable={мой}
-          onDone={refresh}
-        />
-        {мой && <HandOver work={data} analysis={analysis} onDone={refresh} />}
+      <div className="flex items-start">
+        <div className="min-w-0 flex-1 space-y-4 px-8 py-6">
+          <Summary work={data} analysis={analysis} mine={мой} />
+          <Notes work={data} />
+          <Positions
+            work={data}
+            analysis={analysis}
+            editable={мой}
+            shown={shown}
+            onShow={setShown}
+            onDone={refresh}
+          />
+          {мой && <HandOver work={data} analysis={analysis} onDone={refresh} />}
+        </div>
+        {открыта && (
+          <DocsPanel
+            work={data}
+            position={открыта}
+            editable={мой && analysis}
+            onDone={refresh}
+            onClose={() => setShown("")}
+          />
+        )}
       </div>
     </>
   );
@@ -353,11 +370,15 @@ function Positions({
   work,
   analysis,
   editable,
+  shown,
+  onShow,
   onDone,
 }: {
   work: Work;
   analysis: boolean;
   editable: boolean;
+  shown: string;
+  onShow: (positionId: string) => void;
   onDone: (work: Work) => void;
 }) {
   const [open, setOpen] = useState<Set<string>>(() => {
@@ -444,6 +465,8 @@ function Positions({
                 analysis={analysis}
                 editable={editable}
                 open={open.has(position.id)}
+                shown={shown === position.id}
+                onShow={() => onShow(position.id)}
                 onToggle={() => toggle(position.id)}
                 onDone={onDone}
               />
@@ -462,6 +485,8 @@ function PositionRows({
   analysis,
   editable,
   open,
+  shown,
+  onShow,
   onToggle,
   onDone,
 }: {
@@ -471,6 +496,9 @@ function PositionRows({
   analysis: boolean;
   editable: boolean;
   open: boolean;
+  /** Эта позиция открыта в боковой панели. */
+  shown: boolean;
+  onShow: () => void;
   onToggle: () => void;
   onDone: (work: Work) => void;
 }) {
@@ -511,11 +539,40 @@ function PositionRows({
         </td>
         <td className="px-2 py-2.5 align-top">
           <div className="text-ink">{position.title}</div>
-          {!position.spec.trim() && (
-            <div className="mt-0.5 text-xs text-critical">
-              нет технического задания
-            </div>
-          )}
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={(event) => {
+                // Строка раскрывается по щелчку, а этот щелчок — про панель.
+                event.stopPropagation();
+                onShow();
+              }}
+              className={cx(
+                "rounded-full px-2 py-0.5 text-xs font-medium transition",
+                shown
+                  ? "bg-series-1 text-white"
+                  : position.spec.trim()
+                    ? "bg-series-1/10 text-series-1 hover:bg-series-1/20"
+                    : "bg-critical/10 text-critical hover:bg-critical/20",
+              )}
+              title="Открыть техническое задание в панели справа"
+            >
+              {position.spec.trim() ? "Задание" : "Задания нет"}
+            </button>
+            {analysis && position.documents.length > 0 && (
+              <span className="text-xs text-ink-muted">
+                + {position.documents.length} документа заказчика
+              </span>
+            )}
+            {position.note && (
+              <span
+                className="truncate text-xs text-ink-muted italic"
+                title={position.note}
+              >
+                {position.note}
+              </span>
+            )}
+          </div>
         </td>
         <td className="px-2 py-2.5 text-right align-top tabular-nums text-ink">
           {position.quantity === null
@@ -597,13 +654,7 @@ function PositionRows({
       {open && (
         <tr className="border-b border-hairline bg-plane/40">
           <td colSpan={колонок} className="p-0">
-            <div className="space-y-4 border-l-2 border-l-series-1 px-5 py-4">
-              <Spec
-                work={work}
-                position={position}
-                editable={editable && analysis}
-                onDone={onDone}
-              />
+            <div className="space-y-3 border-l-2 border-l-series-1 px-5 py-4">
               <Sourcing
                 work={work}
                 position={position}
@@ -611,7 +662,12 @@ function PositionRows({
                 editable={editable}
                 onDone={onDone}
               />
-              {analysis && <Documents position={position} />}
+              <Note
+                work={work}
+                position={position}
+                editable={editable}
+                onDone={onDone}
+              />
             </div>
           </td>
         </tr>
@@ -621,39 +677,65 @@ function PositionRows({
 }
 
 /**
- * Исходные бумаги позиции — только отделу разбора.
+ * Заметка по позиции — одна строка.
  *
- * Снабжению они не приходят вовсе: в ТЗ заказчика стоят цены ценового
- * заключения, реквизиты и печати. Вместо них — собранное задание.
+ * Объяснять приходится позицию: почему взяли дороже, почему ждать месяц.
+ * Комментарий на весь лот отвечает на «как прошло», и в нём это теряется.
+ * Поле короткое намеренно — длинное просят заполнить, короткое заполняют.
  */
-function Documents({ position }: { position: WorkPosition }) {
-  if (!position.documents.length) return null;
+function Note({
+  work,
+  position,
+  editable,
+  onDone,
+}: {
+  work: Work;
+  position: WorkPosition;
+  editable: boolean;
+  onDone: (work: Work) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = useMutation({
+    mutationFn: () => worksApi.editNote(work.id, position.id, draft ?? ""),
+    onSuccess: (next) => {
+      setDraft(null);
+      onDone(next);
+    },
+  });
+
+  if (!editable)
+    return position.note ? (
+      <p className="text-xs text-ink-muted">
+        <span className="font-medium">Заметка:</span> {position.note}
+      </p>
+    ) : null;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-      <span className="text-xs font-semibold tracking-wide text-ink-muted">
-        ИСХОДНЫЕ ДОКУМЕНТЫ
-      </span>
-      {position.documents.map((file, index) => (
-        <span key={index} className="text-sm">
-          <span className="mr-1 text-xs text-ink-muted">{file.label}</span>
-          {file.link ? (
-            <a
-              href={file.link}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-series-1 underline decoration-series-1/30 underline-offset-2"
-            >
-              {file.text}
-            </a>
-          ) : (
-            <span className="text-ink-muted line-through">{file.text}</span>
-          )}
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="shrink-0 text-xs text-ink-muted" htmlFor={position.id}>
+        Заметка по позиции
+      </label>
+      <input
+        id={position.id}
+        value={draft ?? position.note}
+        maxLength={500}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() =>
+          draft !== null && draft !== position.note && save.mutate()
+        }
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") setDraft(null);
+        }}
+        placeholder="Почему этот поставщик, почему такой срок"
+        className="min-w-0 flex-1 rounded-[8px] border border-baseline bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-series-1 focus:outline-none"
+      />
+      {save.isPending && <span className="text-xs text-ink-muted">…</span>}
+      {save.isError && (
+        <span className="text-xs text-critical">
+          {save.error instanceof Error ? save.error.message : "Не сохранилось"}
         </span>
-      ))}
-      <span className="text-xs text-ink-muted">
-        снабжение их не видит — ему уходит только задание
-      </span>
+      )}
     </div>
   );
 }

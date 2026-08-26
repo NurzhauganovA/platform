@@ -27,6 +27,7 @@ from platform_api.modules.schemas import (
     WorkAskIn,
     WorkHandOverIn,
     WorkListItemOut,
+    WorkNoteIn,
     WorkOptionIn,
     WorkOptionOut,
     WorkOut,
@@ -249,6 +250,31 @@ def edit_spec(
     return _work_out(work, identity.role)
 
 
+@router.patch("/works/{work_id}/positions/{position_id}/note", summary="Заметка по позиции")
+def edit_note(
+    work_id: uuid.UUID,
+    position_id: uuid.UUID,
+    body: WorkNoteIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_read] = None,
+) -> WorkOut:
+    """Одна строка о позиции: почему взяли дороже, почему ждать месяц.
+
+    Пишет тот, у кого лот. Общий комментарий отвечает на «как прошло», а
+    объяснять приходится позицию — в общем это теряется.
+    """
+    work = _mine(db, identity, work_id)
+    if not works.visible_for(work, identity.role) or not _at_desk(work, identity.role):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Писать заметку может тот отдел, у которого лот",
+        )
+    works.set_note(db, work, position_id, body.note)
+    db.commit()
+    return _work_out(work, identity.role)
+
+
 @router.get("/works/{work_id}/positions/{position_id}/spec.docx", summary="Задание файлом")
 def download_spec(
     work_id: uuid.UUID,
@@ -302,6 +328,17 @@ def hand_over(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _at_desk(work: TenderWork, role: Role) -> bool:
+    """У этого ли отдела лот сейчас на столе.
+
+    Возврат от снабжения — снова стол разбора: цены пришли, и подтверждённый
+    поставщик вполне может оказаться дороже соседнего.
+    """
+    if sees_money(role):
+        return work.stage is not WorkStage.SUPPLY
+    return work.stage is WorkStage.SUPPLY
 
 
 def _mine(db: Db, identity: Any, work_id: uuid.UUID) -> TenderWork:
@@ -414,6 +451,7 @@ def _position_out(position: Any, *, money: bool) -> WorkPositionOut:
         ],
         spec=position.spec,
         spec_source=position.spec_source,
+        note=position.note,
         # Исходные бумаги — только разбору. В ТЗ заказчика стоят цены ценового
         # заключения, реквизиты сторон и печати; увидев цену заказчика,
         # снабженец знает потолок, по которому с ним же и будут торговаться.

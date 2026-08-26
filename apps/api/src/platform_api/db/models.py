@@ -369,6 +369,15 @@ class TenderWorkPosition(Base, UUIDPrimaryKey, Timestamps):
     """Из какого документа собран черновик. Спорное требование нужно уметь
     проверить — разбору исходный документ по-прежнему открыт."""
 
+    note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    """Заметка снабжения по позиции: одна строка при выборе поставщика.
+
+    Короткая намеренно. Комментарий на весь лот отвечает на «как прошло», а
+    объяснять приходится позицию: почему взяли дороже, почему ждать месяц.
+    Записанное в общий комментарий это теряется, а не записанное — забывается
+    к следующему разговору с разбором.
+    """
+
     options: Mapped[list[TenderWorkOption]] = relationship(
         back_populates="position", cascade="all, delete-orphan", lazy="selectin"
     )

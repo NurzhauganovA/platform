@@ -1139,9 +1139,16 @@ def _case_spec() -> Any:
 
     from platform_api.modules.tender import spec
 
+    def страница(text: str, tables: Any = ()) -> Any:
+        return SimpleNamespace(
+            text=text,
+            tables=tuple(SimpleNamespace(rows=rows, is_meaningful=True) for rows in tables),
+        )
+
     def документ(kind: str, name: str, **поля: Any) -> Any:
         return SimpleNamespace(
             source=SimpleNamespace(name=name),
+            extraction=SimpleNamespace(pages=поля.get("pages", ())),
             insight=SimpleNamespace(
                 kind=kind,
                 requirements=поля.get("requirements", []),
@@ -1386,3 +1393,218 @@ def test_fail_vernuvshiysya_lot_snova_stol_razbora(db: Any, organization: Any) -
     works.set_spec(db, work, work.positions[0].id, "ТЗ\n\nПикобур, уточнено")
     works.ask(db, work, work.positions[1].id, "Пикобур Ø215, поищите ещё")
     assert works.hand_over(db, work, "ещё раз").stage.value == "supply"
+
+
+def _case_with_documents(*documents: Any) -> Any:
+    """Закупка из готовых документов — для проверок самой сборки текста."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        subject="Насосы",
+        requirements=(),
+        documents=documents,
+        requested=(
+            SimpleNamespace(
+                name="Насос ЦНС-60",
+                specification=None,
+                quantity=Decimal(3),
+                unit="шт",
+                ens_code="281314.900.000076",
+            ),
+        ),
+    )
+
+
+def _document(kind: str, name: str, text: str = "", tables: Any = ()) -> Any:
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        source=SimpleNamespace(name=name),
+        extraction=SimpleNamespace(
+            pages=(
+                SimpleNamespace(
+                    text=text,
+                    tables=tuple(SimpleNamespace(rows=rows, is_meaningful=True) for rows in tables),
+                ),
+            )
+        ),
+        insight=SimpleNamespace(kind=kind, requirements=[], delivery_terms=None, warranty=None),
+    )
+
+
+def test_fail_zadanie_beryotsya_iz_teksta_tz() -> None:
+    """Задание — текст самого ТЗ, а не пересказ его моделью.
+
+    Снабжение по этому тексту закупает: марка стали, допуск и номер ГОСТа
+    должны стоять теми же словами, что у заказчика. Выжимка в три строки
+    теряет как раз таблицу с размерами — и приходит не тот насос.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ насосы.pdf",
+            text="Материал корпуса: сталь 1.4401 (316 AISI).\nСтепень защиты: IP 68.",
+            tables=[(("Параметр", "Значение"), ("Напор", "150 м"))],
+        )
+    )
+    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+
+    assert "1.4401 (316 AISI)" in текст and "IP 68" in текст
+    # Таблицы наравне с текстом: в ТЗ размеры и допуски стоят именно в них.
+    assert "Напор · 150 м" in текст
+    assert "ТЗ насосы.pdf" in текст
+
+
+def test_fail_bez_tz_beryotsya_mz() -> None:
+    """Нет технического задания — берём маркетинговое заключение.
+
+    Закупка без ТЗ — обычное дело, и это не повод оставить снабжение без
+    описания товара.
+    """
+    from platform_api.modules.tender import spec
+
+    только_мз = _case_with_documents(
+        _document("КП", "КП поставщика.pdf", text="Предлагаем насос по выгодной цене"),
+        _document("МЗ", "МЗ.docx", text="Насос центробежный, напор не менее 150 м"),
+    )
+    текст = spec.render(spec.gather(только_мз), "Насос ЦНС-60")
+
+    assert "напор не менее 150 м" in текст and "МЗ.docx" in текст
+    # Текст поставщика в задание не идёт: там написано то, что удобно ему.
+    assert "выгодной цене" not in текст
+
+
+def test_fail_ceny_iz_marketingovogo_zaklyucheniya_ne_uhodyat() -> None:
+    """Строка цен из заключения снабжению не уходит.
+
+    Ценовое заключение — документ про цены: в его главной таблице стоит, во
+    сколько заказчик оценил закупку и почём предлагали соседи. Одна такая
+    строка сообщает поставщику наш потолок раньше, чем начнётся торг.
+
+    Строка позиции при этом остаётся: там количество «5,00», а не сумма
+    «1 000,00», и по форме записи одно от другого отличается.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "МЗ",
+            "МЗ.docx",
+            text="Расчёт маркетинговой цены\n1 Насос ЦНС-60 785 000,00 1 930 000,00",
+            tables=[
+                (
+                    ("№", "Наименование", "Код ЕНС ТРУ", "Ед.", "Кол-во", "Доставка"),
+                    ("1", "Насос ЦНС-60", "281314.900.000076", "шт.", "5,00", "DDP"),
+                    ("1", "Насос ЦНС-60", "1 000,00", "1 500,00", "1 266,67", ""),
+                )
+            ],
+        )
+    )
+    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+
+    assert "785 000,00" not in текст and "1 000,00" not in текст
+    # А строка позиции — с количеством, доставкой и кодом — на месте.
+    assert "281314.900.000076 · шт. · 5,00 · DDP" in текст
+
+
+def test_fail_pechati_i_rekvizity_ne_uhodyat() -> None:
+    """Место подписи, печать и реквизиты в задание не попадают.
+
+    Задание снабжение пересылает поставщику. Бланк заказчика с его подписной
+    строкой в этом письме выглядит документом, которого мы не подписывали.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ.pdf",
+            text=(
+                "Насос центробежный, напор 150 м\n"
+                "БИН 123456789012\n"
+                "М.П.\n"
+                "«___» _______________2026 г.\n"
+                "Подпись уполномоченного лица"
+            ),
+        )
+    )
+    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+
+    assert "напор 150 м" in текст
+    for мусор in ("БИН", "М.П.", "Подпись", "2026 г."):
+        assert мусор not in текст
+
+
+def test_fail_tehnicheskoye_chislo_ne_prinimayut_za_summu() -> None:
+    """Число с единицей измерения — не сумма.
+
+    «Цена деления 1 г/см³» это характеристика ареометра, «не менее 8000 часов»
+    — наработка на отказ. Выброшенные вместе с ценами, они означают закупку не
+    того прибора, и молча.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ.pdf",
+            text=(
+                "Цена деления 1 г/см3, погрешность ±1 г/см3\n"
+                "Наработка на отказ не менее 8000 часов\n"
+                "Диапазон измерения от 1180 до 1240 кг/м3"
+            ),
+        )
+    )
+    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+
+    assert "Цена деления 1 г/см3" in текст
+    assert "8000 часов" in текст and "от 1180 до 1240" in текст
+
+
+def test_fail_dlinnoye_zadaniye_obrezayetsya_s_pometkoy() -> None:
+    """Длинное задание обрезается, и об этом сказано.
+
+    Молча обрезанное хуже длинного: снабжение не узнает, что прочло половину,
+    и закупит по половине.
+    """
+    from platform_api.modules.tender import spec
+
+    длинный = "\n".join(f"Пункт {n}: требование к материалу корпуса" for n in range(4000))
+    case = _case_with_documents(_document("ТЗ", "ТЗ.pdf", text=длинный))
+    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+
+    assert len(текст) > spec.MAX_LENGTH
+    assert "Документ длиннее" in текст
+
+
+def test_fail_zametka_pishetsya_tem_u_kogo_lot(client: Any, db: Any) -> None:
+    """Заметку по позиции пишет тот отдел, у которого лот сейчас.
+
+    Объясняет решение тот, кто его принял. Чужая правка в этой строке означает,
+    что снабжение отчитывается словами, которых не писало.
+    """
+    from platform_api.db.models import Role
+    from tests.conftest import sign_in
+
+    org = sign_in(db, client, Role.BUYER)
+    work = _work(db, org)
+    db.commit()
+    позиция = work.positions[0]
+    адрес = f"/api/tender/works/{work.id}/positions/{позиция.id}/note"
+
+    # Лот у разбора — снабжение его вообще не видит.
+    assert client.patch(адрес, json={"note": "взяли дороже"}).status_code == 404
+
+    from platform_api.modules.tender import works
+
+    works.choose(db, work, позиция.id and work.positions[0].options[0].id)
+    works.choose(db, work, work.positions[1].options[0].id)
+    works.hand_over(db, work, "")
+    db.commit()
+
+    ответ = client.patch(адрес, json={"note": "  дороже,\n  но успеет к сроку  "})
+    assert ответ.status_code == 200
+    # Одна строка: перевод строки и лишние пробелы схлопываются.
+    assert ответ.json()["positions"][0]["note"] == "дороже, но успеет к сроку"

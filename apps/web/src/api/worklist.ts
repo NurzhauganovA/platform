@@ -385,6 +385,8 @@ export interface WorkPosition {
   spec: string;
   /** Документ, из которого собран черновик задания. */
   spec_source: string;
+  /** Заметка по позиции: почему этот поставщик, почему такой срок. */
+  note: string;
   /** Исходные бумаги. Снабжению приходят пустыми. */
   documents: DetailField[];
 }
@@ -457,6 +459,12 @@ export const worksApi = {
 
   dropOption: (workId: string, optionId: string) =>
     api.delete<Work>(`/api/tender/works/${workId}/options/${optionId}`),
+
+  editNote: (workId: string, positionId: string, note: string) =>
+    api.patch<Work>(
+      `/api/tender/works/${workId}/positions/${positionId}/note`,
+      { note },
+    ),
 
   editSpec: (workId: string, positionId: string, spec: string) =>
     api.patch<Work>(
