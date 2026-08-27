@@ -542,8 +542,22 @@ def _is_kazakh(line: str) -> bool:
     Две казахские буквы, а не одна: «і» встречается и в распознанном русском
     тексте вместо «i» латинской.
     """
-    return len(_KAZAKH.findall(line)) >= 2
+    return len(_KAZAKH.findall(line)) >= 2 or bool(_KAZAKH_WORDS.search(line))
 
+
+_KAZAKH_WORDS = re.compile(
+    r"\b(?:және|үшін|болуы|тиіс|керек|саны|бойынша|қамтамасыз|талап|жабдық|"
+    r"мен\s+\w+ды|беру|жүргізу|сатып\s+алу|жеткізу|көлемі|түрі|атауы|"
+    r"өлшем|бірлігі|дана|жиынтық|техникалық|тапсырма)\b",
+    re.IGNORECASE,
+)
+"""Служебные слова казахского.
+
+Букв мало: распознавание теряет «ә» и «қ», и строка проходит как русская.
+Служебные слова оно тоже портит, но не все сразу — одного хватает, чтобы
+опознать язык, а ошибиться на русской строке ими нельзя: таких слов в русском
+нет.
+"""
 
 _MIXED_WORD = re.compile(r"\b(?=\w*[А-Яа-яЁё])(?=\w*[A-Za-z])[\wА-Яа-яЁё]{3,}\b")
 
@@ -558,7 +572,10 @@ def _unreadable(line: str) -> bool:
     words = line.split()
     if len(words) < 3:
         return False
-    return len(_MIXED_WORD.findall(line)) / len(words) >= 0.3
+    # Половина, а не треть. Строку с одной-двумя помарками — «Толщина
+    # алм€tзного слоя» — человек читает, догадываясь; отсутствующую не читает
+    # никак. Отсеивается то, где догадываться уже не о чем.
+    return len(_MIXED_WORD.findall(line)) / len(words) >= 0.5
 
 
 _TECHNICAL = re.compile(
@@ -771,12 +788,22 @@ def _body_for(spec: CaseSpec, chosen: Position | None) -> str:
     задание хуже задания из соседнего документа, потому что по своему же
     правилу оно не отправится вовсе.
     """
-    if chosen is not None and chosen.source:
-        wanted = _same(chosen.source)
-        own = next((item for item in spec.bodies if _same(item.name) == wanted), None)
-        if own is not None:
-            return own.body
-    return spec.body
+    wanted = _same(chosen.source) if chosen is not None and chosen.source else ""
+    own = next((item for item in spec.bodies if _same(item.name) == wanted), None)
+
+    # Своего документа мало. Заключение позицию только перечисляет — «Пикобур
+    # PDC Ø190,5 · шт · 105 · DDP», — а описана она в техническом задании той
+    # же папки: диаметр, резцы, ГОСТ. Взяв одно заключение, мы отправляем
+    # снабжению строку таблицы вместо требований.
+    #
+    # Поэтому берём оба: свой документ и задания закупки. Лишнее из них
+    # уберёт отбор по принадлежности, а пропущенное вернуть уже нечем.
+    chosen_bodies = [item.body for item in spec.bodies if item.kind == "ТЗ"]
+    if own is not None and own.body not in chosen_bodies:
+        chosen_bodies.insert(0, own.body)
+    if not chosen_bodies:
+        return spec.body
+    return "\n".join(_deduped("\n".join(chosen_bodies).splitlines()))
 
 
 def source_of(spec: CaseSpec, title: str) -> str:
@@ -814,20 +841,38 @@ def _about(spec: CaseSpec, chosen: Position | None, body: str) -> str:
     if not alien:
         return body
 
-    kept = "\n".join(
-        line
-        for line in body.splitlines()
-        if not (_mentions(line, alien) and not _mentions(line, own))
-    ).strip()
+    kept = "\n".join(line for line in body.splitlines() if _own_line(line, own, alien)).strip()
 
-    # Предохранитель. Отбор по именам ошибается там, где документ описывает
-    # позицию, не называя её, — а таких заданий четверть. Оставшись почти
-    # пустым, задание не отправится вовсе: своё правило про пустое ТЗ мы
-    # написали сами. Лучше отдать текст с лишним: разбор его читает перед
-    # отправкой, а снабжение может переспросить. Пустое переспросить нечем.
-    if len(kept) < max(200, len(body) // 4):
-        return body
+    # Короткое, но своё, лучше длинного, но чужого. Раньше здесь стоял
+    # предохранитель: осталось мало — вернуть текст целиком. Он воевал с самим
+    # отбором и возвращал ровно то, ради чего отбор и заводили, — описание
+    # соседнего товара. Снабжение по нему купит не то и узнает об этом на
+    # приёмке; по короткому — переспросит в тот же день.
+    #
+    # Совсем пустое задание не остаётся: сборка перейдёт к требованиям
+    # закупки, а над ними в любом случае стоит наименование с количеством.
     return kept
+
+
+def _own_line(line: str, own: set[str], alien: set[str]) -> bool:
+    """Относится ли строка к этой позиции.
+
+    Строка, называющая соседнюю позицию и не называющая свою, — чужая.
+
+    Со строками таблиц строже: план закупок перечисляет весь месяц одной
+    таблицей, и её товары в наши позиции не входят вовсе — по именам их не
+    опознать. Товарная строка обязана назвать свою позицию, иначе она про
+    что-то другое.
+
+    Товарную строку от строки характеристики отличает число ячеек: «Напор ·
+    150 м» это параметр и остаётся всем, а «№ 01/452 · нар · запор · Кран
+    шаровой Ду15 · 12 · шт» — позиция чужого плана.
+    """
+    if _mentions(line, alien) and not _mentions(line, own):
+        return False
+    if line.count(" · ") >= 3:
+        return _mentions(line, own)
+    return True
 
 
 def _distinct(position: Position, every: tuple[Position, ...]) -> set[str]:
