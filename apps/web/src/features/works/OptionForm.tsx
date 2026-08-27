@@ -199,10 +199,10 @@ function _fields(draft: Draft): OptionFields {
   ] as const) {
     if (draft[key].trim()) fields[key] = draft[key].trim();
   }
-  const цена = Number(draft.price.replace(",", ".").replace(/\s/g, ""));
-  if (draft.price.trim() && Number.isFinite(цена)) fields.price = цена;
-  const срок = Number(draft.delivery_days.replace(/\s/g, ""));
-  if (draft.delivery_days.trim() && Number.isFinite(срок))
-    fields.delivery_days = Math.round(срок);
+  const price = Number(draft.price.replace(",", ".").replace(/\s/g, ""));
+  if (draft.price.trim() && Number.isFinite(price)) fields.price = price;
+  const leadTime = Number(draft.delivery_days.replace(/\s/g, ""));
+  if (draft.delivery_days.trim() && Number.isFinite(leadTime))
+    fields.delivery_days = Math.round(leadTime);
   return fields;
 }

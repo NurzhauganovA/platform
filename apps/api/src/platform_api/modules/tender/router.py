@@ -107,19 +107,19 @@ def get_worklist(
         raise unavailable("Отбор закупок", exc) from exc
 
     marked = lots.membership(db, identity.organization.id)
-    в_работе = works.in_progress(db, identity.organization.id)
-    порядок = _grouped(data.rows, marked, в_работе)
-    коды = codes.assign(
+    in_work = works.in_progress(db, identity.organization.id)
+    ordered = _grouped(data.rows, marked, in_work)
+    code_map = codes.assign(
         db,
         "tender",
         CODE_PREFIX,
-        [worklist.row_id(item) for item in порядок],
+        [worklist.row_id(item) for item in ordered],
     )
     db.commit()
 
     table = build_table(
         worklist.columns(),
-        порядок,
+        ordered,
         policy=POLICY,
         role=identity.role,
         tone=worklist.tone_of,
@@ -136,7 +136,7 @@ def get_worklist(
     return WorklistOut(
         sheet=worklist.sheet_title(),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=_with_lots(table.rows, порядок, marked, коды, в_работе, money=money),
+        rows=_with_lots(table.rows, ordered, marked, code_map, in_work, money=money),
         legend=[
             LegendItem(tone=tone, title=title, hint=hint) for tone, title, hint in worklist.legend()
         ],
@@ -160,7 +160,7 @@ def get_worklist(
 def _grouped(
     rows: Sequence[Any],
     marked: dict[tuple[str, str], str],
-    в_работе: dict[tuple[str, str], Any],
+    in_work: dict[tuple[str, str], Any],
 ) -> list[Any]:
     """Ставит строки одного лота подряд, а взятые в работу — в конец списка.
 
@@ -172,40 +172,40 @@ def _grouped(
     строку, и падать вниз из-за слабого участника он не должен. Разъединили —
     порядок ядра вернулся сам, здесь ничего не запоминается.
     """
-    свои: dict[str, list[Any]] = {}
+    own: dict[str, list[Any]] = {}
     for item in rows:
-        имя = marked.get((item.row.folder_path or "", item.row.title))
-        if имя is not None:
-            свои.setdefault(имя, []).append(item)
+        label = marked.get((item.row.folder_path or "", item.row.title))
+        if label is not None:
+            own.setdefault(label, []).append(item)
 
-    порядок: list[Any] = []
-    взятые: list[Any] = []
-    показанные: set[str] = set()
+    ordered: list[Any] = []
+    taken_rows: list[Any] = []
+    placed: set[str] = set()
     for item in rows:
-        ключ = (item.row.folder_path or "", item.row.title)
-        имя = marked.get(ключ)
+        marker = (item.row.folder_path or "", item.row.title)
+        label = marked.get(marker)
         # Взятое в работу опускается вниз: решение по нему принято, а место в
         # начале списка занято тем, что уже не выбирают. Наверху должно стоять
         # то, по чему ещё предстоит решить.
-        куда = взятые if ключ in в_работе else порядок
-        if имя is None:
-            куда.append(item)
+        into = taken_rows if marker in in_work else ordered
+        if label is None:
+            into.append(item)
             continue
-        if имя in показанные:
+        if label in placed:
             continue
-        показанные.add(имя)
+        placed.add(label)
         # Лот целиком идёт туда же, куда его первая позиция: половина лота
         # наверху и половина внизу — это два лота на вид.
-        куда.extend(свои[имя])
-    return порядок + взятые
+        into.extend(own[label])
+    return ordered + taken_rows
 
 
 def _with_lots(
     rows: Sequence[Any],
     source: Sequence[Any],
     marked: dict[tuple[str, str], str],
-    коды: dict[str, str],
-    в_работе: dict[tuple[str, str], Any],
+    code_map: dict[str, str],
+    in_work: dict[tuple[str, str], Any],
     *,
     money: bool,
 ) -> list[RowOut]:
@@ -219,43 +219,47 @@ def _with_lots(
     обращение к базе на каждую было бы восемьюстами запросов ради нескольких
     десятков записей.
     """
-    итоги: dict[str, tuple[int, Decimal | None, Decimal | None]] = {}
+    by_lot: dict[str, tuple[int, Decimal | None, Decimal | None]] = {}
     for item in source:
-        имя = marked.get((item.row.folder_path or "", item.row.title))
-        if имя is None:
+        label = marked.get((item.row.folder_path or "", item.row.title))
+        if label is None:
             continue
-        было = итоги.get(имя, (0, None, None))
-        итоги[имя] = (было[0] + 1, _add(было[1], item.row.total), _add(было[2], item.row.cost))
+        before = by_lot.get(label, (0, None, None))
+        by_lot[label] = (
+            before[0] + 1,
+            _add(before[1], item.row.total),
+            _add(before[2], item.row.cost),
+        )
 
-    готовые: list[RowOut] = []
+    ready: list[RowOut] = []
     for row, item in zip(rows, source, strict=True):
         out = RowOut.model_validate(asdict(row))
-        out.code = коды.get(worklist.row_id(item), "")
-        ключ = (item.row.folder_path or "", item.row.title)
-        взята = в_работе.get(ключ)
-        if взята is not None:
-            out.work = RowWorkOut(id=взята.id, code=взята.code, stage=взята.stage)
-        имя = marked.get(ключ)
-        итог = итоги.get(имя or "")
-        if имя is not None and итог is not None and итог[0] > 1:
-            позиций, сумма, себестоимость = итог
-            прибыль = (
-                сумма - себестоимость
-                if money and сумма is not None and себестоимость is not None
+        out.code = code_map.get(worklist.row_id(item), "")
+        marker = (item.row.folder_path or "", item.row.title)
+        taken = in_work.get(marker)
+        if taken is not None:
+            out.work = RowWorkOut(id=taken.id, code=taken.code, stage=taken.stage)
+        label = marked.get(marker)
+        totals = by_lot.get(label or "")
+        if label is not None and totals is not None and totals[0] > 1:
+            count, amount, cost_value = totals
+            profit = (
+                amount - cost_value
+                if money and amount is not None and cost_value is not None
                 else None
             )
             out.lot = RowLotOut(
-                key=имя,
-                positions=позиций,
-                total=float(сумма) if сумма is not None else None,
+                key=label,
+                positions=count,
+                total=float(amount) if amount is not None else None,
                 margin_percent=(
-                    float((прибыль / сумма * 100).quantize(Decimal("0.1")))
-                    if прибыль is not None and сумма
+                    float((profit / amount * 100).quantize(Decimal("0.1")))
+                    if profit is not None and amount
                     else None
                 ),
             )
-        готовые.append(out)
-    return готовые
+        ready.append(out)
+    return ready
 
 
 def _add(left: Decimal | None, right: Decimal | None) -> Decimal | None:
@@ -287,25 +291,25 @@ def merge_lot(
     деньги.
     """
     anchor = _position_or_404(item_id)
-    добавить = (
+    added = (
         [_position_or_404(other) for other in body.positions]
         if body is not None and body.positions
         else _folder_neighbours(anchor)
     )
-    if not добавить:
+    if not added:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Объединять не с чем: в этой закупке одна позиция",
         )
-    lots.gather(db, identity.organization.id, identity.user.id, anchor, добавить)
+    lots.gather(db, identity.organization.id, identity.user.id, anchor, added)
     db.commit()
-    собран = _lot_out(item_id, identity, db)
-    if собран is None:  # pragma: no cover — состав только что записан
+    built = _lot_out(item_id, identity, db)
+    if built is None:  # pragma: no cover — состав только что записан
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Лот собран, но не читается",
         )
-    return собран
+    return built
 
 
 @router.delete("/item/{item_id}/lot", summary="Разъединить лот")
@@ -385,9 +389,9 @@ def get_worklist_item(
     считается книга.
     """
     money = sees_money(identity.role)
-    состав = lots.positions_of(db, identity.organization.id, _position_or_404(item_id))
+    group = lots.positions_of(db, identity.organization.id, _position_or_404(item_id))
     try:
-        found = worklist.detail(item_id, pick, members=состав, money=money)
+        found = worklist.detail(item_id, pick, members=group, money=money)
     except Exception as exc:
         raise unavailable("Разбор закупки", exc) from exc
 
@@ -422,16 +426,16 @@ def preview_case_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Такого документа в этой закупке нет",
         )
-    разобран = preview.build(file.path)
+    parsed = preview.build(file.path)
     return PreviewOut(
-        kind=разобран.kind,
+        kind=parsed.kind,
         name=file.name,
         size_bytes=file.size_bytes,
         blocks=[
             PreviewBlockOut(
                 kind=block.kind, text=block.text, rows=[list(row) for row in block.rows]
             )
-            for block in разобран.blocks
+            for block in parsed.blocks
         ],
         sheets=[
             PreviewSheetOut(
@@ -439,10 +443,10 @@ def preview_case_file(
                 rows=[list(row) for row in sheet.rows],
                 truncated=sheet.truncated,
             )
-            for sheet in разобран.sheets
+            for sheet in parsed.sheets
         ],
-        truncated=разобран.truncated,
-        note=разобран.note,
+        truncated=parsed.truncated,
+        note=parsed.note,
     )
 
 

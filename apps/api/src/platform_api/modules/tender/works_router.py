@@ -110,25 +110,25 @@ def take_into_work(
             status_code=status.HTTP_404_NOT_FOUND, detail="Такой закупки нет в отборе"
         )
 
-    состав = lots.positions_of(
+    members = lots.positions_of(
         db, identity.organization.id, (found.row.folder_path or "", found.row.title)
     )
-    свои = (
-        [item for item in rows if (item.row.folder_path or "", item.row.title) in состав]
-        if состав
+    own = (
+        [item for item in rows if (item.row.folder_path or "", item.row.title) in members]
+        if members
         else [found]
     )
-    коды = _codes(db, rows)
+    code_map = _codes(db, rows)
 
     try:
         work = works.take(
             db,
             identity.organization.id,
             identity.user.id,
-            code=коды.get(worklist.row_id(found), found.row.title[:32]),
+            code=code_map.get(worklist.row_id(found), found.row.title[:32]),
             title=found.row.title,
             customer=found.row.customer or "",
-            positions=[_draft(item, коды) for item in свои],
+            positions=[_draft(item, code_map) for item in own],
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -346,16 +346,16 @@ def download_lot_spec(
     from platform_api.modules.tender import spec
 
     work = _mine(db, identity, work_id)
-    разделы = [
+    sections = [
         (f"{position.code} · {position.title}".strip(" ·"), position.spec)
         for position in sorted(work.positions, key=lambda item: item.ordering)
         if position.spec.strip()
     ]
-    if not разделы:
+    if not sections:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="В этом лоте ещё нет заданий"
         )
-    return _as_docx(f"Задание на закупку {work.code}", spec.document(work.code, разделы))
+    return _as_docx(f"Задание на закупку {work.code}", spec.document(work.code, sections))
 
 
 @router.post("/works/{work_id}/hand-over", summary="Передать другому отделу")
@@ -388,11 +388,11 @@ def _as_docx(name: str, content: bytes) -> Response:
     """
     from urllib.parse import quote
 
-    безопасное = f"{name}.docx".replace("/", "-")
+    safe_name = f"{name}.docx".replace("/", "-")
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"content-disposition": f"attachment; filename*=UTF-8''{quote(безопасное)}"},
+        headers={"content-disposition": f"attachment; filename*=UTF-8''{quote(safe_name)}"},
     )
 
 
@@ -427,7 +427,7 @@ def _do(action: Any) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-def _draft(item: Any, коды: dict[str, str]) -> works.Draft:
+def _draft(item: Any, code_map: dict[str, str]) -> works.Draft:
     from platform_api.modules.tender import spec
     from platform_api.modules.tender.worklist import row_id
 
@@ -435,13 +435,13 @@ def _draft(item: Any, коды: dict[str, str]) -> works.Draft:
     # Задание собирается один раз, при взятии в работу, и дальше живёт в самой
     # работе. Собирать его на каждый показ значило бы, что переданное снабжению
     # задание меняется само — папку разобрали заново, и требования другие.
-    задание, источник = spec.draft(row.folder_path or "", row.title)
+    brief, from_file = spec.draft(row.folder_path or "", row.title)
     return works.Draft(
         folder_path=row.folder_path or "",
         title=row.title,
-        code=коды.get(row_id(item), ""),
-        spec=задание,
-        spec_source=источник,
+        code=code_map.get(row_id(item), ""),
+        spec=brief,
+        spec_source=from_file,
         quantity=row.quantity,
         unit="",
         total=row.total,
@@ -537,8 +537,8 @@ def _position_out(position: Any, *, money: bool) -> WorkPositionOut:
 
 def _picked(position: Any) -> TenderWorkOption | None:
     """Вариант, по которому считается себестоимость: самый дешёвый с ценой."""
-    с_ценой = [option for option in position.options if option.price is not None]
-    return min(с_ценой, key=lambda option: option.price) if с_ценой else None
+    with_price = [option for option in position.options if option.price is not None]
+    return min(with_price, key=lambda option: option.price) if with_price else None
 
 
 def _cost(positions: Any) -> Decimal | None:
@@ -548,12 +548,12 @@ def _cost(positions: Any) -> Decimal | None:
     ноль — она не выяснена, и молчаливый ноль сделал бы лот выгоднее, чем он
     есть, ровно в том месте, ради которого лот и собирали.
     """
-    известные: list[Decimal] = []
+    known_names: list[Decimal] = []
     for position in positions:
-        выбран = _picked(position)
-        if выбран is not None and выбран.price is not None:
-            известные.append(выбран.price * (position.quantity or Decimal(1)))
-    return sum(известные, Decimal(0)) if известные else None
+        picked = _picked(position)
+        if picked is not None and picked.price is not None:
+            known_names.append(picked.price * (position.quantity or Decimal(1)))
+    return sum(known_names, Decimal(0)) if known_names else None
 
 
 def _sum(values: Any) -> Decimal | None:

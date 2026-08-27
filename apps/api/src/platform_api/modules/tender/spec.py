@@ -46,6 +46,13 @@ class Position:
     unit: str
     ens_code: str
 
+    source: str = ""
+    """Документ заказчика, из которого позиция взята.
+
+    В папке лежат пять служебных записок на пять разных нужд, и требования у
+    каждой свои. Один общий документ на всех означает задание на кабель, в
+    котором описан индукционный котёл."""
+
 
 @dataclass(frozen=True, slots=True)
 class Source:
@@ -77,6 +84,12 @@ class CaseSpec:
     """Из какого документа собрано. Спорное требование нужно уметь проверить —
     разбору исходный документ по-прежнему открыт."""
 
+    bodies: tuple[Source, ...] = ()
+    """Технические части всех документов заказчика в папке.
+
+    По одной на документ, а не одна на закупку: позиция берёт текст своего.
+    Какого именно — знает ядро, оно проставляет имя при сборке закупки."""
+
     body: str = ""
     """Техническая часть документа заказчика — его собственный текст.
 
@@ -93,12 +106,12 @@ def gather(case: Any) -> CaseSpec:
     Требования берутся из ТЗ и МЗ — документов заказчика. Из коммерческих
     предложений их брать нельзя: там поставщик пишет, что удобно ему.
     """
-    заказчик = [
+    customer = [
         document.insight
         for document in case.documents
         if document.insight is not None and str(document.insight.kind) in _CUSTOMER_KINDS
     ]
-    источник = next(
+    from_file = next(
         (
             document.source.name
             for document in case.documents
@@ -106,17 +119,18 @@ def gather(case: Any) -> CaseSpec:
         ),
         "",
     )
-    документ = _customer_document(case)
+    docs = _customer_documents(case)
+    doc = docs[0] if docs else Source(name="", kind="", body="")
     return CaseSpec(
         subject=limited(_line(case.subject)),
         requirements=tuple(
-            чистое for item in _requirements(заказчик, case) if (чистое := limited(item))
+            cleaned for item in _requirements(customer, case) if (cleaned := limited(item))
         ),
         # Место поставки снабжению не нужно: оно ищет товар и цену, а везут
         # после подписания договора. От вычистки эта строка обычно и не
         # остаётся — в ней один адрес.
-        delivery=limited(_first(insight.delivery_terms for insight in заказчик)),
-        warranty=limited(_first(insight.warranty for insight in заказчик)),
+        delivery=limited(_first(insight.delivery_terms for insight in customer)),
+        warranty=limited(_first(insight.warranty for insight in customer)),
         positions=tuple(
             Position(
                 name=_line(item.name),
@@ -124,11 +138,13 @@ def gather(case: Any) -> CaseSpec:
                 quantity=item.quantity,
                 unit=_line(item.unit),
                 ens_code=_line(item.ens_code),
+                source=_line(getattr(item, "source_document", "")),
             )
             for item in case.requested
         ),
-        source=документ.name or источник,
-        body=документ.body,
+        source=doc.name or from_file,
+        body=doc.body,
+        bodies=docs,
     )
 
 
@@ -149,7 +165,7 @@ def draft(folder_path: str, title: str) -> tuple[str, str]:
     known = worklist.case_spec(folder_path)
     if known is None:
         return "", ""
-    return render(known, title), known.source
+    return render(known, title), source_of(known, title)
 
 
 def render(spec: CaseSpec, title: str) -> str:
@@ -160,13 +176,13 @@ def render(spec: CaseSpec, title: str) -> str:
     Разложенное по восьми полям задание правят так же часто, как заполняют
     восемь полей, то есть никогда.
     """
-    выбрана = _match(spec.positions, title)
-    позиции = (выбрана,) if выбрана is not None else spec.positions
-    if not позиции:
+    matched = _match(spec.positions, title)
+    items = (matched,) if matched is not None else spec.positions
+    if not items:
         # Позиций заказчика ядро не нашло — папка без ценового заключения.
         # Название строки здесь единственное, что известно о товаре, и без
         # него задание выходит без предмета вовсе.
-        позиции = (
+        items = (
             Position(name=_line(title), specification="", quantity=None, unit="", ens_code=""),
         )
 
@@ -174,41 +190,42 @@ def render(spec: CaseSpec, title: str) -> str:
     # месторождение и заказчика («Реконструкция склада рудника Инкай»).
     # Названия месторождений списком не закрыть, а позиция и так названа
     # строкой ниже, своим именем.
-    части: list[str] = ["ТЕХНИЧЕСКОЕ ЗАДАНИЕ", ""]
+    parts: list[str] = ["ТЕХНИЧЕСКОЕ ЗАДАНИЕ", ""]
 
-    for index, position in enumerate(позиции, start=1):
-        номер = f"{index}. " if len(позиции) > 1 else ""
-        части.append(f"{номер}{position.name or _line(title)}")
+    for index, position in enumerate(items, start=1):
+        number = f"{index}. " if len(items) > 1 else ""
+        parts.append(f"{number}{position.name or _line(title)}")
         if position.quantity is not None:
-            части.append(f"   Количество: {_amount(position.quantity)} {position.unit}".rstrip())
+            parts.append(f"   Количество: {_amount(position.quantity)} {position.unit}".rstrip())
         if position.ens_code:
-            части.append(f"   Код ЕНС ТРУ: {position.ens_code}")
+            parts.append(f"   Код ЕНС ТРУ: {position.ens_code}")
         if position.specification:
-            части.append(f"   Характеристики: {position.specification}")
-        части.append("")
+            parts.append(f"   Характеристики: {position.specification}")
+        parts.append("")
 
-    if spec.body:
+    body = _about(spec, matched, _body_for(spec, matched))
+    if body:
         # Текст самого документа заказчика. Пересказ здесь не годится: марка
         # стали, допуск и номер ГОСТа должны стоять теми же словами, иначе
         # снабжение купит похожее.
-        части += ["ТЕХНИЧЕСКИЕ ТРЕБОВАНИЯ", "", spec.body]
+        parts += ["ТЕХНИЧЕСКИЕ ТРЕБОВАНИЯ", "", body]
     else:
         # Документ не прочитался — собираем из того, что ядро из него поняло.
         if spec.requirements:
-            части.append("ТРЕБОВАНИЯ ЗАКАЗЧИКА")
-            части += [f"— {item}" for item in spec.requirements]
-            части.append("")
+            parts.append("ТРЕБОВАНИЯ ЗАКАЗЧИКА")
+            parts += [f"— {item}" for item in spec.requirements]
+            parts.append("")
         if spec.delivery:
-            части += ["МЕСТО И УСЛОВИЯ ПОСТАВКИ", spec.delivery, ""]
+            parts += ["МЕСТО И УСЛОВИЯ ПОСТАВКИ", spec.delivery, ""]
         if spec.warranty:
-            части += ["ГАРАНТИЯ", spec.warranty, ""]
+            parts += ["ГАРАНТИЯ", spec.warranty, ""]
 
-    готово = limited("\n".join(части)).strip()
-    if len(готово) <= MAX_LENGTH:
-        return готово
+    assembled = limited("\n".join(parts)).strip()
+    if len(assembled) <= MAX_LENGTH:
+        return assembled
     # Обрезанное молча задание хуже длинного: снабжение не узнает, что читает
     # половину, и закупит по половине.
-    return готово[:MAX_LENGTH] + "\n\n[…] Документ длиннее — запросите остаток у отдела разбора"
+    return assembled[:MAX_LENGTH] + "\n\n[…] Документ длиннее — запросите остаток у отдела разбора"
 
 
 _ORGANIZATION = re.compile(
@@ -303,19 +320,23 @@ def limited(text: str, also: Sequence[str] = ()) -> str:
     нас, и вычистить его можно прицельно, не гадая по написанию. Общие правила
     закрывают то, чего мы заранее не знаем; это — то, что знаем точно.
     """
-    прицельно = _by_name(also)
-    строки: list[str] = []
-    for исходная in text.splitlines():
-        строка = прицельно.sub("[организация]", исходная) if прицельно else исходная
-        строка = _ORGANIZATION.sub("[организация]", строка)
-        строка = _PERSON.sub("[Ф.И.О.]", строка)
-        строка = _LOT_NUMBER.sub("[номер закупки]", строка)
-        строка = " ".join(_CONTACT.sub("", строка).split())
-        if _WHO_AND_WHERE.search(строка) or _COMPANY_LEFT.search(строка) or _PLACES.search(строка):
+    by_name = _by_name(also)
+    lines: list[str] = []
+    for raw in text.splitlines():
+        row_text = by_name.sub("[организация]", raw) if by_name else raw
+        row_text = _ORGANIZATION.sub("[организация]", row_text)
+        row_text = _PERSON.sub("[Ф.И.О.]", row_text)
+        row_text = _LOT_NUMBER.sub("[номер закупки]", row_text)
+        row_text = " ".join(_CONTACT.sub("", row_text).split())
+        if (
+            _WHO_AND_WHERE.search(row_text)
+            or _COMPANY_LEFT.search(row_text)
+            or _PLACES.search(row_text)
+        ):
             continue
-        if строка or (строки and строки[-1]):
-            строки.append(строка)
-    return "\n".join(строки).strip()
+        if row_text or (lines and lines[-1]):
+            lines.append(row_text)
+    return "\n".join(lines).strip()
 
 
 def document(heading: str, sections: Sequence[tuple[str, str]]) -> bytes:
@@ -334,34 +355,34 @@ def document(heading: str, sections: Sequence[tuple[str, str]]) -> bytes:
     from docx import Document
     from docx.shared import Pt
 
-    файл = Document()
-    обычный = файл.styles["Normal"]
-    обычный.font.name = "Calibri"
-    обычный.font.size = Pt(11)
+    file = Document()
+    normal = file.styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(11)
 
-    шапка = файл.add_paragraph()
-    прогон = шапка.add_run(heading)
-    прогон.bold = True
-    прогон.font.size = Pt(13)
+    header = file.add_paragraph()
+    run = header.add_run(heading)
+    run.bold = True
+    run.font.size = Pt(13)
 
-    for подзаголовок, body in sections:
-        if подзаголовок:
-            абзац = файл.add_paragraph()
-            строка = абзац.add_run(подзаголовок)
-            строка.bold = True
-            строка.font.size = Pt(12)
-        for текст in body.splitlines():
-            абзац = файл.add_paragraph(текст)
+    for subheading, body in sections:
+        if subheading:
+            paragraph = file.add_paragraph()
+            row_text = paragraph.add_run(subheading)
+            row_text.bold = True
+            row_text.font.size = Pt(12)
+        for content in body.splitlines():
+            paragraph = file.add_paragraph(content)
             # Заголовки разделов набраны прописными — по ним и отбиваются,
             # чтобы не заводить вторую разметку рядом с той, которую правит
             # человек.
-            if текст and текст == текст.upper() and any(з.isalpha() for з in текст):
-                абзац.runs[0].bold = True
-        файл.add_paragraph("")
+            if content and content == content.upper() and any(label.isalpha() for label in content):
+                paragraph.runs[0].bold = True
+        file.add_paragraph("")
 
-    поток = BytesIO()
-    файл.save(поток)
-    return поток.getvalue()
+    stream = BytesIO()
+    file.save(stream)
+    return stream.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -389,54 +410,155 @@ _CUSTOMER_ORDER = ("ТЗ", "МЗ")
 """
 
 
-def _customer_document(case: Any) -> Source:
-    """Техническая часть документа заказчика — его собственными словами.
+def _customer_documents(case: Any) -> tuple[Source, ...]:
+    """Технические части всех документов заказчика в папке.
+
+    Все, а не первый попавшийся: в папке лежат пять служебных записок на пять
+    разных нужд, и позиция должна получить текст своей. Какой именно — знает
+    ядро: оно проставляет имя документа при сборке закупки.
+
+    Порядок — сначала технические задания, потом заключения. Первым в списке
+    стоит тот, которым закрываются позиции без указанного документа.
 
     Текст уже разобран ядром и лежит в его базе: платить за чтение файла
     второй раз незачем, а открытая страница не тратит денег.
     """
+    out: list[Source] = []
     for kind in _CUSTOMER_ORDER:
         for document in case.documents:
             insight = document.insight
             if insight is None or str(insight.kind) != kind:
                 continue
-            текст = _readable(document.extraction)
-            if текст:
-                return Source(name=document.source.name, kind=kind, body=текст)
-    return Source(name="", kind="", body="")
+            content = _readable(document.extraction)
+            if content:
+                out.append(Source(name=document.source.name, kind=kind, body=content))
+    return tuple(out)
 
 
 def _readable(extraction: Any) -> str:
-    """Текст документа и его таблицы, без денежных строк и реквизитов.
+    """Технические требования из документа заказчика.
 
-    Таблицы идут наравне с текстом: в техническом задании размеры, допуски и
-    количества стоят именно в них, и документ без таблиц — это документ без
-    того, ради чего его читают.
+    Порядок шагов важнее самих шагов. Разбор pdf отдаёт текст так, как он лёг
+    на страницу: требование переносится на вторую строку, и строка «не менее
+    8000» отделена от «часов». Отбор по строкам на таком тексте выбрасывает
+    половину каждого требования и оставляет вторую — читать это невозможно.
 
-    Отбор построчный, а не по документу целиком. Убрать страницу из-за одной
-    цены значит убрать вместе с ней требования, ради которых страницу и
-    открывали.
+    Поэтому сначала переносы склеиваются, и только потом идёт отбор: он видит
+    целое предложение, а не его хвост. Повторы сводятся последними — до
+    склейки одинаковыми выглядят обрывки, а не требования.
     """
-    строки: list[str] = []
+    kept: list[str] = []
     for page in extraction.pages:
-        # Проза отбирается по техническому признаку, таблицы берутся целиком:
-        # в таблице технического задания «ОП-5 · 200» признака нет, а смысл
-        # есть, и опознаётся она самой своей табличностью.
-        строки += [
-            текст
-            for исходная in (page.text or "").splitlines()
-            if _TECHNICAL.search(текст := " ".join(исходная.split()))
+        # Проза отбирается по техническому признаку: в ней вперемешку
+        # требования и бумажная обвязка. Строке таблицы признак не нужен —
+        # она структурна сама по себе, и «Насос · шт. · 5,00 · DDP» это
+        # позиция закупки, в которой ни ГОСТа, ни слова «должен» нет.
+        kept += [
+            line for line in _unwrapped((page.text or "").splitlines()) if _TECHNICAL.search(line)
         ]
-        строки += [
-            строка for table in page.tables if table.is_meaningful for строка in _table_lines(table)
+        kept += [
+            row_text
+            for table in page.tables
+            if table.is_meaningful
+            for row_text in _table_lines(table)
         ]
 
-    очищены = [
-        текст
-        for текст in строки
-        if not (_commercial(текст) or _REQUISITES.search(текст) or _SIGNATURE.match(текст))
+    clean = [
+        line
+        for line in kept
+        if not _commercial(line)
+        and not _REQUISITES.search(line)
+        and not _SIGNATURE.match(line)
+        and not _is_kazakh(line)
+        and not _unreadable(line)
     ]
-    return "\n".join(очищены).strip()
+    return "\n".join(_deduped(clean)).strip()
+
+
+def _unwrapped(lines: list[str]) -> list[str]:
+    """Склеивает строки, разорванные переносом на странице.
+
+    Признак переноса: строка не кончается знаком препинания, а следующая
+    начинается со строчной буквы или цифры. Заголовки и строки таблиц не
+    склеиваются: у первых конец строки и есть конец мысли, у вторых разделитель
+    свой.
+    """
+    out: list[str] = []
+    for raw in lines:
+        line = " ".join(raw.split())
+        if not line:
+            continue
+        line = _BULLET.sub("— ", line)
+        if (
+            out
+            and out[-1][-1:] not in ".;:!?»)"
+            and " · " not in out[-1]
+            and not _heading(out[-1])
+            and (line[:1].islower() or line[:1].isdigit())
+        ):
+            out[-1] = f"{out[-1]} {line}"
+        else:
+            out.append(line)
+    return out
+
+
+def _heading(line: str) -> bool:
+    """Строка прописными — заголовок раздела, а не оборванное предложение."""
+    return line == line.upper() and any(ch.isalpha() for ch in line)
+
+
+def _deduped(lines: list[str]) -> list[str]:
+    """Повторы убираются, порядок сохраняется.
+
+    Одно и то же требование стоит в техническом задании и в приложении к нему
+    слово в слово, а таблица позиций повторяется на каждой странице. Читать
+    задание, в котором каждый абзац написан дважды, перестают на третьем.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        key = _same(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+    return out
+
+
+_BULLET = re.compile(r"^(?:[•·▪∙*]|о(?=\s)|[-–—])\s+")
+"""Начало перечисления. Кружок распознаётся как русская «о» — в задании она
+выглядит словом и рвёт первую фразу каждого пункта."""
+
+_KAZAKH = re.compile(r"[әғқңөұүһі]")
+
+
+def _is_kazakh(line: str) -> bool:
+    """Строка на казахском.
+
+    Техническое задание в Казахстане пишут на двух языках, и вторая половина
+    документа дословно повторяет первую. Снабжение читает по-русски, а двойная
+    длина означает, что до конца не дочитают ни ту ни другую.
+
+    Две казахские буквы, а не одна: «і» встречается и в распознанном русском
+    тексте вместо «i» латинской.
+    """
+    return len(_KAZAKH.findall(line)) >= 2
+
+
+_MIXED_WORD = re.compile(r"\b(?=\w*[А-Яа-яЁё])(?=\w*[A-Za-z])[\wА-Яа-яЁё]{3,}\b")
+
+
+def _unreadable(line: str) -> bool:
+    """Строка, которую распознавание испортило до нечитаемости.
+
+    «PDC резча аlЗ-lЗ,5 мм» — латинская «l» вместо единицы, «З» вместо тройки.
+    Такую строку снабжение не прочитает, а её присутствие заставляет
+    сомневаться и в соседних: задание с мусором целиком выглядит мусором.
+    """
+    words = line.split()
+    if len(words) < 3:
+        return False
+    return len(_MIXED_WORD.findall(line)) / len(words) >= 0.3
 
 
 _TECHNICAL = re.compile(
@@ -477,20 +599,51 @@ def _table_lines(table: Any) -> list[str]:
     rows = [[" ".join(str(cell).split()) for cell in row] for row in table.rows]
     if not rows:
         return []
-    лишние = {
-        индекс
-        for индекс, заголовок in enumerate(rows[0])
-        if _WHO_AND_WHERE.search(заголовок) or _PRICE_WORD.search(заголовок)
+    skipped = {
+        at
+        for at, caption in enumerate(rows[0])
+        if _WHO_AND_WHERE.search(caption) or _PRICE_WORD.search(caption)
     }
-    строки: list[str] = []
+    if any(_SUPPLIER_TABLE.search(caption) for caption in rows[0]):
+        # Таблица не про товар, а про то, кого заказчик опрашивал. Снабжению
+        # она не требование, а список конкурентов с контактами — и уходит
+        # целиком, а не построчно: от построчной вычистки остаётся шапка.
+        return []
+
+    lines: list[str] = []
     for row in rows:
         if _priced_row(row):
             continue
-        ячейки = [cell for индекс, cell in enumerate(row) if cell and индекс not in лишние]
-        if ячейки:
-            строки.append(" · ".join(ячейки))
-    return строки
+        cells = [cell for at, cell in enumerate(row) if cell and at not in skipped]
+        if not cells:
+            continue
+        # Обезличивание идёт здесь, а не после: иначе от таблицы поставщиков
+        # заказчика остаётся шапка, и обрезать её уже нечем — строк-то было
+        # четыре. Порядок шагов и решает, увидит снабжение остов или ничего.
+        line = limited(" · ".join(cells))
+        # Строка, от которой осталась одна подстановка, — это бывший список
+        # компаний: «1 · [организация]».
+        if not line or all(part.startswith("[") or part.isdigit() for part in line.split(" · ")):
+            continue
+        lines.append(line)
 
+    # Одна строка — это шапка без данных: цены и поставщиков из таблицы
+    # вырезали, и остался остов «№ · Наименование · Кол-во». Он говорит только
+    # о том, что таблица была, и в задании читается как обрывок.
+    return lines if len(lines) > 1 else []
+
+
+_PAYMENT = re.compile(r"плат[её]ж|предоплат|постоплат|рассрочк|счёт-фактур", re.IGNORECASE)
+"""Условия расчётов. Как мы платим заказчику — не то, о чём договариваются с
+поставщиком: «окончательный платёж 100%» в письме ему читается как наше
+предложение, и торг начинается с этой строки."""
+
+_SUPPLIER_TABLE = re.compile(
+    r"наименование\s+компани|\bкомпани[ияей]\b|потенциальн\w*\s+поставщик|"
+    r"резидент|производитель,|контакт\w*\s+данн|веб-сайт",
+    re.IGNORECASE,
+)
+"""Шапка таблицы, перечисляющей опрошенных заказчиком поставщиков."""
 
 _CURRENCY = re.compile(r"тенге|₸|\bkzt\b|\bтг\b|\bндс\b", re.IGNORECASE)
 """Валюта названа прямо — строка про деньги, чем бы она ни была."""
@@ -543,15 +696,15 @@ def _priced_row(row: Any) -> bool:
     Строка позиции при этом остаётся: в ней количество «5,00», а не сумма
     «1 000,00», и по форме записи одно от другого отличается.
     """
-    ячейки = [" ".join(str(cell).split()) for cell in row if cell]
-    if any(_AMOUNT.match(cell) for cell in ячейки):
+    cells = [" ".join(str(cell).split()) for cell in row if cell]
+    if any(_AMOUNT.match(cell) for cell in cells):
         return True
-    if sum(1 for cell in ячейки if _DECIMAL.match(cell)) >= 2:
+    if sum(1 for cell in cells if _DECIMAL.match(cell)) >= 2:
         return True
     # Цена и сумма рядом, записанные без разделителей: «650000 · 6500000».
     # Одно крупное число бывает и объёмом — «10495 м³», — а два в одной строке
     # это цена за единицу и итог, то есть ровно то, чего снабжению нельзя.
-    return sum(1 for cell in ячейки if _ROUND_SUM.match(cell)) >= 2
+    return sum(1 for cell in cells if _ROUND_SUM.match(cell)) >= 2
 
 
 _AMOUNT_INSIDE = re.compile(r"\d{1,3}(?:[\s\u00a0\u202f]\d{3})+[.,]\d{2}(?!\d)")
@@ -574,7 +727,7 @@ def _commercial(line: str) -> bool:
     Технические величины так не пишут: «1000 м³», «не менее 8000 часов», но не
     «1 000,00 м³». Хвост «,00» — привычка бухгалтерская, не инженерная.
     """
-    if _CURRENCY.search(line) or _AMOUNT_INSIDE.search(line):
+    if _CURRENCY.search(line) or _AMOUNT_INSIDE.search(line) or _PAYMENT.search(line):
         return True
     if len(_DECIMAL_INSIDE.findall(line)) >= 2:
         # Две дроби с двумя знаками в одной строке — это колонки цен, даже
@@ -592,19 +745,112 @@ def _requirements(insights: list[Any], case: Any) -> tuple[str, ...]:
     Один проход по объединению: требования повторяются в ТЗ и МЗ дословно, и
     без сведения задание начинается с трёх одинаковых абзацев.
     """
-    источники = [item for insight in insights for item in insight.requirements] or list(
+    sources = [item for insight in insights for item in insight.requirements] or list(
         case.requirements
     )
-    видели: set[str] = set()
-    отобраны: list[str] = []
-    for item in источники:
-        текст = _line(item)
-        ключ = _same(текст)
-        if not текст or ключ in видели or _MONEY.search(текст):
+    seen: set[str] = set()
+    picked: list[str] = []
+    for item in sources:
+        content = _line(item)
+        key = _same(content)
+        if not content or key in seen or _MONEY.search(content):
             continue
-        видели.add(ключ)
-        отобраны.append(текст)
-    return tuple(отобраны)
+        seen.add(key)
+        picked.append(content)
+    return tuple(picked)
+
+
+def _body_for(spec: CaseSpec, chosen: Position | None) -> str:
+    """Текст того документа, из которого взята эта позиция.
+
+    В папке бывает пять служебных записок на пять разных нужд. Общий на всех
+    текст означает, что снабжение получит задание на кабель с описанием
+    индукционного котла и купит не то.
+
+    Документ не назван или не прочитался — берём первый по важности: пустое
+    задание хуже задания из соседнего документа, потому что по своему же
+    правилу оно не отправится вовсе.
+    """
+    if chosen is not None and chosen.source:
+        wanted = _same(chosen.source)
+        own = next((item for item in spec.bodies if _same(item.name) == wanted), None)
+        if own is not None:
+            return own.body
+    return spec.body
+
+
+def source_of(spec: CaseSpec, title: str) -> str:
+    """Имя документа, из которого собрано задание этой позиции."""
+    chosen = _match(spec.positions, title)
+    if chosen is not None and chosen.source:
+        wanted = _same(chosen.source)
+        if any(_same(item.name) == wanted for item in spec.bodies):
+            return chosen.source
+    return spec.source
+
+
+def _about(spec: CaseSpec, chosen: Position | None, body: str) -> str:
+    """Из текста документа — только то, что относится к этой позиции.
+
+    В папке одна закупка на шестнадцать позиций и одно техническое задание на
+    всех. Приложив его целиком к каждой, мы отправляем снабжению задание на
+    кабель, в котором описан индукционный котёл: снабженец читает первое
+    попавшееся требование и ищет не тот товар.
+
+    Строка отбрасывается, если называет чужую позицию и не называет свою.
+    Общие требования — сертификаты, гарантия, упаковка — чужих имён не
+    содержат и остаются у всех, как и должно быть.
+    """
+    if chosen is None or len(spec.positions) < 2 or not body:
+        return body
+
+    own = _distinct(chosen, spec.positions)
+    alien = {
+        word
+        for position in spec.positions
+        if position is not chosen
+        for word in _distinct(position, spec.positions)
+    } - own
+    if not alien:
+        return body
+
+    kept = "\n".join(
+        line
+        for line in body.splitlines()
+        if not (_mentions(line, alien) and not _mentions(line, own))
+    ).strip()
+
+    # Предохранитель. Отбор по именам ошибается там, где документ описывает
+    # позицию, не называя её, — а таких заданий четверть. Оставшись почти
+    # пустым, задание не отправится вовсе: своё правило про пустое ТЗ мы
+    # написали сами. Лучше отдать текст с лишним: разбор его читает перед
+    # отправкой, а снабжение может переспросить. Пустое переспросить нечем.
+    if len(kept) < max(200, len(body) // 4):
+        return body
+    return kept
+
+
+def _distinct(position: Position, every: tuple[Position, ...]) -> set[str]:
+    """Слова, по которым эту позицию отличают от соседних по закупке.
+
+    Общие слова выбрасываются: «насос» есть в названии у четырёх позиций из
+    шести, и по нему они неразличимы. Различают их «ЦНС-60» и «погружной» —
+    то, что встречается у одной.
+    """
+    mine = _words(position.name)
+    others: set[str] = set()
+    for other in every:
+        if other is not position:
+            others |= _words(other.name)
+    return mine - others
+
+
+def _words(name: str) -> set[str]:
+    return set(re.findall(r"[\w-]{4,}", name.casefold()))
+
+
+def _mentions(line: str, words: set[str]) -> bool:
+    return bool(words & _words(line))
 
 
 def _match(positions: tuple[Position, ...], title: str) -> Position | None:
@@ -614,10 +860,10 @@ def _match(positions: tuple[Position, ...], title: str) -> Position | None:
     оно точно. Когда не сходится — закупка одной позиции, у строки название
     всей закупки: тогда позиция и так одна, и брать её можно без сравнения.
     """
-    искомое = _same(title)
-    точная = next((item for item in positions if _same(item.name) == искомое), None)
-    if точная is not None:
-        return точная
+    wanted = _same(title)
+    exact = next((item for item in positions if _same(item.name) == wanted), None)
+    if exact is not None:
+        return exact
     return positions[0] if len(positions) == 1 else None
 
 
@@ -627,15 +873,15 @@ def _by_name(names: Sequence[str]) -> re.Pattern[str] | None:
     Слова короче четырёх букв не берутся: «РУ» и «ДП» встречаются в марках и
     обозначениях, и вычистка по ним резала бы товар вместе с заказчиком.
     """
-    слова = {
-        слово
+    words = {
+        word
         for name in names
-        for слово in re.findall(r"[\w-]{4,}", name)
-        if слово.casefold() not in _COMMON
+        for word in re.findall(r"[\w-]{4,}", name)
+        if word.casefold() not in _COMMON
     }
-    if not слова:
+    if not words:
         return None
-    return re.compile("|".join(re.escape(слово) for слово in sorted(слова)), re.IGNORECASE)
+    return re.compile("|".join(re.escape(word) for word in sorted(words)), re.IGNORECASE)
 
 
 _COMMON = frozenset(
@@ -657,8 +903,8 @@ def _same(text: str) -> str:
 
 def _amount(value: Decimal) -> str:
     """Количество без хвоста нулей: «105», а не «105,000»."""
-    целое = value.to_integral_value()
-    return f"{целое:f}" if value == целое else f"{value.normalize():f}".replace(".", ",")
+    integral = value.to_integral_value()
+    return f"{integral:f}" if value == integral else f"{value.normalize():f}".replace(".", ",")
 
 
 __all__ = [
@@ -671,4 +917,5 @@ __all__ = [
     "gather",
     "limited",
     "render",
+    "source_of",
 ]

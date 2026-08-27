@@ -198,12 +198,12 @@ def detach(db: DbSession, organization_id: uuid.UUID, position: tuple[str, str])
         )
     )
     db.flush()
-    осталось = db.execute(
+    left = db.execute(
         select(func.count())
         .select_from(TenderLotPosition)
         .where(TenderLotPosition.lot_id == lot.id)
     ).scalar_one()
-    if осталось < 2:
+    if left < 2:
         _dissolve(db, lot)
 
 
@@ -246,18 +246,18 @@ def collect(
         return None
 
     if members is None:
-        свои = [item for item in rows if (item.row.folder_path or "") == folder]
+        own = [item for item in rows if (item.row.folder_path or "") == folder]
         merged = False
-        имя = key_of(folder)
+        name = key_of(folder)
     else:
-        свои = [item for item in rows if (item.row.folder_path or "", item.row.title) in members]
+        own = [item for item in rows if (item.row.folder_path or "", item.row.title) in members]
         merged = True
-        имя = key or key_of(folder)
-    if len(свои) < 2:
+        name = key or key_of(folder)
+    if len(own) < 2:
         return None
 
-    открыт = row_id(current)
-    позиции = tuple(
+    opened = row_id(current)
+    items = tuple(
         Position(
             id=row_id(item),
             title=item.row.title,
@@ -266,28 +266,24 @@ def collect(
             cost=item.row.cost if money else None,
             margin_percent=item.row.margin_percent if money else None,
             tone=tone_of(item),
-            current=row_id(item) == открыт,
+            current=row_id(item) == opened,
         )
-        for item in свои
+        for item in own
     )
 
-    сумма = _sum(item.row.total for item in свои)
-    себестоимость = _sum(item.row.cost for item in свои) if money else None
-    заработок = сумма - себестоимость if сумма is not None and себестоимость is not None else None
-    маржа = (
-        (заработок / сумма * 100).quantize(Decimal("0.1"))
-        if заработок is not None and сумма
-        else None
-    )
+    amount = _sum(item.row.total for item in own)
+    cost_value = _sum(item.row.cost for item in own) if money else None
+    gain = amount - cost_value if amount is not None and cost_value is not None else None
+    margin = (gain / amount * 100).quantize(Decimal("0.1")) if gain is not None and amount else None
     return Lot(
-        key=имя,
+        key=name,
         merged=merged,
-        positions=позиции,
-        total=сумма,
-        cost=себестоимость,
-        profit=заработок,
-        margin_percent=маржа,
-        priced=sum(1 for item in свои if item.row.cost is not None),
+        positions=items,
+        total=amount,
+        cost=cost_value,
+        profit=gain,
+        margin_percent=margin,
+        priced=sum(1 for item in own if item.row.cost is not None),
     )
 
 

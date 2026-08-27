@@ -82,13 +82,13 @@ def take(
     if not positions:
         raise SpokenError("В этом лоте нет позиций — брать в работу нечего")
 
-    уже = db.execute(
+    already = db.execute(
         select(TenderWork).where(
             TenderWork.organization_id == organization_id,
             TenderWork.code == code,
         )
     ).scalar_one_or_none()
-    if уже is not None:
+    if already is not None:
         raise SpokenError(f"Лот {code} уже в работе — откройте его в разделе «В работе»")
 
     work = TenderWork(
@@ -102,7 +102,7 @@ def take(
     db.add(work)
     db.flush()
 
-    for порядок, draft in enumerate(positions):
+    for ordered, draft in enumerate(positions):
         position = TenderWorkPosition(
             work_id=work.id,
             folder_path=draft.folder_path,
@@ -111,18 +111,18 @@ def take(
             quantity=draft.quantity,
             unit=draft.unit,
             total=draft.total,
-            ordering=порядок,
+            ordering=ordered,
             spec=draft.spec,
             spec_source=draft.spec_source,
         )
         db.add(position)
         db.flush()
-        for найдено in draft.options:
+        for found in draft.options:
             db.add(
                 TenderWorkOption(
                     position_id=position.id,
                     source=OptionSource.FOUND,
-                    **найдено,
+                    **found,
                 )
             )
     db.flush()
@@ -209,12 +209,12 @@ def choose(db: DbSession, work: TenderWork, option_id: uuid.UUID) -> None:
     чужую работу одним щелчком по соседней строке нельзя.
     """
     _at_stage(work, _ANALYSIS_DESK, "Выбирать поставщика может отдел разбора")
-    выбран = _option(work, option_id)
-    выбран.chosen = True
+    picked = _option(work, option_id)
+    picked.chosen = True
     db.execute(
         delete(TenderWorkOption).where(
-            TenderWorkOption.position_id == выбран.position_id,
-            TenderWorkOption.id != выбран.id,
+            TenderWorkOption.position_id == picked.position_id,
+            TenderWorkOption.id != picked.id,
             TenderWorkOption.source == OptionSource.FOUND,
             TenderWorkOption.chosen.is_(False),
         )
@@ -229,8 +229,8 @@ def ask(db: DbSession, work: TenderWork, position_id: uuid.UUID, name: str) -> T
     недоделка, а смысл — цену и поставщика выясняет снабжение.
     """
     _at_stage(work, _ANALYSIS_DESK, "Заказывать поиск может отдел разбора")
-    имя = name.strip()
-    if not имя:
+    label = name.strip()
+    if not label:
         raise SpokenError("Напишите, что искать: без названия снабжению не с чем работать")
 
     # Заказ поиска — это и есть слова «найденное не подходит», и относятся они
@@ -252,7 +252,7 @@ def ask(db: DbSession, work: TenderWork, position_id: uuid.UUID, name: str) -> T
     option = TenderWorkOption(
         position_id=position.id,
         source=OptionSource.ASKED,
-        name=имя,
+        name=label,
     )
     db.add(option)
     _resync(db)
@@ -285,8 +285,8 @@ def edit(
     """
     _at_stage(work, (WorkStage.SUPPLY,), "Править варианты может снабжение")
     option = _option(work, option_id)
-    for имя, значение in _cleaned(fields).items():
-        setattr(option, имя, значение)
+    for label, value_value in _cleaned(fields).items():
+        setattr(option, label, value_value)
     option.updated_by_id = user_id
     db.flush()
     return option
@@ -364,11 +364,11 @@ def _depersonalize(work: TenderWork) -> None:
     # «РУ‑6» с неразрывным дефисом.
     # Только заказчик. Название лота сюда попасть не должно: это и есть товар,
     # и вычистив его, мы отправили бы снабжению задание без предмета.
-    известные = (work.customer,)
+    known_names = (work.customer,)
     for position in work.positions:
-        чистое = limited(position.spec, известные)
-        if чистое != position.spec:
-            position.spec = чистое
+        cleaned = limited(position.spec, known_names)
+        if cleaned != position.spec:
+            position.spec = cleaned
 
 
 def _require_ready(work: TenderWork) -> None:
@@ -378,28 +378,28 @@ def _require_ready(work: TenderWork) -> None:
     поймёт, искать по ней или она попала случайно. Спросить об этом оно сможет
     только письмом, а ради письма процесс и заводили.
     """
-    немые = [position.title for position in work.positions if not position.options]
-    if немые:
+    silent = [position.title for position in work.positions if not position.options]
+    if silent:
         raise SpokenError(
-            f"По позиции «{_enumerate(немые)} не выбран поставщик и не заказан поиск."
+            f"По позиции «{_enumerate(silent)} не выбран поставщик и не заказан поиск."
             " Выберите вариант или нажмите «Заказать поиск»"
         )
 
     # Снабжение не видит исходных документов: в них цены заключения и печати.
     # Задание — единственное, по чему оно поймёт, что искать, и позиция без
     # него уходит немой ровно так же, как позиция без вариантов.
-    безмолвные = [position.title for position in work.positions if not position.spec.strip()]
-    if безмолвные:
+    without_spec = [position.title for position in work.positions if not position.spec.strip()]
+    if without_spec:
         raise SpokenError(
-            f"У позиции «{_enumerate(безмолвные)} пустое техническое задание."
+            f"У позиции «{_enumerate(without_spec)} пустое техническое задание."
             " Снабжение исходных документов не видит — опишите, что нужно купить"
         )
 
 
 def _enumerate(titles: list[str]) -> str:
     """«Насос» или «Насос» и ещё 3 — начало жалобы на список позиций."""
-    сколько = f" и ещё {len(titles) - 1}" if len(titles) > 1 else ""
-    return f"{titles[0][:60]}»{сколько}"
+    more = f" и ещё {len(titles) - 1}" if len(titles) > 1 else ""
+    return f"{titles[0][:60]}»{more}"
 
 
 def visible_for(work: TenderWork, role: Role) -> bool:
@@ -472,9 +472,9 @@ def _cleaned(fields: dict[str, Any]) -> dict[str, Any]:
     поправили цену, и ссылка не должна обнулиться заодно.
     """
     return {
-        имя: (значение.strip() if isinstance(значение, str) else значение)
-        for имя, значение in fields.items()
-        if имя in _FIELDS and значение is not None
+        label: (value_value.strip() if isinstance(value_value, str) else value_value)
+        for label, value_value in fields.items()
+        if label in _FIELDS and value_value is not None
     }
 
 

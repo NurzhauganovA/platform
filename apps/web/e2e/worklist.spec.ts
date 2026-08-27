@@ -216,7 +216,9 @@ test("решение читается не только цветом", async ({ 
   await expect(row).toHaveAttribute("aria-label", /Открыть разбор$/);
 });
 
-test("таблица занимает карточку целиком на широком экране", async ({ page }) => {
+test("таблица занимает карточку целиком на широком экране", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await signIn(page, ANALYST);
   const table = await waitForList(page);
@@ -227,7 +229,9 @@ test("таблица занимает карточку целиком на ши�
   // на полпути — таблица выглядела недогруженной.
   const fitted = await table.evaluate((node) => {
     const wrap = node.parentElement as HTMLElement;
-    return node.getBoundingClientRect().width >= wrap.getBoundingClientRect().width;
+    return (
+      node.getBoundingClientRect().width >= wrap.getBoundingClientRect().width
+    );
   });
   expect(fitted).toBe(true);
 
@@ -237,7 +241,9 @@ test("таблица занимает карточку целиком на ши�
   await page.getByRole("button", { name: "Все колонки" }).click();
   // Ждём саму перерисовку: измерить ширину до неё значит проверить прошлое
   // состояние и получить зелёный тест на сломанной таблице.
-  await expect.poll(() => page.locator("thead th").count()).toBeGreaterThan(before);
+  await expect
+    .poll(() => page.locator("thead th").count())
+    .toBeGreaterThan(before);
   await expect
     .poll(async () =>
       table.evaluate((node) => {
@@ -324,7 +330,9 @@ test("в тендерном отборе нет кнопок прогона, н�
     0,
   );
   // А книгу отбора платформа собирает сама, из того же, что на экране.
-  await expect(page.getByRole("button", { name: "Скачать Excel" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Скачать Excel" }),
+  ).toBeVisible();
 });
 
 test("легенда подписана словами своего раздела", async ({ page }) => {
@@ -396,9 +404,7 @@ test("длинные разделы разбора свёрнуты, но их �
   await expect(foldable).toContainText(/\(\d+\)/);
 
   // Деньги при этом остаются на виду — они не сворачиваются.
-  await expect(
-    panel.getByText("Себестоимость", { exact: true }),
-  ).toBeVisible();
+  await expect(panel.getByText("Себестоимость", { exact: true })).toBeVisible();
 
   await foldable.click();
   await expect(foldable).toHaveAttribute("aria-expanded", "true");
@@ -469,7 +475,9 @@ test("итоги пересчитываются по отобранному, а 
   const shown = () => page.getByText(/^Показано /).locator("..");
   const before = Number((await shown().innerText()).match(/\d+/g)![0]);
 
-  await page.getByRole("button", { name: /^Отбор по колонке «категория»/ }).click();
+  await page
+    .getByRole("button", { name: /^Отбор по колонке «категория»/ })
+    .click();
   await page.locator("label").filter({ hasText: /\d$/ }).first().click();
   await page.keyboard.press("Escape");
 
@@ -487,7 +495,9 @@ test("отбор по колонке живёт в ссылке", async ({ page 
   const table = await waitForList(page);
   test.skip((await table.count()) === 0, "в базе нет разобранных закупок");
 
-  await page.getByRole("button", { name: /^Отбор по колонке «моржа %»/ }).click();
+  await page
+    .getByRole("button", { name: /^Отбор по колонке «моржа %»/ })
+    .click();
   await page.getByPlaceholder(/^от /).first().fill("20");
   await page.getByRole("button", { name: "Готово" }).click();
 
@@ -513,7 +523,9 @@ test("метка снимает свой отбор, «снять всё» — �
   const table = await waitForList(page);
   test.skip((await table.count()) === 0, "в базе нет разобранных закупок");
 
-  await page.getByRole("button", { name: /^Отбор по колонке «моржа %»/ }).click();
+  await page
+    .getByRole("button", { name: /^Отбор по колонке «моржа %»/ })
+    .click();
   await page.getByPlaceholder(/^от /).first().fill("20");
   await page.getByRole("button", { name: "Готово" }).click();
 
@@ -533,7 +545,9 @@ test("числовой отбор пропускает строки без зн�
   const table = await waitForList(page);
   test.skip((await table.count()) === 0, "в базе нет разобранных закупок");
 
-  await page.getByRole("button", { name: /^Отбор по колонке «себестоимость»/ }).click();
+  await page
+    .getByRole("button", { name: /^Отбор по колонке «себестоимость»/ })
+    .click();
   await page.getByPlaceholder(/^от /).first().fill("1");
   await page.getByRole("button", { name: "Готово" }).click();
   await page.waitForTimeout(300);
@@ -561,7 +575,9 @@ test("в разборе видно, по какой находке посчит�
 
   await page.locator("tbody tr").first().click();
   const panel = page.getByRole("dialog", { name: "Разбор" });
-  await panel.getByText("Закупка", { exact: true }).waitFor({ timeout: 20_000 });
+  await panel
+    .getByText("Закупка", { exact: true })
+    .waitFor({ timeout: 20_000 });
 
   const marked = panel.getByRole("button", {
     name: "По этой находке посчитана себестоимость",
@@ -581,7 +597,9 @@ test("выбор другой находки пересчитывает день
 
   await page.locator("tbody tr").first().click();
   const panel = page.getByRole("dialog", { name: "Разбор" });
-  await panel.getByText("Закупка", { exact: true }).waitFor({ timeout: 20_000 });
+  await panel
+    .getByText("Закупка", { exact: true })
+    .waitFor({ timeout: 20_000 });
 
   const others = panel.getByRole("button", {
     name: "Считать себестоимость по этой находке",
@@ -597,7 +615,9 @@ test("выбор другой находки пересчитывает день
   await others.first().click();
   await expect.poll(cost, { timeout: 20_000 }).not.toBe(before);
   await expect(
-    panel.getByRole("button", { name: "По этой находке посчитана себестоимость" }).first(),
+    panel
+      .getByRole("button", { name: "По этой находке посчитана себестоимость" })
+      .first(),
   ).toBeVisible();
 });
 
@@ -609,7 +629,9 @@ test("у находок есть ссылки на карточку товара
 
   await page.locator("tbody tr").first().click();
   const panel = page.getByRole("dialog", { name: "Разбор" });
-  await panel.getByText("Закупка", { exact: true }).waitFor({ timeout: 20_000 });
+  await panel
+    .getByText("Закупка", { exact: true })
+    .waitFor({ timeout: 20_000 });
 
   const links = panel.locator('a[target="_blank"][href^="http"]');
   test.skip((await links.count()) === 0, "по этой закупке рынок не искали");

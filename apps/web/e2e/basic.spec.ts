@@ -47,9 +47,9 @@ test("вход открывает отбор закупок", async ({ page }) =
   ).toBeVisible();
   // Раздел показывает разобранное, а не предлагает завести закупку: папки
   // разбирают на машине тендерщика.
-  await expect(
-    page.getByRole("button", { name: "Новая закупка" }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Новая закупка" })).toHaveCount(
+    0,
+  );
 });
 
 test("меню строится из подключённых модулей", async ({ page }) => {
@@ -67,7 +67,10 @@ test("разбор закупки открывается из таблицы", a
   // Ждём именно таблицу, а не просто загрузку страницы: до ответа API её
   // ещё нет, и проверка молча пропускалась бы.
   const table = page.locator("table");
-  await table.or(page.getByText(/Пока (ничего|ни одной)/)).first().waitFor();
+  await table
+    .or(page.getByText(/Пока (ничего|ни одной)/))
+    .first()
+    .waitFor();
   test.skip((await table.count()) === 0, "в базе нет разобранных закупок");
 
   // Отдельной колонки с кнопкой нет — разбор открывает сама строка.

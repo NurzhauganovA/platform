@@ -419,6 +419,6 @@ def test_fail_kolonka_nazvaniya_obyavlena_v_kazhdom_razdele() -> None:
     from platform_api.modules.skstore.columns import ROLES as SKSTORE
     from platform_api.modules.tender.columns import ROLES as TENDER
 
-    for имя, roles in (("тендеры", TENDER), ("skstore", SKSTORE), ("omarket", OMARKET)):
-        названия = [column for column, role in roles.items() if role == "title"]
-        assert len(названия) == 1, f"{имя}: колонок с ролью «title» должно быть ровно одна"
+    for name, roles in (("тендеры", TENDER), ("skstore", SKSTORE), ("omarket", OMARKET)):
+        found_titles = [column for column, role in roles.items() if role == "title"]
+        assert len(found_titles) == 1, f"{name}: колонок с ролью «title» должно быть ровно одна"

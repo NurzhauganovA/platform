@@ -61,8 +61,12 @@ test("у площадки объёма нет, и графы под него т�
 
   // В книге площадки цена за единицу: складывать её по строкам нельзя, и
   // графа, показывающая сумму цен за штуку, врала бы.
-  await expect(page.getByRole("columnheader", { name: /Объём/ })).toHaveCount(0);
-  await expect(page.getByRole("columnheader", { name: /Заработок/ })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: /Объём/ })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("columnheader", { name: /Заработок/ }),
+  ).toBeVisible();
 });
 
 test("разрез переключается и живёт в ссылке", async ({ page }) => {
@@ -71,7 +75,9 @@ test("разрез переключается и живёт в ссылке", as
 
   await page.getByRole("button", { name: "название заказчика" }).click();
 
-  await expect(page.getByText(/^Всё по разрезу: название заказчика/)).toBeVisible();
+  await expect(
+    page.getByText(/^Всё по разрезу: название заказчика/),
+  ).toBeVisible();
   // Ссылкой на разрез делятся так же, как ссылкой на отбор.
   await expect.poll(() => page.url()).toContain("by=nazvanie_zakazchika");
 });
@@ -83,8 +89,12 @@ test("закупщику деньги не показывают и здесь", 
   // Граница та же, что у таблицы и разбора: сервер вырезал колонки по правам,
   // и считать по ним нечего. Спрятать на экране и посчитать в браузере значит
   // отдать — итог виден и без колонки.
-  await expect(page.getByRole("columnheader", { name: /Заработок/ })).toHaveCount(0);
-  await expect(page.getByRole("columnheader", { name: /Себестоимость/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("columnheader", { name: /Заработок/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("columnheader", { name: /Себестоимость/ }),
+  ).toHaveCount(0);
   // Но сама аналитика работает: строки и разрезы ему видны.
   await expect(page.getByText(/^Всё по разрезу: /)).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Строк" })).toBeVisible();

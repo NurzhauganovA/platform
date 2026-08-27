@@ -53,23 +53,23 @@ class _Analysis:
 
 @dataclass(frozen=True)
 class _Row:
-    товар: str
-    себестоимость: Decimal
-    маржа: Decimal
+    goods: str
+    cost_value: Decimal
+    margin: Decimal
     verdict: _Verdict = _Verdict("promising")
     analysis: _Analysis = _Analysis("promising")
 
 
 _COLUMNS = (
-    _Column("Товар", getter=lambda row: row.товар, width=40),
+    _Column("Товар", getter=lambda row: row.goods, width=40),
     _Column("Где купить", getter=lambda _row: "1688.com · 900 000 ₸", width=30),
     _Column(
         "Себестоимость",
-        getter=lambda row: row.себестоимость,
+        getter=lambda row: row.cost_value,
         width=16,
         number_format="#,##0.00",
     ),
-    _Column("Маржа ₸", getter=lambda row: row.маржа, width=16, number_format="#,##0.00"),
+    _Column("Маржа ₸", getter=lambda row: row.margin, width=16, number_format="#,##0.00"),
 )
 
 _POLICY_TITLES = {

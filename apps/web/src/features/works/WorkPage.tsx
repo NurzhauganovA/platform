@@ -58,8 +58,10 @@ export function WorkPage({ role }: { role: Role }) {
       </div>
     );
 
-  const мой = analysis ? data.stage !== "supply" : data.stage === "supply";
-  const открыта = data.positions.find((position) => position.id === shown);
+  const mine = analysis ? data.stage !== "supply" : data.stage === "supply";
+  const openedPosition = data.positions.find(
+    (position) => position.id === shown,
+  );
 
   return (
     <>
@@ -78,24 +80,26 @@ export function WorkPage({ role }: { role: Role }) {
 
       <div className="flex items-start">
         <div className="min-w-0 flex-1 space-y-4 px-8 py-6">
-          <Summary work={data} analysis={analysis} mine={мой} />
+          <Summary work={data} analysis={analysis} mine={mine} />
           <Notes work={data} />
           <Positions
             work={data}
             analysis={analysis}
-            editable={мой}
+            editable={mine}
             shown={shown}
             onShow={setShown}
             onDone={refresh}
           />
-          {мой && <HandOver work={data} analysis={analysis} onDone={refresh} />}
+          {mine && (
+            <HandOver work={data} analysis={analysis} onDone={refresh} />
+          )}
           {role === "admin" && <Remove work={data} />}
         </div>
-        {открыта && (
+        {openedPosition && (
           <DocsPanel
             work={data}
-            position={открыта}
-            editable={мой && analysis}
+            position={openedPosition}
+            editable={mine && analysis}
             onDone={refresh}
             onClose={() => setShown("")}
           />
@@ -121,10 +125,10 @@ function Summary({
   analysis: boolean;
   mine: boolean;
 }) {
-  const прибыль =
+  const profit =
     work.total !== null && work.cost !== null ? work.total - work.cost : null;
-  const неполно = work.priced < work.positions.length;
-  const сроки = withDates(work);
+  const partial = work.priced < work.positions.length;
+  const dated = withDates(work);
 
   return (
     <Card className="p-0">
@@ -143,18 +147,18 @@ function Summary({
               value={work.cost === null ? "—" : money(work.cost)}
               unit="₸"
               hint={
-                неполно
-                  ? `цена известна по ${work.priced} из ${work.positions.length}`
+                partial
+                  ? `price известна по ${work.priced} из ${work.positions.length}`
                   : undefined
               }
-              tone={неполно ? "warning" : undefined}
+              tone={partial ? "warning" : undefined}
             />
             <Cell
               label="Заработок"
-              value={прибыль === null ? "—" : money(прибыль)}
+              value={profit === null ? "—" : money(profit)}
               unit="₸"
-              tone={прибыль !== null && прибыль > 0 ? "good" : "critical"}
-              hint={неполно ? "по посчитанным позициям" : undefined}
+              tone={profit !== null && profit > 0 ? "good" : "critical"}
+              hint={partial ? "по посчитанным позициям" : undefined}
             />
           </>
         ) : (
@@ -162,12 +166,12 @@ function Summary({
             <Cell
               label="Цена найдена"
               value={`${work.priced} из ${work.positions.length}`}
-              tone={неполно ? "warning" : "good"}
+              tone={partial ? "warning" : "good"}
             />
             <Cell
               label="Сроки проставлены"
-              value={`${сроки} из ${work.positions.length}`}
-              tone={сроки < work.positions.length ? "warning" : "good"}
+              value={`${dated} из ${work.positions.length}`}
+              tone={dated < work.positions.length ? "warning" : "good"}
             />
             <Cell
               label="Задание"
@@ -189,50 +193,50 @@ function Summary({
  * говорит всё. Цвет здесь не единственный признак: шаг подписан словами.
  */
 function Flow({ work, mine }: { work: Work; mine: boolean }) {
-  const шаги: { key: Work["stage"]; title: string; hint: string }[] = [
+  const steps: { key: Work["stage"]; title: string; hint: string }[] = [
     { key: "analysis", title: "Разбор выбирает", hint: "поставщики и задание" },
     { key: "supply", title: "Снабжение уточняет", hint: "цены и сроки" },
     { key: "returned", title: "Готово к КП", hint: "цены подтверждены" },
   ];
-  const сейчас = шаги.findIndex((шаг) => шаг.key === work.stage);
+  const at = steps.findIndex((step) => step.key === work.stage);
 
   return (
     <div className="flex flex-wrap items-stretch gap-px border-b border-hairline bg-hairline">
-      {шаги.map((шаг, index) => {
-        const пройден = index < сейчас;
-        const текущий = index === сейчас;
+      {steps.map((step, index) => {
+        const passed = index < at;
+        const current = index === at;
         return (
           <div
-            key={шаг.key}
+            key={step.key}
             className={cx(
               "flex min-w-52 flex-1 items-center gap-2.5 px-4 py-2.5",
-              текущий ? "bg-series-1/10" : "bg-surface",
+              current ? "bg-series-1/10" : "bg-surface",
             )}
           >
             <span
               className={cx(
                 "flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
-                пройден && "bg-good text-white",
-                текущий && "bg-series-1 text-white",
-                !пройден && !текущий && "bg-plane text-ink-muted",
+                passed && "bg-good text-white",
+                current && "bg-series-1 text-white",
+                !passed && !current && "bg-plane text-ink-muted",
               )}
             >
-              {пройден ? "✓" : index + 1}
+              {passed ? "✓" : index + 1}
             </span>
             <span className="min-w-0">
               <span
                 className={cx(
                   "block truncate text-sm",
-                  текущий ? "font-semibold text-ink" : "text-ink-secondary",
+                  current ? "font-semibold text-ink" : "text-ink-secondary",
                 )}
               >
-                {шаг.title}
+                {step.title}
               </span>
               <span className="block truncate text-xs text-ink-muted">
-                {текущий && mine ? "сейчас ваш ход" : шаг.hint}
+                {current && mine ? "сейчас ваш ход" : step.hint}
               </span>
             </span>
-            {текущий && work.sent_at && (
+            {current && work.sent_at && (
               <span className="ml-auto shrink-0 text-xs text-ink-muted">
                 с {formatDate(work.sent_at)}
               </span>
@@ -257,7 +261,7 @@ function Cell({
   hint?: string;
   tone?: "good" | "warning" | "critical";
 }) {
-  const цвет =
+  const colour =
     tone === "good"
       ? "text-good"
       : tone === "warning"
@@ -269,7 +273,7 @@ function Cell({
     <div className="bg-surface px-5 py-3">
       <div className="text-xs text-ink-muted">{label}</div>
       <div className="mt-0.5 flex items-baseline gap-1">
-        <span className={cx("text-lg font-semibold tabular-nums", цвет)}>
+        <span className={cx("text-lg font-semibold tabular-nums", colour)}>
           {value}
         </span>
         {unit && <span className="text-xs text-ink-secondary">{unit}</span>}
@@ -288,33 +292,28 @@ function withDates(work: Work): number {
 
 /** Что просил разбор и что ответило снабжение. Пустые не показываются. */
 function Notes({ work }: { work: Work }) {
-  const записки = [
+  const notes = [
     work.analysis_note && {
-      кто: "Отдел разбора просит",
-      текст: work.analysis_note,
-      тон: "border-l-series-1",
+      who: "Отдел разбора просит",
+      text: work.analysis_note,
+      tone: "border-l-series-1",
     },
     work.supply_note && {
-      кто: "Снабжение отвечает",
-      текст: work.supply_note,
-      тон: "border-l-good",
+      who: "Снабжение отвечает",
+      text: work.supply_note,
+      tone: "border-l-good",
     },
-  ].filter(Boolean) as { кто: string; текст: string; тон: string }[];
+  ].filter(Boolean) as { who: string; text: string; tone: string }[];
 
-  if (!записки.length) return null;
+  if (!notes.length) return null;
 
   return (
     <div className="grid gap-3 md:grid-cols-2">
-      {записки.map((записка) => (
-        <Card
-          key={записка.кто}
-          className={cx("border-l-2 px-4 py-3", записка.тон)}
-        >
-          <div className="text-xs font-medium text-ink-muted">
-            {записка.кто}
-          </div>
+      {notes.map((note) => (
+        <Card key={note.who} className={cx("border-l-2 px-4 py-3", note.tone)}>
+          <div className="text-xs font-medium text-ink-muted">{note.who}</div>
           <p className="mt-1 text-sm whitespace-pre-wrap text-ink">
-            {записка.текст}
+            {note.text}
           </p>
         </Card>
       ))}
@@ -333,21 +332,21 @@ function stateOf(
   position: WorkPosition,
   analysis: boolean,
 ): { label: string; tone: string } {
-  const выбран = position.options.some((option) => option.chosen);
-  const заявка = position.options.some((option) => option.source === "asked");
-  const есть_цена = position.options.some((option) => option.price !== null);
+  const chosen = position.options.some((option) => option.chosen);
+  const request = position.options.some((option) => option.source === "asked");
+  const hasPrice = position.options.some((option) => option.price !== null);
 
   if (!position.options.length)
     return { label: "Пусто", tone: "bg-critical/10 text-critical" };
 
   if (analysis) {
-    if (выбран) return { label: "Подтверждён", tone: "bg-good/15 text-good" };
-    if (заявка)
+    if (chosen) return { label: "Подтверждён", tone: "bg-good/15 text-good" };
+    if (request)
       return { label: "Заказан поиск", tone: "bg-warning/15 text-warning" };
     return { label: "Ждёт выбора", tone: "bg-series-1/10 text-series-1" };
   }
 
-  if (!есть_цена)
+  if (!hasPrice)
     return { label: "Нужно найти", tone: "bg-warning/15 text-warning" };
   if (position.options.every((option) => option.delivery_days !== null))
     return { label: "Готово", tone: "bg-good/15 text-good" };
@@ -356,12 +355,12 @@ function stateOf(
 
 /** Вариант, по которому считается позиция: самый дешёвый из тех, где есть цена. */
 function bestOf(position: WorkPosition): WorkOption | null {
-  const с_ценой = position.options.filter((option) => option.price !== null);
-  if (!с_ценой.length) return null;
-  const выбран = с_ценой.find((option) => option.chosen);
+  const priced = position.options.filter((option) => option.price !== null);
+  if (!priced.length) return null;
+  const chosen = priced.find((option) => option.chosen);
   return (
-    выбран ??
-    с_ценой.reduce((left, right) =>
+    chosen ??
+    priced.reduce((left, right) =>
       (left.price ?? 0) <= (right.price ?? 0) ? left : right,
     )
   );
@@ -389,13 +388,13 @@ function Positions({
   });
 
   const toggle = (id: string) =>
-    setOpen((было) => {
-      const стало = new Set(было);
-      if (!стало.delete(id)) стало.add(id);
-      return стало;
+    setOpen((before) => {
+      const next = new Set(before);
+      if (!next.delete(id)) next.add(id);
+      return next;
     });
 
-  const все = open.size === work.positions.length;
+  const everyOpen = open.size === work.positions.length;
 
   return (
     <Card className="p-0">
@@ -418,14 +417,14 @@ function Positions({
             type="button"
             onClick={() =>
               setOpen(
-                все
+                everyOpen
                   ? new Set()
                   : new Set(work.positions.map((position) => position.id)),
               )
             }
             className="text-xs text-series-1 transition hover:underline"
           >
-            {все ? "Свернуть все" : "Раскрыть все"}
+            {everyOpen ? "Свернуть все" : "Раскрыть все"}
           </button>
         </div>
       </div>
@@ -512,15 +511,13 @@ function PositionRows({
   onToggle: () => void;
   onDone: (work: Work) => void;
 }) {
-  const лучший = bestOf(position);
-  const состояние = stateOf(position, analysis);
-  const количество = position.quantity ?? 1;
-  const закупка = лучший?.price != null ? лучший.price * количество : null;
-  const заработок =
-    закупка !== null && position.total !== null
-      ? position.total - закупка
-      : null;
-  const колонок = analysis ? 10 : 9;
+  const best = bestOf(position);
+  const state = stateOf(position, analysis);
+  const quantity = position.quantity ?? 1;
+  const spend = best?.price != null ? best.price * quantity : null;
+  const profit =
+    spend !== null && position.total !== null ? position.total - spend : null;
+  const columns = analysis ? 10 : 9;
 
   return (
     <>
@@ -596,32 +593,32 @@ function PositionRows({
               {position.total === null ? "—" : money(position.total)}
             </td>
             <td className="px-2 py-2.5 text-right align-top tabular-nums text-ink">
-              {закупка === null ? (
+              {spend === null ? (
                 <span className="text-ink-muted">не посчитана</span>
               ) : (
-                money(закупка)
+                money(spend)
               )}
             </td>
             <td
               className={cx(
                 "px-2 py-2.5 text-right align-top font-medium tabular-nums",
-                заработок === null
+                profit === null
                   ? "text-ink-muted"
-                  : заработок > 0
+                  : profit > 0
                     ? "text-good"
                     : "text-critical",
               )}
             >
-              {заработок === null
+              {profit === null
                 ? "—"
-                : `${заработок > 0 ? "+" : "−"}${money(Math.abs(заработок))}`}
+                : `${profit > 0 ? "+" : "−"}${money(Math.abs(profit))}`}
             </td>
           </>
         ) : (
           <>
             <td className="px-2 py-2.5 align-top text-ink-secondary">
-              {лучший?.supplier || (
-                <span className="text-ink-muted">не выбран</span>
+              {best?.supplier || (
+                <span className="text-ink-muted">не chosen</span>
               )}
               {position.options.length > 1 && (
                 <span className="ml-1 text-xs text-ink-muted">
@@ -630,10 +627,10 @@ function PositionRows({
               )}
             </td>
             <td className="px-2 py-2.5 text-right align-top tabular-nums text-ink">
-              {лучший?.price == null ? (
+              {best?.price == null ? (
                 <span className="text-warning">ищут</span>
               ) : (
-                money(лучший.price)
+                money(best.price)
               )}
             </td>
           </>
@@ -642,28 +639,28 @@ function PositionRows({
         <td
           className={cx(
             "px-2 py-2.5 text-right align-top tabular-nums",
-            лучший?.delivery_days == null ? "text-warning" : "text-ink",
+            best?.delivery_days == null ? "text-warning" : "text-ink",
           )}
         >
-          {лучший?.delivery_days == null
+          {best?.delivery_days == null
             ? "не указан"
-            : `${лучший.delivery_days} дн.`}
+            : `${best.delivery_days} дн.`}
         </td>
         <td className="px-2 py-2.5 align-top">
           <span
             className={cx(
               "inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap",
-              состояние.tone,
+              state.tone,
             )}
           >
-            {состояние.label}
+            {state.label}
           </span>
         </td>
       </tr>
 
       {open && (
         <tr className="border-b border-hairline bg-plane/40">
-          <td colSpan={колонок} className="p-0">
+          <td colSpan={columns} className="p-0">
             <div className="space-y-3 border-l-2 border-l-series-1 px-5 py-4">
               <Sourcing
                 work={work}
@@ -760,7 +757,7 @@ function Note({
  */
 function Remove({ work }: { work: Work }) {
   const navigate = useNavigate();
-  const [точно, setТочно] = useState(false);
+  const [sure, setSure] = useState(false);
   const drop = useMutation({
     mutationFn: () => worksApi.remove(work.id),
     onSuccess: () => navigate("/tender/works"),
@@ -768,13 +765,13 @@ function Remove({ work }: { work: Work }) {
 
   return (
     <Card className="border-critical/30 px-5 py-3">
-      {!точно ? (
+      {!sure ? (
         <div className="flex flex-wrap items-center gap-3">
-          <Button variant="danger" onClick={() => setТочно(true)}>
-            Убрать лот из работы
+          <Button variant="danger" onClick={() => setSure(true)}>
+            Убрать lot из работы
           </Button>
           <span className="text-xs text-ink-muted">
-            Позиции вернутся в отбор на своё место, и лот можно будет взять
+            Позиции вернутся в отбор на своё место, и lot можно будет взять
             заново
           </span>
         </div>
@@ -791,7 +788,7 @@ function Remove({ work }: { work: Work }) {
           >
             {drop.isPending ? "Убираем…" : "Да, убрать"}
           </Button>
-          <Button variant="ghost" onClick={() => setТочно(false)}>
+          <Button variant="ghost" onClick={() => setSure(false)}>
             Отмена
           </Button>
         </div>
@@ -826,17 +823,17 @@ function HandOver({
 
   // Причины, по которым лот не уедет, — до нажатия, а не после. Человек и так
   // знает, что позиция пустая; узнавать это от красной надписи унизительно.
-  const немые = analysis
+  const silent = analysis
     ? work.positions.filter(
         (position) => !position.options.length || !position.spec.trim(),
       )
     : [];
 
-  const кому = analysis ? "снабжению" : "разбору";
+  const whom = analysis ? "снабжению" : "разбору";
   return (
     <Card className="px-5 py-4">
       <label className="block text-sm font-medium text-ink">
-        Комментарий {кому}
+        Комментарий {whom}
       </label>
       <textarea
         value={note}
@@ -849,10 +846,10 @@ function HandOver({
         }
         className="mt-2 w-full rounded-[8px] border border-baseline bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-series-1 focus:outline-none"
       />
-      {немые.length > 0 && (
+      {silent.length > 0 && (
         <p className="mt-2 rounded-[8px] bg-warning/10 px-3 py-2 text-sm text-ink">
           Не отправится, пока не закрыто:{" "}
-          {немые
+          {silent
             .map(
               (position) =>
                 `${position.code || position.title} — ${
@@ -866,9 +863,9 @@ function HandOver({
         <Button
           variant="primary"
           onClick={() => send.mutate()}
-          disabled={send.isPending || немые.length > 0}
+          disabled={send.isPending || silent.length > 0}
         >
-          {send.isPending ? "Отправляем…" : `Отправить ${кому}`}
+          {send.isPending ? "Отправляем…" : `Отправить ${whom}`}
         </Button>
         <span className="text-xs text-ink-muted">
           {analysis

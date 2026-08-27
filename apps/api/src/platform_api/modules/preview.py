@@ -125,26 +125,26 @@ def _document(path: Path) -> Preview:
     from docx.table import Table
     from docx.text.paragraph import Paragraph
 
-    файл: Doc = Document(str(path))
+    file: Doc = Document(str(path))
     blocks: list[Block] = []
-    for child in файл.element.body.iterchildren():
+    for child in file.element.body.iterchildren():
         if len(blocks) >= MAX_BLOCKS:
             return Preview(kind="document", blocks=tuple(blocks), truncated=True)
         if child.tag == qn("w:p"):
-            абзац = Paragraph(child, файл)
-            текст = " ".join(абзац.text.split())
-            if текст:
-                стиль = (абзац.style.name or "").lower() if абзац.style else ""
-                заголовок = "head" in стиль or "загол" in стиль
-                blocks.append(Block(kind="heading" if заголовок else "text", text=текст))
+            paragraph = Paragraph(child, file)
+            content = " ".join(paragraph.text.split())
+            if content:
+                style_name = (paragraph.style.name or "").lower() if paragraph.style else ""
+                heading = "head" in style_name or "загол" in style_name
+                blocks.append(Block(kind="heading" if heading else "text", text=content))
         elif child.tag == qn("w:tbl"):
-            таблица = Table(child, файл)
-            строки = tuple(
+            table = Table(child, file)
+            lines = tuple(
                 tuple(" ".join(cell.text.split()) for cell in row.cells[:MAX_COLUMNS])
-                for row in таблица.rows[:MAX_ROWS]
+                for row in table.rows[:MAX_ROWS]
             )
-            if строки:
-                blocks.append(Block(kind="table", rows=строки))
+            if lines:
+                blocks.append(Block(kind="table", rows=lines))
     return Preview(kind="document", blocks=tuple(blocks))
 
 
@@ -155,37 +155,37 @@ def _workbook(path: Path) -> Preview:
     """
     from openpyxl import load_workbook
 
-    книга = load_workbook(str(path), read_only=True, data_only=True)
+    workbook = load_workbook(str(path), read_only=True, data_only=True)
     try:
-        листы: list[Sheet] = []
-        for имя in книга.sheetnames[:MAX_SHEETS]:
-            лист = книга[имя]
-            строки: list[tuple[str, ...]] = []
-            обрезан = False
-            for номер, row in enumerate(лист.iter_rows(values_only=True)):
-                if номер >= MAX_ROWS:
-                    обрезан = True
+        pages_out: list[Sheet] = []
+        for label in workbook.sheetnames[:MAX_SHEETS]:
+            sheet = workbook[label]
+            lines: list[tuple[str, ...]] = []
+            cut = False
+            for number, row in enumerate(sheet.iter_rows(values_only=True)):
+                if number >= MAX_ROWS:
+                    cut = True
                     break
-                строки.append(tuple(_cell(value) for value in row[:MAX_COLUMNS]))
+                lines.append(tuple(_cell(value) for value in row[:MAX_COLUMNS]))
             # Хвост пустых строк в книгах обычный: лист «на вырост». Из-за
             # него чтение упирается в предел, хотя содержимого три строки, —
             # и лист помечался обрезанным на ровном месте.
-            while строки and not any(строки[-1]):
-                строки.pop()
-            листы.append(
+            while lines and not any(lines[-1]):
+                lines.pop()
+            pages_out.append(
                 Sheet(
-                    title=имя,
-                    rows=tuple(строки),
-                    truncated=обрезан and len(строки) >= MAX_ROWS,
+                    title=label,
+                    rows=tuple(lines),
+                    truncated=cut and len(lines) >= MAX_ROWS,
                 )
             )
         return Preview(
             kind="sheet",
-            sheets=tuple(листы),
-            truncated=len(книга.sheetnames) > MAX_SHEETS,
+            sheets=tuple(pages_out),
+            truncated=len(workbook.sheetnames) > MAX_SHEETS,
         )
     finally:
-        книга.close()
+        workbook.close()
 
 
 def _cell(value: Any) -> str:
@@ -202,12 +202,12 @@ def _plain(path: Path) -> Preview:
     Читается с заменой нечитаемых знаков, а не падает: выгрузки приходят и в
     windows-1251, и с обрывом посередине.
     """
-    текст = path.read_text(encoding="utf-8", errors="replace")
-    абзацы = [line.strip() for line in текст.splitlines() if line.strip()]
+    content = path.read_text(encoding="utf-8", errors="replace")
+    paragraphs = [line.strip() for line in content.splitlines() if line.strip()]
     return Preview(
         kind="document",
-        blocks=tuple(Block(kind="text", text=line) for line in абзацы[:MAX_BLOCKS]),
-        truncated=len(абзацы) > MAX_BLOCKS,
+        blocks=tuple(Block(kind="text", text=line) for line in paragraphs[:MAX_BLOCKS]),
+        truncated=len(paragraphs) > MAX_BLOCKS,
     )
 
 

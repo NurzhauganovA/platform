@@ -45,15 +45,15 @@ export function DocsPanel({
   onDone: (work: Work) => void;
   onClose: () => void;
 }) {
-  const вкладки: Tab[] = position.documents.flatMap((file) => {
-    const адрес = file.link ? FILE_LINK.exec(file.link) : null;
-    if (!адрес) return [];
+  const tabs: Tab[] = position.documents.flatMap((file) => {
+    const address = file.link ? FILE_LINK.exec(file.link) : null;
+    if (!address) return [];
     return [
       {
-        key: адрес[2],
+        key: address[2],
         label: file.label || "файл",
-        item: decodeURIComponent(адрес[1]),
-        sha: адрес[2],
+        item: decodeURIComponent(address[1]),
+        sha: address[2],
       },
     ];
   });
@@ -65,7 +65,7 @@ export function DocsPanel({
   // документ предыдущей: чужое ТЗ под верным заголовком хуже пустой панели.
   useEffect(() => setTab("spec"), [position.id]);
 
-  const открыт = вкладки.find((item) => item.key === tab);
+  const opened = tabs.find((item) => item.key === tab);
 
   return (
     <aside className="sticky top-0 flex h-screen w-[30rem] shrink-0 flex-col border-l border-hairline bg-surface">
@@ -92,12 +92,12 @@ export function DocsPanel({
         </button>
       </header>
 
-      {вкладки.length > 0 && (
+      {tabs.length > 0 && (
         <div className="flex gap-1 overflow-x-auto border-b border-hairline px-3 py-2">
           <Chip active={tab === "spec"} onClick={() => setTab("spec")}>
             Задание
           </Chip>
-          {вкладки.map((item) => (
+          {tabs.map((item) => (
             <Chip
               key={item.key}
               active={tab === item.key}
@@ -109,9 +109,9 @@ export function DocsPanel({
         </div>
       )}
 
-      {открыт ? (
+      {opened ? (
         <Document
-          tab={открыт}
+          tab={opened}
           onFull={() => setFull(true)}
           full={full}
           onCloseFull={() => setFull(false)}
@@ -238,7 +238,7 @@ function SpecTab({
 
   useEffect(() => setDraft(null), [position.id]);
 
-  const пусто = !position.spec.trim();
+  const blank = !position.spec.trim();
 
   return (
     <>
@@ -252,7 +252,7 @@ function SpecTab({
             : "собрано из разбора закупки"}
         </span>
         <div className="flex shrink-0 items-center gap-2">
-          {!пусто && (
+          {!blank && (
             <a
               href={worksApi.specFile(work.id, position.id)}
               className="text-xs text-series-1 transition hover:underline"
@@ -267,7 +267,7 @@ function SpecTab({
               onClick={() => setDraft(position.spec)}
               className="text-xs text-series-1 transition hover:underline"
             >
-              {пусто ? "Написать" : "Дополнить"}
+              {blank ? "Написать" : "Дополнить"}
             </button>
           )}
         </div>
@@ -305,7 +305,7 @@ function SpecTab({
             )}
           </div>
         </div>
-      ) : пусто ? (
+      ) : blank ? (
         <p className="px-4 py-3 text-sm text-ink-muted">
           Задания нет: в папке закупки не нашлось ни технического задания, ни
           маркетингового заключения. Напишите его — снабжение исходных

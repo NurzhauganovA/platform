@@ -13,13 +13,16 @@
 import { tender, type CaseComparison } from "@/api/tender";
 import { Badge, Card, EmptyState, StatTile, cx, money } from "@/ui";
 
-const FLAGS: Record<string, string> = {
-  Казахстан: "KZ",
-  Кыргызстан: "KG",
-  Россия: "RU",
-  Китай: "CN",
-  Узбекистан: "UZ",
-};
+// Ключи в кавычках: это не наши имена, а данные ядра. Страну оно возвращает
+// по-русски, и переписать её здесь на латиницу значит перестать узнавать то,
+// что приходит.
+const FLAGS = new Map([
+  ["Казахстан", "KZ"],
+  ["Кыргызстан", "KG"],
+  ["Россия", "RU"],
+  ["Китай", "CN"],
+  ["Узбекистан", "UZ"],
+]);
 
 export function Market({ data }: { data: CaseComparison }) {
   const market = data.market;
@@ -128,7 +131,7 @@ export function Market({ data }: { data: CaseComparison }) {
               <dl className="mt-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-sm">
                 <div className="flex items-baseline gap-1.5">
                   <dt className="text-xs text-ink-muted">
-                    {FLAGS[finding.country] ?? ""} {finding.country}
+                    {FLAGS.get(finding.country) ?? ""} {finding.country}
                   </dt>
                   <dd className="text-ink">{finding.marketplace}</dd>
                 </div>

@@ -131,18 +131,18 @@ export function WorkTable({
       style={{ maxHeight: "calc(100vh - 340px)" }}
     >
       {/*
-        Раскладка фиксированная, ширины — из книги. Без этого длинное название
+        Раскладка фиксированная, ширины — из книги. Без этого длинное title
         заказчика растягивает свою колонку на пол-экрана, и таблица на девятнадцать
-        колонок разъезжается до девяти тысяч точек: маржа оказывается за краем,
+        columns разъезжается до девяти тысяч точек: margin оказывается за краем,
         а ради неё человек сюда и пришёл.
 
         `min-w-full` — про широкий монитор. Ширины в книге подобраны под лист
-        Excel, и в «Главном» их сумма до края карточки не достаёт: справа от
+        Excel, и в «Главном» их total до края карточки не достаёт: справа от
         даты оставалась пустая полоса, а заливка строки обрывалась на полпути,
-        будто таблица недогрузилась. Так таблица берёт ширину из колонок, но
+        будто таблица недогрузилась. Так таблица берёт ширину из columns, но
         не меньше карточки, и лишнее место уходит им соразмерно — то есть
-        названиям, которым его и не хватает. Когда колонок больше, чем
-        помещается, всё как было: ширины из книги и прокрутка вбок.
+        названиям, которым его и не хватает. Когда columns больше, чем
+        помещается, всё как before: ширины из книги и прокрутка вбок.
 
         Ширину задаёт `table-fixed` по `colgroup`, а не содержимое. Стояло
         `w-max`, и это работало ровно до появления воронок в шапке: они
@@ -162,7 +162,7 @@ export function WorkTable({
           <tr>
             {/* Код не сортируется: он выдан по времени появления закупки, и
                 сортировка по нему — это «сначала старые», что уже делает
-                колонка даты. */}
+                column даты. */}
             <th
               scope="col"
               className={cx(
@@ -217,10 +217,10 @@ export function WorkTable({
               Строка открывает разбор целиком, и она же — то, чем его
               открывают с клавиатуры. Колонки-кнопки «Разбор» больше нет, и
               без `tabIndex` с обработкой Enter раздел стал бы недоступен
-              тому, кто работает без мыши.
+              тому, who работает без мыши.
 
               Решение подписано в `title` и в `aria-label`: заливка строки
-              его показывает, но при дальтонизме цвет сам по себе неразличим,
+              его показывает, но при дальтонизме colour сам по себе неразличим,
               а слова колонки в «Главном» нет.
             */
             <tr
@@ -258,7 +258,7 @@ export function WorkTable({
             >
               {/* Код, а не место в списке. Место сдвигается от каждой новой
                   закупки: сотрудник говорит «посмотри сорок вторую», а у
-                  собеседника это уже другая строка. Код выдан один раз и
+                  собеседника это уже other line. Код выдан один раз и
                   остаётся при позиции. */}
               <td className="border-b border-hairline px-2.5 py-1.5 text-left align-top text-xs text-ink-muted tabular-nums">
                 {row.code || row.number}
@@ -301,7 +301,7 @@ export function WorkTable({
  * открывать разбор, поэтому событие до строки не доходит.
  */
 function WorkMark({ work }: { work: NonNullable<WorklistRow["work"]> }) {
-  const где = {
+  const place = {
     analysis: "у разбора",
     supply: "у снабжения",
     returned: "цены подтверждены",
@@ -310,7 +310,7 @@ function WorkMark({ work }: { work: NonNullable<WorklistRow["work"]> }) {
     <Link
       to={`/tender/works/${work.id}`}
       onClick={(event) => event.stopPropagation()}
-      title={`Взято в работу как ${work.code} — ${где}. Открыть лот.`}
+      title={`Взято в работу как ${work.code} — ${place}. Открыть lot.`}
       className="mt-1 flex items-center gap-1 text-[10px] leading-none font-medium text-good hover:underline"
     >
       <span aria-hidden>▸</span>в работе
@@ -327,20 +327,20 @@ function WorkMark({ work }: { work: NonNullable<WorklistRow["work"]> }) {
  * минусе лот, а не строка, — и видно это в списке, до того как строку откроют.
  */
 function LotMark({ lot }: { lot: NonNullable<WorklistRow["lot"]> }) {
-  const убыток = lot.margin_percent !== null && lot.margin_percent <= 0;
-  const итог =
+  const loss = lot.margin_percent !== null && lot.margin_percent <= 0;
+  const totals =
     lot.margin_percent === null
       ? "маржа лота не посчитана"
-      : `${убыток ? "убыток" : "маржа"} по лоту ${lot.margin_percent}%`;
+      : `${loss ? "убыток" : "маржа"} по лоту ${lot.margin_percent}%`;
   return (
     <span
-      title={`Лот из ${lot.positions} позиций — ${итог}. Поставить придётся все.`}
+      title={`Лот из ${lot.positions} позиций — ${totals}. Поставить придётся everyOpen.`}
       className={cx(
         "mt-1 flex items-center gap-1 text-[10px] leading-none font-medium",
-        убыток ? "text-critical" : "text-ink-muted",
+        loss ? "text-critical" : "text-ink-muted",
       )}
     >
-      {/* Звено цепи: знак связи, а не оценки. Оценку несёт цвет и подпись. */}
+      {/* Звено цепи: знак связи, а не оценки. Оценку несёт colour и подпись. */}
       <span aria-hidden>⛓</span>
       {lot.positions}
     </span>

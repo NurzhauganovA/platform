@@ -714,16 +714,16 @@ def test_fail_kod_iz_perechnya_krasit_svoyu_yacheyku() -> None:
     """
     import platform_api.modules.tender.worklist as module
 
-    свой = SimpleNamespace(row=SimpleNamespace(ens_code="281314.900.000076"))
-    чужой = SimpleNamespace(row=SimpleNamespace(ens_code="999999.999.999999"))
+    own = SimpleNamespace(row=SimpleNamespace(ens_code="281314.900.000076"))
+    foreign = SimpleNamespace(row=SimpleNamespace(ens_code="999999.999.999999"))
 
-    assert module.mark_cell("ЕНС ТРУ", свой) == "critical"
+    assert module.mark_cell("ЕНС ТРУ", own) == "critical"
     # Другие колонки той же строки не трогаются.
-    assert module.mark_cell("сумма", свой) == ""
-    assert module.mark_cell("ЕНС ТРУ", чужой) == ""
+    assert module.mark_cell("сумма", own) == ""
+    assert module.mark_cell("ЕНС ТРУ", foreign) == ""
     # И вердикт строки остаётся вердиктом.
     assert (
-        module.tone_of(SimpleNamespace(row=свой.row, verdict=SimpleNamespace(label="Брать")))
+        module.tone_of(SimpleNamespace(row=own.row, verdict=SimpleNamespace(label="Брать")))
         == "good"
     )
 
@@ -737,36 +737,36 @@ def test_fail_lot_sobiraet_sosednie_pozicii_i_ih_itog() -> None:
     """
     from platform_api.modules.tender.lots import collect
 
-    def строка(имя: str, сумма: str, себестоимость: str, маржа: str) -> Any:
+    def line(sheet_name: str, amount: str, cost_value: str, margin: str) -> Any:
         return SimpleNamespace(
             row=SimpleNamespace(
                 folder_path="/архив/Закупка",
-                title=имя,
+                title=sheet_name,
                 ens_code="",
                 quantity=Decimal(1),
-                total=Decimal(сумма),
-                cost=Decimal(себестоимость),
-                margin_percent=Decimal(маржа),
+                total=Decimal(amount),
+                cost=Decimal(cost_value),
+                margin_percent=Decimal(margin),
             ),
             verdict=SimpleNamespace(label="Брать"),
         )
 
-    выгодная = строка("Насос", "1000000", "600000", "40.0")
+    profitable = line("Насос", "1000000", "600000", "40.0")
     rows = [
-        выгодная,
-        строка("Кабель", "500000", "700000", "-40.0"),
-        строка("Щит", "300000", "500000", "-66.7"),
+        profitable,
+        line("Кабель", "500000", "700000", "-40.0"),
+        line("Щит", "300000", "500000", "-66.7"),
     ]
 
-    лот = collect(rows, выгодная, money=True)
+    lot = collect(rows, profitable, money=True)
 
-    assert лот is not None and лот.size == 3
-    assert лот.total == Decimal(1_800_000)
-    assert лот.cost == Decimal(1_800_000)
+    assert lot is not None and lot.size == 3
+    assert lot.total == Decimal(1_800_000)
+    assert lot.cost == Decimal(1_800_000)
     # Позиция даёт 40%, а лот целиком — ноль: вот ради чего он и собирается.
-    assert лот.profit == Decimal(0)
-    assert лот.margin_percent == Decimal("0.0")
-    assert [p.current for p in лот.positions] == [True, False, False]
+    assert lot.profit == Decimal(0)
+    assert lot.margin_percent == Decimal("0.0")
+    assert [p.current for p in lot.positions] == [True, False, False]
 
 
 def test_fail_lot_ne_otdaet_dengi_zakupshchiku() -> None:
@@ -777,11 +777,11 @@ def test_fail_lot_ne_otdaet_dengi_zakupshchiku() -> None:
     """
     from platform_api.modules.tender.lots import collect
 
-    def строка(имя: str) -> Any:
+    def line(sheet_name: str) -> Any:
         return SimpleNamespace(
             row=SimpleNamespace(
                 folder_path="/архив/Закупка",
-                title=имя,
+                title=sheet_name,
                 ens_code="",
                 quantity=Decimal(1),
                 total=Decimal(1000),
@@ -791,20 +791,20 @@ def test_fail_lot_ne_otdaet_dengi_zakupshchiku() -> None:
             verdict=SimpleNamespace(label="Брать"),
         )
 
-    rows = [строка("Насос"), строка("Кабель")]
-    лот = collect(rows, rows[0], money=False)
+    rows = [line("Насос"), line("Кабель")]
+    lot = collect(rows, rows[0], money=False)
 
-    assert лот is not None
-    assert лот.total == Decimal(2000), "сумма закупки — не тайна"
-    assert лот.cost is None and лот.profit is None and лот.margin_percent is None
-    assert all(p.cost is None and p.margin_percent is None for p in лот.positions)
+    assert lot is not None
+    assert lot.total == Decimal(2000), "сумма закупки — не тайна"
+    assert lot.cost is None and lot.profit is None and lot.margin_percent is None
+    assert all(p.cost is None and p.margin_percent is None for p in lot.positions)
 
 
 def test_lot_iz_odnoy_pozicii_ne_lot() -> None:
     """Объединять нечего — и кнопки быть не должно."""
     from platform_api.modules.tender.lots import collect
 
-    одна = SimpleNamespace(
+    single = SimpleNamespace(
         row=SimpleNamespace(
             folder_path="/архив/Закупка",
             title="Насос",
@@ -817,7 +817,7 @@ def test_lot_iz_odnoy_pozicii_ne_lot() -> None:
         verdict=SimpleNamespace(label="Брать"),
     )
 
-    assert collect([одна], одна, money=True) is None
+    assert collect([single], single, money=True) is None
 
 
 def test_fail_sostav_lota_silnee_papki() -> None:
@@ -829,42 +829,42 @@ def test_fail_sostav_lota_silnee_papki() -> None:
     """
     from platform_api.modules.tender.lots import collect
 
-    def строка(папка: str, имя: str, сумма: str) -> Any:
+    def line(dir_path: str, sheet_name: str, amount: str) -> Any:
         return SimpleNamespace(
             row=SimpleNamespace(
-                folder_path=папка,
-                title=имя,
+                folder_path=dir_path,
+                title=sheet_name,
                 ens_code="",
                 quantity=Decimal(1),
-                total=Decimal(сумма),
-                cost=Decimal(сумма) / 2,
+                total=Decimal(amount),
+                cost=Decimal(amount) / 2,
                 margin_percent=Decimal("50.0"),
             ),
             verdict=SimpleNamespace(label="Брать"),
         )
 
     rows = [
-        строка("/архив/А", "Насос", "1000"),
-        строка("/архив/А", "Кабель", "2000"),
-        строка("/архив/Б", "Щит", "4000"),
+        line("/архив/А", "Насос", "1000"),
+        line("/архив/А", "Кабель", "2000"),
+        line("/архив/Б", "Щит", "4000"),
     ]
 
     # Без состава — подсказка по папке: только соседи «Насоса».
-    подсказка = collect(rows, rows[0], money=True)
-    assert подсказка is not None and подсказка.merged is False
-    assert [p.title for p in подсказка.positions] == ["Насос", "Кабель"]
+    hint = collect(rows, rows[0], money=True)
+    assert hint is not None and hint.merged is False
+    assert [p.title for p in hint.positions] == ["Насос", "Кабель"]
 
     # С составом — ровно перечисленные, в том числе из другой папки.
-    свой = collect(
+    own = collect(
         rows,
         rows[0],
         members=frozenset({("/архив/А", "Насос"), ("/архив/Б", "Щит")}),
         key="лот-1",
         money=True,
     )
-    assert свой is not None and свой.merged is True and свой.key == "лот-1"
-    assert [p.title for p in свой.positions] == ["Насос", "Щит"]
-    assert свой.total == Decimal(5000)
+    assert own is not None and own.merged is True and own.key == "лот-1"
+    assert [p.title for p in own.positions] == ["Насос", "Щит"]
+    assert own.total == Decimal(5000)
 
 
 def test_fail_stroki_lota_stoyat_ryadom() -> None:
@@ -876,22 +876,22 @@ def test_fail_stroki_lota_stoyat_ryadom() -> None:
     """
     from platform_api.modules.tender.router import _grouped
 
-    def строка(папка: str, имя: str) -> Any:
-        return SimpleNamespace(row=SimpleNamespace(folder_path=папка, title=имя))
+    def line(dir_path: str, sheet_name: str) -> Any:
+        return SimpleNamespace(row=SimpleNamespace(folder_path=dir_path, title=sheet_name))
 
     rows = [
-        строка("/а", "Насос"),
-        строка("/б", "Кабель"),
-        строка("/в", "Щит"),
-        строка("/г", "Лоток"),
+        line("/а", "Насос"),
+        line("/б", "Кабель"),
+        line("/в", "Щит"),
+        line("/г", "Лоток"),
     ]
     # В лоте первая и последняя — между ними двести строк в жизни.
     marked = {("/а", "Насос"): "лот-1", ("/г", "Лоток"): "лот-1"}
 
-    порядок = [item.row.title for item in _grouped(rows, marked, {})]
+    ordered = [item.row.title for item in _grouped(rows, marked, {})]
 
     # Лот встал на место лучшей своей позиции, остальные не сдвинулись.
-    assert порядок == ["Насос", "Лоток", "Кабель", "Щит"]
+    assert ordered == ["Насос", "Лоток", "Кабель", "Щит"]
     # Разъединили — порядок ядра вернулся сам, ничего не запоминается.
     assert [item.row.title for item in _grouped(rows, {}, {})] == [
         "Насос",
@@ -909,28 +909,28 @@ def test_fail_kod_stroki_ne_menyaetsya_ot_novyh_zakupok() -> None:
     """
     from platform_api.modules import codes
 
-    class Хранилище:
+    class Storage:
         """База в памяти: проверяется правило выдачи, а не SQL."""
 
         def __init__(self) -> None:
-            self.выдано: dict[tuple[str, str], int] = {}
+            self.issued: dict[tuple[str, str], int] = {}
 
         def assign(self, module: str, prefix: str, keys: list[str]) -> dict[str, str]:
-            следующий = max((n for (m, _k), n in self.выдано.items() if m == module), default=0)
+            next_one = max((n for (m, _k), n in self.issued.items() if m == module), default=0)
             for key in keys:
-                if (module, key) not in self.выдано:
-                    следующий += 1
-                    self.выдано[(module, key)] = следующий
-            return {key: f"{prefix}-{self.выдано[(module, key)]:0{codes.WIDTH}d}" for key in keys}
+                if (module, key) not in self.issued:
+                    next_one += 1
+                    self.issued[(module, key)] = next_one
+            return {key: f"{prefix}-{self.issued[(module, key)]:0{codes.WIDTH}d}" for key in keys}
 
-    склад = Хранилище()
-    сначала = склад.assign("tender", "TN", ["а", "б", "в"])
-    assert сначала == {"а": "TN-00001", "б": "TN-00002", "в": "TN-00003"}
+    warehouse = Storage()
+    first = warehouse.assign("tender", "TN", ["а", "б", "в"])
+    assert first == {"а": "TN-00001", "б": "TN-00002", "в": "TN-00003"}
 
     # Новая закупка встала первой в списке — коды прежних не тронуты.
-    потом = склад.assign("tender", "TN", ["новая", "а", "б", "в"])
-    assert потом["а"] == "TN-00001" and потом["в"] == "TN-00003"
-    assert потом["новая"] == "TN-00004"
+    later = warehouse.assign("tender", "TN", ["новая", "а", "б", "в"])
+    assert later["а"] == "TN-00001" and later["в"] == "TN-00003"
+    assert later["новая"] == "TN-00004"
 
 
 def test_fail_dokument_word_razbiraetsya_na_abzacy_i_tablicy(tmp_path: Path) -> None:
@@ -943,25 +943,25 @@ def test_fail_dokument_word_razbiraetsya_na_abzacy_i_tablicy(tmp_path: Path) -> 
     from docx import Document as WordDocument
     from platform_api.modules import preview
 
-    файл = tmp_path / "ТЗ.docx"
-    документ = WordDocument()
-    документ.add_heading("Техническое задание", level=1)
-    документ.add_paragraph("Пикобур 3-х лопастной с резцами PDC Ø190,5")
-    таблица = документ.add_table(rows=2, cols=2)
-    таблица.cell(0, 0).text = "Наименование"
-    таблица.cell(0, 1).text = "Кол-во"
-    таблица.cell(1, 0).text = "Пикобур"
-    таблица.cell(1, 1).text = "105"
-    документ.save(файл)
+    file = tmp_path / "ТЗ.docx"
+    doc = WordDocument()
+    doc.add_heading("Техническое задание", level=1)
+    doc.add_paragraph("Пикобур 3-х лопастной с резцами PDC Ø190,5")
+    grid = doc.add_table(rows=2, cols=2)
+    grid.cell(0, 0).text = "Наименование"
+    grid.cell(0, 1).text = "Кол-во"
+    grid.cell(1, 0).text = "Пикобур"
+    grid.cell(1, 1).text = "105"
+    doc.save(file)
 
-    разобран = preview.build(файл)
+    parsed = preview.build(file)
 
-    assert разобран.kind == "document"
-    виды = [block.kind for block in разобран.blocks]
+    assert parsed.kind == "document"
+    kinds = [block.kind for block in parsed.blocks]
     # По порядку, как в файле: таблица идёт за своим заголовком, и разложенные
     # порознь они теряют смысл.
-    assert виды == ["heading", "text", "table"]
-    assert разобран.blocks[2].rows[0] == ("Наименование", "Кол-во")
+    assert kinds == ["heading", "text", "table"]
+    assert parsed.blocks[2].rows[0] == ("Наименование", "Кол-во")
 
 
 def test_fail_neizvestnyy_format_govorit_pochemu(tmp_path: Path) -> None:
@@ -972,26 +972,26 @@ def test_fail_neizvestnyy_format_govorit_pochemu(tmp_path: Path) -> None:
     """
     from platform_api.modules import preview
 
-    файл = tmp_path / "Старое ТЗ.doc"
-    файл.write_bytes(b"\xd0\xcf\x11\xe0")
+    file = tmp_path / "Старое ТЗ.doc"
+    file.write_bytes(b"\xd0\xcf\x11\xe0")
 
-    разобран = preview.build(файл)
+    parsed = preview.build(file)
 
-    assert разобран.kind == "none"
-    assert "doc" in разобран.note and "Word" in разобран.note
+    assert parsed.kind == "none"
+    assert "doc" in parsed.note and "Word" in parsed.note
 
 
 def test_fail_bityy_fayl_ne_ronyaet_prosmotr(tmp_path: Path) -> None:
     """Битый файл — повод сказать и предложить скачать, а не отдать пятисотую."""
     from platform_api.modules import preview
 
-    файл = tmp_path / "Обрезано.docx"
-    файл.write_bytes(b"PK\x03\x04 truncated")
+    file = tmp_path / "Обрезано.docx"
+    file.write_bytes(b"PK\x03\x04 truncated")
 
-    разобран = preview.build(файл)
+    parsed = preview.build(file)
 
-    assert разобран.kind == "none"
-    assert "повреждён" in разобран.note
+    assert parsed.kind == "none"
+    assert "повреждён" in parsed.note
 
 
 # --- лот в работе между отделами -------------------------------------------
@@ -1010,7 +1010,7 @@ def organization(db: Any) -> Any:
     return org
 
 
-def _work(db: Any, org: Any, позиций: int = 2) -> Any:
+def _work(db: Any, org: Any, how_many: int = 2) -> Any:
     from platform_api.modules.tender import works
 
     return works.take(
@@ -1035,7 +1035,7 @@ def _work(db: Any, org: Any, позиций: int = 2) -> Any:
                     {"name": "Пикобур", "supplier": "Второй", "price": Decimal(90)},
                 ),
             )
-            for n in range(позиций)
+            for n in range(how_many)
         ],
     )
 
@@ -1049,14 +1049,14 @@ def test_fail_zakaz_poiska_ubiraet_otvergnutye_nahodki(db: Any, organization: An
     from platform_api.modules.tender import works
 
     work = _work(db, organization)
-    позиция = work.positions[0]
-    assert len(позиция.options) == 2
+    position_value = work.positions[0]
+    assert len(position_value.options) == 2
 
-    works.ask(db, work, позиция.id, "Пикобур PDC Ø215, 3 лопасти")
-    db.refresh(позиция)
+    works.ask(db, work, position_value.id, "Пикобур PDC Ø215, 3 лопасти")
+    db.refresh(position_value)
 
-    остались = [option.source.value for option in позиция.options]
-    assert остались == ["asked"]
+    left = [option.source.value for option in position_value.options]
+    assert left == ["asked"]
 
 
 def test_fail_lot_ne_uhodit_s_nemoy_poziciey(db: Any, organization: Any) -> None:
@@ -1094,14 +1094,14 @@ def test_fail_snabzhenie_ne_vidit_summ_zakupki(db: Any, organization: Any) -> No
     works.choose(db, work, work.positions[1].options[0].id)
     works.hand_over(db, work, "проверьте")
 
-    у_снабжения = _work_out(work, Role.BUYER)
-    assert у_снабжения.total is None and у_снабжения.cost is None
-    assert all(position.total is None for position in у_снабжения.positions)
+    for_supply = _work_out(work, Role.BUYER)
+    assert for_supply.total is None and for_supply.cost is None
+    assert all(position.total is None for position in for_supply.positions)
     # А «где купить» — уходит: без него работать нечем.
-    assert all(position.options for position in у_снабжения.positions)
+    assert all(position.options for position in for_supply.positions)
 
-    у_razbora = _work_out(work, Role.ANALYST)
-    assert у_razbora.total is not None and у_razbora.cost is not None
+    for_analysis = _work_out(work, Role.ANALYST)
+    assert for_analysis.total is not None and for_analysis.cost is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1119,25 +1119,25 @@ def _case_spec() -> Any:
 
     from platform_api.modules.tender import spec
 
-    def страница(text: str, tables: Any = ()) -> Any:
+    def page(text: str, tables: Any = ()) -> Any:
         return SimpleNamespace(
             text=text,
             tables=tuple(SimpleNamespace(rows=rows, is_meaningful=True) for rows in tables),
         )
 
-    def документ(kind: str, name: str, **поля: Any) -> Any:
+    def doc(kind: str, name: str, **extra: Any) -> Any:
         return SimpleNamespace(
             source=SimpleNamespace(name=name),
-            extraction=SimpleNamespace(pages=поля.get("pages", ())),
+            extraction=SimpleNamespace(pages=extra.get("pages", ())),
             insight=SimpleNamespace(
                 kind=kind,
-                requirements=поля.get("requirements", []),
-                delivery_terms=поля.get("delivery_terms"),
-                warranty=поля.get("warranty"),
+                requirements=extra.get("requirements", []),
+                delivery_terms=extra.get("delivery_terms"),
+                warranty=extra.get("warranty"),
             ),
         )
 
-    def позиция(name: str, spec_text: str, count: int, ens: str) -> Any:
+    def position_value(name: str, spec_text: str, count: int, ens: str) -> Any:
         return SimpleNamespace(
             name=name, specification=spec_text, quantity=Decimal(count), unit="шт", ens_code=ens
         )
@@ -1146,7 +1146,7 @@ def _case_spec() -> Any:
         subject="Пикобуры PDC",
         requirements=(),
         documents=(
-            документ(
+            doc(
                 "ТЗ",
                 "ТЗ Пикобуры.pdf",
                 requirements=[
@@ -1158,15 +1158,15 @@ def _case_spec() -> Any:
                 warranty="не менее 12 месяцев",
             ),
             # То же требование в МЗ — слово в слово, как это и бывает.
-            документ("МЗ", "МЗ.docx", requirements=["Наработка на отказ не менее 8000 часов"]),
+            doc("МЗ", "МЗ.docx", requirements=["Наработка на отказ не менее 8000 часов"]),
             # КП поставщика: его условия требованиями закупки не являются.
-            документ("КП", "КП Сервис-А.pdf", requirements=["Оплата 100% предоплата"]),
+            doc("КП", "КП Сервис-А.pdf", requirements=["Оплата 100% предоплата"]),
         ),
         requested=(
-            позиция(
+            position_value(
                 "Пикобур PDC Ø190,5", "3 лопасти, резцы PDC, замок З-88", 105, "289221.500.000015"
             ),
-            позиция("Пикобур PDC Ø215", "3 лопасти", 5, "289221.500.000016"),
+            position_value("Пикобур PDC Ø215", "3 лопасти", 5, "289221.500.000016"),
         ),
     )
     return spec.gather(case)
@@ -1180,17 +1180,17 @@ def test_fail_zadanie_sobirayetsya_po_svoey_pozicii() -> None:
     """
     from platform_api.modules.tender import spec
 
-    текст = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
+    body = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
 
-    assert "Пикобур PDC Ø190,5" in текст
-    assert "Пикобур PDC Ø215" not in текст
-    assert "Количество: 105 шт" in текст
-    assert "289221.500.000015" in текст
-    assert "замок З-88" in текст
+    assert "Пикобур PDC Ø190,5" in body
+    assert "Пикобур PDC Ø215" not in body
+    assert "Количество: 105 шт" in body
+    assert "289221.500.000015" in body
+    assert "замок З-88" in body
     # Требования у закупки общие — они и должны быть в задании каждой позиции.
-    assert "8000 часов" in текст
+    assert "8000 часов" in body
     # А место поставки — нет: по руднику поставщик найдёт закупку в реестре.
-    assert "Мынкудук" not in текст and "рудник" not in текст
+    assert "Мынкудук" not in body and "рудник" not in body
 
 
 def test_fail_v_zadanie_ne_popadayut_dengi() -> None:
@@ -1202,14 +1202,14 @@ def test_fail_v_zadanie_ne_popadayut_dengi() -> None:
     """
     from platform_api.modules.tender import spec
 
-    текст = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
+    body = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
 
-    assert "350 000" not in текст and "тенге" not in текст
+    assert "350 000" not in body and "тенге" not in body
     # Условия из чужого КП — тоже не требования закупки: там поставщик пишет
     # то, что удобно ему, и снабжение приняло бы это за требование заказчика.
-    assert "предоплата" not in текст.casefold()
+    assert "предоплата" not in body.casefold()
     # Техническое требование при этом остаётся.
-    assert "Сертификат качества" in текст
+    assert "Сертификат качества" in body
 
 
 def test_fail_povtoryayushcheesya_trebovanie_odno() -> None:
@@ -1220,9 +1220,9 @@ def test_fail_povtoryayushcheesya_trebovanie_odno() -> None:
     """
     from platform_api.modules.tender import spec
 
-    текст = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
+    body = spec.render(_case_spec(), "Пикобур PDC Ø190,5")
 
-    assert текст.count("Наработка на отказ не менее 8000 часов") == 1
+    assert body.count("Наработка на отказ не менее 8000 часов") == 1
 
 
 def test_fail_odna_poziciya_v_papke_beryotsya_bez_sravneniya() -> None:
@@ -1235,12 +1235,12 @@ def test_fail_odna_poziciya_v_papke_beryotsya_bez_sravneniya() -> None:
 
     from platform_api.modules.tender import spec
 
-    целая = _case_spec()
-    одна = replace(целая, positions=целая.positions[:1])
+    whole = _case_spec()
+    single = replace(whole, positions=whole.positions[:1])
 
-    текст = spec.render(одна, "Закупка пикобуров для нужд рудника")
+    body = spec.render(single, "Закупка пикобуров для нужд рудника")
 
-    assert "Пикобур PDC Ø190,5" in текст and "Количество: 105 шт" in текст
+    assert "Пикобур PDC Ø190,5" in body and "Количество: 105 шт" in body
 
 
 def test_fail_snabzhenie_ne_vidit_ishodnyh_dokumentov(db: Any, organization: Any) -> None:
@@ -1255,9 +1255,9 @@ def test_fail_snabzhenie_ne_vidit_ishodnyh_dokumentov(db: Any, organization: Any
 
     work = _work(db, organization)
 
-    у_снабжения = _work_out(work, Role.BUYER)
-    assert all(not position.documents for position in у_снабжения.positions)
-    assert all("ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in position.spec for position in у_снабжения.positions)
+    for_supply = _work_out(work, Role.BUYER)
+    assert all(not position.documents for position in for_supply.positions)
+    assert all("ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in position.spec for position in for_supply.positions)
 
 
 def test_fail_lot_bez_zadaniya_ne_peredayotsya(db: Any, organization: Any) -> None:
@@ -1314,11 +1314,13 @@ def test_fail_zadanie_faylom_otkryvayetsya(db: Any, organization: Any) -> None:
     from platform_api.modules.tender import spec
 
     work = _work(db, organization)
-    позиция = work.positions[0]
+    position_value = work.positions[0]
 
-    файл = Document(BytesIO(spec.document(позиция.code, [(позиция.title, позиция.spec)])))
-    текст = "\n".join(абзац.text for абзац in файл.paragraphs)
-    assert позиция.code in текст and "ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in текст
+    file = Document(
+        BytesIO(spec.document(position_value.code, [(position_value.title, position_value.spec)]))
+    )
+    body = "\n".join(paragraph.text for paragraph in file.paragraphs)
+    assert position_value.code in body and "ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in body
 
 
 def test_fail_zadanie_otdayotsya_faylom_cherez_endpoint(client: Any, db: Any) -> None:
@@ -1334,22 +1336,24 @@ def test_fail_zadanie_otdayotsya_faylom_cherez_endpoint(client: Any, db: Any) ->
     work = _work(db, org)
     db.commit()
 
-    позиция = work.positions[0]
-    ответ = client.get(f"/api/tender/works/{work.id}/positions/{позиция.id}/spec.docx")
+    position_value = work.positions[0]
+    reply = client.get(f"/api/tender/works/{work.id}/positions/{position_value.id}/spec.docx")
 
-    assert ответ.status_code == 200
-    assert ответ.headers["content-type"].endswith("wordprocessingml.document")
-    assert "filename*=UTF-8''" in ответ.headers["content-disposition"]
-    assert ответ.content[:2] == b"PK"
+    assert reply.status_code == 200
+    assert reply.headers["content-type"].endswith("wordprocessingml.document")
+    assert "filename*=UTF-8''" in reply.headers["content-disposition"]
+    assert reply.content[:2] == b"PK"
 
     # Позиции без задания файла нет — пустой .docx хуже отсутствующего:
     # снабжение решит, что требований к товару нет.
     from platform_api.modules.tender import works
 
-    works.set_spec(db, work, позиция.id, "")
+    works.set_spec(db, work, position_value.id, "")
     db.commit()
     assert (
-        client.get(f"/api/tender/works/{work.id}/positions/{позиция.id}/spec.docx").status_code
+        client.get(
+            f"/api/tender/works/{work.id}/positions/{position_value.id}/spec.docx"
+        ).status_code
         == 404
     )
 
@@ -1431,13 +1435,13 @@ def test_fail_zadanie_beryotsya_iz_teksta_tz() -> None:
             tables=[(("Параметр", "Значение"), ("Напор", "150 м"))],
         )
     )
-    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+    body = spec.render(spec.gather(case), "Насос ЦНС-60")
 
-    assert "1.4401 (316 AISI)" in текст and "IP 68" in текст
+    assert "1.4401 (316 AISI)" in body and "IP 68" in body
     # Таблицы наравне с текстом: в ТЗ размеры и допуски стоят именно в них.
-    assert "Напор · 150 м" in текст
+    assert "Напор · 150 м" in body
     # Имя файла не печатается: «ТЗ ПНА. Западный Мынкудук.pdf» называет рудник.
-    assert "ТЗ насосы.pdf" not in текст
+    assert "ТЗ насосы.pdf" not in body
 
 
 def test_fail_bez_tz_beryotsya_mz() -> None:
@@ -1448,15 +1452,15 @@ def test_fail_bez_tz_beryotsya_mz() -> None:
     """
     from platform_api.modules.tender import spec
 
-    только_мз = _case_with_documents(
+    report_only = _case_with_documents(
         _document("КП", "КП поставщика.pdf", text="Предлагаем насос по выгодной цене"),
         _document("МЗ", "МЗ.docx", text="Насос центробежный, напор не менее 150 м"),
     )
-    текст = spec.render(spec.gather(только_мз), "Насос ЦНС-60")
+    body = spec.render(spec.gather(report_only), "Насос ЦНС-60")
 
-    assert "напор не менее 150 м" in текст
+    assert "напор не менее 150 м" in body
     # Текст поставщика в задание не идёт: там написано то, что удобно ему.
-    assert "выгодной цене" not in текст
+    assert "выгодной цене" not in body
 
 
 def test_fail_ceny_iz_marketingovogo_zaklyucheniya_ne_uhodyat() -> None:
@@ -1485,11 +1489,11 @@ def test_fail_ceny_iz_marketingovogo_zaklyucheniya_ne_uhodyat() -> None:
             ],
         )
     )
-    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+    body = spec.render(spec.gather(case), "Насос ЦНС-60")
 
-    assert "785 000,00" not in текст and "1 000,00" not in текст
+    assert "785 000,00" not in body and "1 000,00" not in body
     # А строка позиции — с количеством, доставкой и кодом — на месте.
-    assert "281314.900.000076 · шт. · 5,00 · DDP" in текст
+    assert "281314.900.000076 · шт. · 5,00 · DDP" in body
 
 
 def test_fail_pechati_i_rekvizity_ne_uhodyat() -> None:
@@ -1513,11 +1517,11 @@ def test_fail_pechati_i_rekvizity_ne_uhodyat() -> None:
             ),
         )
     )
-    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+    body = spec.render(spec.gather(case), "Насос ЦНС-60")
 
-    assert "напор 150 м" in текст
-    for мусор in ("БИН", "М.П.", "Подпись", "2026 г."):
-        assert мусор not in текст
+    assert "напор 150 м" in body
+    for junk in ("БИН", "М.П.", "Подпись", "2026 г."):
+        assert junk not in body
 
 
 def test_fail_tehnicheskoye_chislo_ne_prinimayut_za_summu() -> None:
@@ -1540,10 +1544,10 @@ def test_fail_tehnicheskoye_chislo_ne_prinimayut_za_summu() -> None:
             ),
         )
     )
-    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+    body = spec.render(spec.gather(case), "Насос ЦНС-60")
 
-    assert "Цена деления 1 г/см3" in текст
-    assert "8000 часов" in текст and "от 1180 до 1240" in текст
+    assert "Цена деления 1 г/см3" in body
+    assert "8000 часов" in body and "от 1180 до 1240" in body
 
 
 def test_fail_dlinnoye_zadaniye_obrezayetsya_s_pometkoy() -> None:
@@ -1554,12 +1558,12 @@ def test_fail_dlinnoye_zadaniye_obrezayetsya_s_pometkoy() -> None:
     """
     from platform_api.modules.tender import spec
 
-    длинный = "\n".join(f"Пункт {n}: требование к материалу корпуса" for n in range(4000))
-    case = _case_with_documents(_document("ТЗ", "ТЗ.pdf", text=длинный))
-    текст = spec.render(spec.gather(case), "Насос ЦНС-60")
+    long_body = "\n".join(f"Пункт {n}: требование к материалу корпуса" for n in range(4000))
+    case = _case_with_documents(_document("ТЗ", "ТЗ.pdf", text=long_body))
+    body = spec.render(spec.gather(case), "Насос ЦНС-60")
 
-    assert len(текст) > spec.MAX_LENGTH
-    assert "Документ длиннее" in текст
+    assert len(body) > spec.MAX_LENGTH
+    assert "Документ длиннее" in body
 
 
 def test_fail_zametka_pishetsya_tem_u_kogo_lot(client: Any, db: Any) -> None:
@@ -1574,23 +1578,23 @@ def test_fail_zametka_pishetsya_tem_u_kogo_lot(client: Any, db: Any) -> None:
     org = sign_in(db, client, Role.BUYER)
     work = _work(db, org)
     db.commit()
-    позиция = work.positions[0]
-    адрес = f"/api/tender/works/{work.id}/positions/{позиция.id}/note"
+    position_value = work.positions[0]
+    address = f"/api/tender/works/{work.id}/positions/{position_value.id}/note"
 
     # Лот у разбора — снабжение его вообще не видит.
-    assert client.patch(адрес, json={"note": "взяли дороже"}).status_code == 404
+    assert client.patch(address, json={"note": "взяли дороже"}).status_code == 404
 
     from platform_api.modules.tender import works
 
-    works.choose(db, work, позиция.id and work.positions[0].options[0].id)
+    works.choose(db, work, position_value.id and work.positions[0].options[0].id)
     works.choose(db, work, work.positions[1].options[0].id)
     works.hand_over(db, work, "")
     db.commit()
 
-    ответ = client.patch(адрес, json={"note": "  дороже,\n  но успеет к сроку  "})
-    assert ответ.status_code == 200
+    reply = client.patch(address, json={"note": "  дороже,\n  но успеет к сроку  "})
+    assert reply.status_code == 200
     # Одна строка: перевод строки и лишние пробелы схлопываются.
-    assert ответ.json()["positions"][0]["note"] == "дороже, но успеет к сроку"
+    assert reply.json()["positions"][0]["note"] == "дороже, но успеет к сроку"
 
 
 def test_fail_otvet_pokazyvayet_novyy_sostav_srazu(client: Any, db: Any) -> None:
@@ -1607,30 +1611,30 @@ def test_fail_otvet_pokazyvayet_novyy_sostav_srazu(client: Any, db: Any) -> None
     org = sign_in(db, client, Role.ANALYST)
     work = _work(db, org)
     db.commit()
-    позиция = work.positions[0]
-    было = len(позиция.options)
+    position_value = work.positions[0]
+    was = len(position_value.options)
 
-    ответ = client.post(
-        f"/api/tender/works/{work.id}/positions/{позиция.id}/ask",
+    reply = client.post(
+        f"/api/tender/works/{work.id}/positions/{position_value.id}/ask",
         json={"name": "Пикобур PDC Ø215, 3 лопасти"},
     )
-    assert ответ.status_code == 200
+    assert reply.status_code == 200
 
-    строка = ответ.json()["positions"][0]
-    источники = [option["source"] for option in строка["options"]]
-    assert "asked" in источники, "заявки нет в ответе — состав отдан прежний"
-    assert len(строка["options"]) != было or источники != ["found"] * было
+    line = reply.json()["positions"][0]
+    kinds = [option["source"] for option in line["options"]]
+    assert "asked" in kinds, "заявки нет в ответе — состав отдан прежний"
+    assert len(line["options"]) != was or kinds != ["found"] * was
 
     # И то же самое при подтверждении: отвергнутые уходят сразу, а не после F5.
-    вторая = work.positions[1]
-    ответ = client.post(f"/api/tender/works/{work.id}/options/{вторая.options[0].id}/choose")
-    выбор = ответ.json()["positions"][1]["options"]
-    assert len(выбор) == 1 and выбор[0]["chosen"]
+    second = work.positions[1]
+    reply = client.post(f"/api/tender/works/{work.id}/options/{second.options[0].id}/choose")
+    choice = reply.json()["positions"][1]["options"]
+    assert len(choice) == 1 and choice[0]["chosen"]
 
     # И при удалении: убранный вариант не должен вернуться в том же ответе.
-    ответ = client.delete(f"/api/tender/works/{work.id}/options/{выбор[0]['id']}")
-    assert ответ.status_code == 200
-    assert ответ.json()["positions"][1]["options"] == []
+    reply = client.delete(f"/api/tender/works/{work.id}/options/{choice[0]['id']}")
+    assert reply.status_code == 200
+    assert reply.json()["positions"][1]["options"] == []
 
 
 def test_fail_zakaz_poiska_ubirayet_i_podtverzhdyonnuyu_nahodku(db: Any, organization: Any) -> None:
@@ -1645,15 +1649,15 @@ def test_fail_zakaz_poiska_ubirayet_i_podtverzhdyonnuyu_nahodku(db: Any, organiz
     from platform_api.modules.tender import works
 
     work = _work(db, organization)
-    позиция = work.positions[0]
-    works.choose(db, work, позиция.options[0].id)
-    assert any(option.chosen for option in позиция.options)
+    position_value = work.positions[0]
+    works.choose(db, work, position_value.options[0].id)
+    assert any(option.chosen for option in position_value.options)
 
-    works.ask(db, work, позиция.id, "Пикобур PDC Ø215")
+    works.ask(db, work, position_value.id, "Пикобур PDC Ø215")
 
-    источники = {option.source for option in позиция.options}
-    assert источники == {OptionSource.ASKED}
-    assert not any(option.chosen for option in позиция.options)
+    kinds = {option.source for option in position_value.options}
+    assert kinds == {OptionSource.ASKED}
+    assert not any(option.chosen for option in position_value.options)
 
 
 def test_fail_zadanie_ne_nazyvayet_zakazchika_i_mesta() -> None:
@@ -1666,7 +1670,7 @@ def test_fail_zadanie_ne_nazyvayet_zakazchika_i_mesta() -> None:
     """
     from platform_api.modules.tender import spec
 
-    исходное = (
+    raw_text = (
         "УТВЕРЖДАЮ\n"
         "Директор департамента Қайыргелды Б.К.\n"
         "Насос центробежный, напор не менее 150 м\n"
@@ -1676,10 +1680,10 @@ def test_fail_zadanie_ne_nazyvayet_zakazchika_i_mesta() -> None:
         "Контакты: zakup@kazatomprom.kz, +7 (7172) 45-90-58\n"
         "Закупка № 12345678-1\n"
     )
-    чистое = spec.limited(исходное)
+    cleaned = spec.limited(raw_text)
 
-    assert "напор не менее 150 м" in чистое
-    for тайна in (
+    assert "напор не менее 150 м" in cleaned
+    for secret in (
         "Мынкудук",
         "Туркестанская",
         "Семизбай",
@@ -1689,7 +1693,7 @@ def test_fail_zadanie_ne_nazyvayet_zakazchika_i_mesta() -> None:
         "12345678-1",
         "УТВЕРЖДАЮ",
     ):
-        assert тайна not in чистое, f"в задании осталось: {тайна}"
+        assert secret not in cleaned, f"в задании осталось: {secret}"
 
 
 def test_fail_oblast_primeneniya_ne_prinimayut_za_adres() -> None:
@@ -1701,13 +1705,13 @@ def test_fail_oblast_primeneniya_ne_prinimayut_za_adres() -> None:
     """
     from platform_api.modules.tender import spec
 
-    чистое = spec.limited(
+    cleaned = spec.limited(
         "1. Область применения\nДиапазон измерений в области низких давлений\n"
         "Кызылординская область, город Байконур"
     )
 
-    assert "Область применения" in чистое and "области низких давлений" in чистое
-    assert "Кызылординская" not in чистое
+    assert "Область применения" in cleaned and "области низких давлений" in cleaned
+    assert "Кызылординская" not in cleaned
 
 
 def test_fail_organizaciya_v_trebovanii_zamenyayetsya_a_ne_stirayet_stroku() -> None:
@@ -1718,10 +1722,10 @@ def test_fail_organizaciya_v_trebovanii_zamenyayetsya_a_ne_stirayet_stroku() -> 
     """
     from platform_api.modules.tender import spec
 
-    чистое = spec.limited("Отгрузка согласовывается с ТОО «Семизбай-U» за 5 дней")
+    cleaned = spec.limited("Отгрузка согласовывается с ТОО «Семизбай-U» за 5 дней")
 
-    assert "Отгрузка согласовывается" in чистое and "за 5 дней" in чистое
-    assert "Семизбай" not in чистое
+    assert "Отгрузка согласовывается" in cleaned and "за 5 дней" in cleaned
+    assert "Семизбай" not in cleaned
 
 
 def test_fail_pravki_razbora_chistyatsya_pri_otpravke(db: Any, organization: Any) -> None:
@@ -1734,8 +1738,8 @@ def test_fail_pravki_razbora_chistyatsya_pri_otpravke(db: Any, organization: Any
     from platform_api.modules.tender import works
 
     work = _work(db, organization)
-    for позиция in work.positions:
-        works.choose(db, work, позиция.options[0].id)
+    for position_value in work.positions:
+        works.choose(db, work, position_value.options[0].id)
     works.set_spec(
         db,
         work,
@@ -1762,10 +1766,10 @@ def test_fail_snabzhenie_ne_vidit_zakazchika(db: Any, organization: Any) -> None
     work = _work(db, organization)
 
     assert _work_out(work, Role.ANALYST).customer == "АО «Волковгеология»"
-    у_снабжения = _work_out(work, Role.BUYER)
-    assert у_снабжения.customer == ""
+    for_supply = _work_out(work, Role.BUYER)
+    assert for_supply.customer == ""
     # Имя исходного файла тоже говорящее: «ТЗ ПНА. Западный Мынкудук.pdf».
-    assert all(position.spec_source == "" for position in у_снабжения.positions)
+    assert all(position.spec_source == "" for position in for_supply.positions)
 
 
 def test_fail_zadanie_po_lotu_odnim_faylom(client: Any, db: Any) -> None:
@@ -1784,13 +1788,13 @@ def test_fail_zadanie_po_lotu_odnim_faylom(client: Any, db: Any) -> None:
     work = _work(db, org)
     db.commit()
 
-    ответ = client.get(f"/api/tender/works/{work.id}/spec.docx")
-    assert ответ.status_code == 200
-    assert "filename*=UTF-8''" in ответ.headers["content-disposition"]
+    reply = client.get(f"/api/tender/works/{work.id}/spec.docx")
+    assert reply.status_code == 200
+    assert "filename*=UTF-8''" in reply.headers["content-disposition"]
 
-    текст = "\n".join(абзац.text for абзац in Document(BytesIO(ответ.content)).paragraphs)
-    for позиция in work.positions:
-        assert позиция.title in текст
+    body = "\n".join(paragraph.text for paragraph in Document(BytesIO(reply.content)).paragraphs)
+    for position_value in work.positions:
+        assert position_value.title in body
 
 
 def test_fail_imya_zakazchika_vychishchayetsya_pricelno(db: Any, organization: Any) -> None:
@@ -1805,8 +1809,8 @@ def test_fail_imya_zakazchika_vychishchayetsya_pricelno(db: Any, organization: A
 
     work = _work(db, organization)
     assert work.customer == "АО «Волковгеология»"
-    for позиция in work.positions:
-        works.choose(db, work, позиция.options[0].id)
+    for position_value in work.positions:
+        works.choose(db, work, position_value.options[0].id)
     works.set_spec(
         db,
         work,
@@ -1816,10 +1820,10 @@ def test_fail_imya_zakazchika_vychishchayetsya_pricelno(db: Any, organization: A
 
     works.hand_over(db, work, "")
 
-    задание = work.positions[0].spec
-    assert "Волковгеология" not in задание
+    brief = work.positions[0].spec
+    assert "Волковгеология" not in brief
     # Товар при этом на месте: вычищается заказчик, а не наименование.
-    assert "Пикобур PDC Ø190,5" in задание and "замок З-88" in задание
+    assert "Пикобур PDC Ø190,5" in brief and "замок З-88" in brief
 
 
 def test_fail_nazvaniye_tovara_perezhivayet_vychistku(db: Any, organization: Any) -> None:
@@ -1831,19 +1835,19 @@ def test_fail_nazvaniye_tovara_perezhivayet_vychistku(db: Any, organization: Any
     from platform_api.modules.tender import works
 
     work = _work(db, organization)
-    for позиция in work.positions:
-        works.choose(db, work, позиция.options[0].id)
+    for position_value in work.positions:
+        works.choose(db, work, position_value.options[0].id)
     works.hand_over(db, work, "")
 
-    for позиция in work.positions:
-        assert позиция.title.split()[0] in позиция.spec
+    for position_value in work.positions:
+        assert position_value.title.split()[0] in position_value.spec
 
 
-def _row_stub(папка: str, имя: str) -> Any:
+def _row_stub(dir_path: str, sheet_name: str) -> Any:
     """Строка отбора настолько, насколько её видит раскладка по лотам."""
     from types import SimpleNamespace
 
-    return SimpleNamespace(row=SimpleNamespace(folder_path=папка, title=имя))
+    return SimpleNamespace(row=SimpleNamespace(folder_path=dir_path, title=sheet_name))
 
 
 def test_fail_vzyatoye_v_rabotu_uhodit_vniz_spiska() -> None:
@@ -1855,11 +1859,11 @@ def test_fail_vzyatoye_v_rabotu_uhodit_vniz_spiska() -> None:
     from platform_api.modules.tender.router import _grouped
     from platform_api.modules.tender.works import Taken
 
-    строка = _row_stub
-    rows = [строка("/архив/А", "Насос"), строка("/архив/Б", "Кран"), строка("/архив/В", "Задвижка")]
-    взята = {("/архив/А", "Насос"): Taken(id="1", code="TN-00001", stage="analysis")}
+    line = _row_stub
+    rows = [line("/архив/А", "Насос"), line("/архив/Б", "Кран"), line("/архив/В", "Задвижка")]
+    taken = {("/архив/А", "Насос"): Taken(id="1", code="TN-00001", stage="analysis")}
 
-    assert [item.row.title for item in _grouped(rows, {}, взята)] == [
+    assert [item.row.title for item in _grouped(rows, {}, taken)] == [
         "Кран",
         "Задвижка",
         "Насос",
@@ -1880,10 +1884,10 @@ def test_fail_lot_uhodit_vniz_celikom() -> None:
         _row_stub("/архив/Б", "Кран"),
         _row_stub("/архив/А", "Пикобур Ø215"),
     ]
-    лот = {("/архив/А", "Пикобур Ø190"): "лот-1", ("/архив/А", "Пикобур Ø215"): "лот-1"}
-    взята = {("/архив/А", "Пикобур Ø190"): Taken(id="1", code="TN-00001", stage="supply")}
+    lot = {("/архив/А", "Пикобур Ø190"): "лот-1", ("/архив/А", "Пикобур Ø215"): "лот-1"}
+    taken = {("/архив/А", "Пикобур Ø190"): Taken(id="1", code="TN-00001", stage="supply")}
 
-    assert [item.row.title for item in _grouped(rows, лот, взята)] == [
+    assert [item.row.title for item in _grouped(rows, lot, taken)] == [
         "Кран",
         "Пикобур Ø190",
         "Пикобур Ø215",
@@ -1921,15 +1925,15 @@ def test_fail_lot_ubirayet_tolko_administrator(client: Any, db: Any) -> None:
 
     assert client.delete(f"/api/tender/works/{work_id}").status_code == 403
 
-    админ = User(
+    admin = User(
         email=f"{_uuid.uuid4().hex[:8]}@fintend.kz",
         password_hash=passwords.hash_password("закупки-2026-каратау"),
     )
-    db.add(админ)
+    db.add(admin)
     db.flush()
-    db.add(Membership(user_id=админ.id, organization_id=org.id, role=Role.ADMIN))
+    db.add(Membership(user_id=admin.id, organization_id=org.id, role=Role.ADMIN))
     db.flush()
-    _, token = open_session(db, админ, org, ttl_hours=12)
+    _, token = open_session(db, admin, org, ttl_hours=12)
     db.commit()
     client.cookies.set(Settings().auth.session_cookie, token)
 
@@ -1942,3 +1946,175 @@ def test_fail_lot_ubirayet_tolko_administrator(client: Any, db: Any) -> None:
         db.execute(select(TenderWork).where(TenderWork.id == work_id)).scalar_one_or_none() is None
     )
     assert db.execute(select(func.count()).select_from(TenderWorkOption)).scalar() == 0
+
+
+def test_fail_perenesyonnaya_stroka_sklеivayetsya() -> None:
+    """Требование, разорванное переносом, склеивается до отбора.
+
+    Разбор pdf отдаёт текст так, как он лёг на страницу: «Наработка на отказ
+    не менее» на одной строке, «8000 часов» на следующей. Отбор по строкам на
+    таком тексте выбрасывает половину требования и оставляет вторую — читать
+    это невозможно, а искать по этому товар тем более.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ.pdf",
+            text="Наработка на отказ не менее\n8000 часов с даты ввода\nв эксплуатацию",
+        )
+    )
+    body = spec.gather(case).body
+
+    assert "не менее 8000 часов с даты ввода в эксплуатацию" in body
+
+
+def test_fail_povtoryonnyy_abzac_pechatayetsya_odin_raz() -> None:
+    """Одно и то же требование печатается один раз.
+
+    В техническом задании и приложении к нему оно стоит слово в слово, а
+    таблица позиций повторяется на каждой странице. Задание, где каждый абзац
+    написан дважды, перестают читать на третьем.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ.pdf",
+            text="Степень защиты: IP 68.\nСтепень защиты: IP 68.\nМатериал: сталь 1.4401.",
+        )
+    )
+    body = spec.gather(case).body
+
+    assert body.count("IP 68") == 1 and "сталь 1.4401" in body
+
+
+def test_fail_kazahskiy_dubl_ne_udvaivayet_zadaniye() -> None:
+    """Казахская половина документа в задание не идёт.
+
+    Техническое задание пишут на двух языках, и вторая половина дословно
+    повторяет первую. Снабжение читает по-русски, а двойная длина означает,
+    что не дочитают ни ту ни другую.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ.pdf",
+            text=(
+                "Наружный диаметр, мм - 190,5\n"
+                "Сыртқы диаметрі, мм - 190,5 бұрғылау үшін\n"
+                "Степень защиты: IP 68"
+            ),
+        )
+    )
+    body = spec.gather(case).body
+
+    assert "Наружный диаметр" in body and "IP 68" in body
+    assert "Сыртқы" not in body
+
+
+def test_fail_shapka_bez_strok_ne_pechatayetsya() -> None:
+    """Таблица, из которой вырезали все данные, не оставляет шапки.
+
+    Из списка поставщиков заказчика уходят и цены, и названия — остаётся
+    «№ · Наименование компании». Такой остов говорит только о том, что таблица
+    была, а читается как обрывок.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "МЗ",
+            "МЗ.docx",
+            text="Степень защиты: IP 68",
+            tables=[
+                (
+                    ("№", "Наименование компании", "Статус"),
+                    ("1", "ТОО «Ромашка»", "Дистрибьютор"),
+                    ("2", "ТОО «Роза»", "Поставщик"),
+                )
+            ],
+        )
+    )
+    body = spec.gather(case).body
+
+    assert "IP 68" in body
+    assert "Наименование компании" not in body and "Ромашка" not in body
+
+
+def test_fail_chuzhaya_poziciya_v_zadaniye_ne_popadayet() -> None:
+    """В задании на кабель не должно быть индукционного котла.
+
+    В папке одна закупка на шестнадцать позиций и одно техническое задание на
+    всех. Приложенное целиком к каждой, оно отправляет снабжению задание, в
+    котором описан соседний товар, — и снабженец ищет не то.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "ТЗ",
+            "ТЗ.pdf",
+            text=(
+                "Кабель КГ 3х50 должен соответствовать ГОСТ 24334-80, "
+                "число жил не менее трёх, сечение 50 мм2, изоляция резиновая, "
+                "температура эксплуатации не ниже минус 40 градусов.\n"
+                "Индукционный котёл должен иметь мощность не менее 30 кВт, "
+                "напряжение 380 В, класс защиты IP 54,материал корпуса сталь, "
+                "давление в контуре не более 0,6 МПа, масса не более 40 кг.\n"
+                "Сертификат качества обязателен для всех позиций закупки, "
+                "паспорт изделия на государственном и русском языках прилагается."
+            ),
+        )
+    )
+    case.requested = (
+        type(case.requested[0])(
+            name="Кабель КГ 3х50",
+            specification=None,
+            quantity=Decimal(1),
+            unit="м",
+            ens_code="",
+        ),
+        type(case.requested[0])(
+            name="Индукционный котёл ВИН 30",
+            specification=None,
+            quantity=Decimal(1),
+            unit="шт",
+            ens_code="",
+        ),
+    )
+    текст = spec.render(spec.gather(case), "Кабель КГ 3х50")
+
+    assert "ГОСТ 24334-80" in текст
+    assert "Индукционный" not in текст
+    # Общее требование остаётся: чужого имени в нём нет.
+    assert "Сертификат качества" in текст
+
+
+def test_fail_usloviya_oplaty_ne_uhodyat() -> None:
+    """Как мы рассчитываемся с заказчиком — не дело поставщика.
+
+    «Окончательный платёж 100%» в письме поставщику читается как наше
+    предложение ему, и торг начинается с этой строки.
+    """
+    from platform_api.modules.tender import spec
+
+    case = _case_with_documents(
+        _document(
+            "МЗ",
+            "МЗ.docx",
+            text=(
+                "Окончательный платеж - 100%, промежуточный - 0%\n"
+                "Предоплата - 0%\n"
+                "Объём не менее 300 л, с морозильным отделом"
+            ),
+        )
+    )
+    body = spec.gather(case).body
+
+    assert "не менее 300 л" in body
+    assert "платеж" not in body.lower() and "Предоплата" not in body

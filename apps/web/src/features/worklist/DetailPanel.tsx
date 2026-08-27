@@ -330,7 +330,7 @@ function SectionBlock({
           aria-expanded={open}
           className="mb-2 flex w-full items-center gap-1.5 text-[11px] font-semibold tracking-wide text-ink-muted uppercase transition hover:text-ink"
         >
-          {/* Треугольник, а не только цвет и положение: состояние «свёрнут»
+          {/* Треугольник, а не только colour и положение: state «свёрнут»
               должно читаться и в чёрно-белой распечатке. */}
           <span
             aria-hidden
@@ -395,7 +395,7 @@ function FieldRow({
   onOpenFile?: (file: { sha256: string; name: string }) => void;
 }) {
   const value = formatValue(field, field.format);
-  const файл = field.link ? FILE_LINK.exec(field.link) : null;
+  const file = field.link ? FILE_LINK.exec(field.link) : null;
 
   // Без подписи — это замечание, а не поле: перед подачей их выводят списком.
   if (!field.label) {
@@ -418,13 +418,13 @@ function FieldRow({
           FIELD_TONE[field.tone] ?? "text-ink",
         )}
       >
-        {файл && onOpenFile ? (
+        {file && onOpenFile ? (
           // Документ открывается в платформе, а не уезжает в загрузки:
           // скачанный файл открывается чужой программой, и обратно к строке
           // человек возвращается руками. Скачать можно из самого окна.
           <button
             type="button"
-            onClick={() => onOpenFile({ sha256: файл[1], name: field.text })}
+            onClick={() => onOpenFile({ sha256: file[1], name: field.text })}
             className="text-left text-series-1 underline decoration-series-1/30 underline-offset-2 hover:decoration-series-1"
           >
             {value}
@@ -503,7 +503,7 @@ function LotToggle({
         ? "Минуту…"
         : lot.merged
           ? "Разъединить лот"
-          : `Объединить в лот · ещё ${others} ${others === 1 ? "позиция" : "позиции"}`}
+          : `Объединить в lot · ещё ${others} ${others === 1 ? "позиция" : "позиции"}`}
     </Button>
   );
 }
@@ -544,21 +544,21 @@ function LotSearch({
     },
   });
 
-  const внутри = new Set((lot?.positions ?? []).map((position) => position.id));
+  const inside = new Set((lot?.positions ?? []).map((position) => position.id));
   // Какая колонка — название закупки, говорит сервер ролью. По месту в списке
   // её не найти: первой у тендерного отбора стоит решение, у площадок номер.
-  const название = Math.max(
+  const title = Math.max(
     0,
     (list?.columns ?? []).findIndex((column) => column.role === "title"),
   );
   const needle = query.trim().toLowerCase();
-  const найдено = !needle
+  const found = !needle
     ? []
     : (list?.rows ?? [])
         .filter(
           (row) =>
             row.id &&
-            !внутри.has(row.id) &&
+            !inside.has(row.id) &&
             row.cells.some((cell) => cell.text.toLowerCase().includes(needle)),
         )
         .slice(0, 8);
@@ -601,13 +601,13 @@ function LotSearch({
 
       {needle && (
         <ul className="mt-2 overflow-hidden rounded-[8px] border border-hairline">
-          {найдено.length === 0 && (
+          {found.length === 0 && (
             <li className="px-3 py-2 text-sm text-ink-muted">
               Ничего не нашлось. Ищется по всем строкам отбора, включая другие
               папки.
             </li>
           )}
-          {найдено.map((row) => (
+          {found.map((row) => (
             <li key={row.id} className="border-b border-hairline last:border-0">
               <button
                 type="button"
@@ -619,7 +619,7 @@ function LotSearch({
                   {row.code || row.number}
                 </span>
                 <span className="min-w-0 flex-1 text-sm break-words text-ink">
-                  {row.cells[название]?.text || "—"}
+                  {row.cells[title]?.text || "—"}
                   {row.lot && (
                     <span className="ml-2 text-xs text-warning">
                       уже в другом лоте — переедет сюда
@@ -665,26 +665,26 @@ function LotCard({
       // вместе с ней. Человек вычёркивает лишнее и продолжает смотреть
       // остальные; выкидывать его на только что убранную незачем.
       if (only === id) {
-        const другая = lot.positions.find((position) => position.id !== only);
-        if (другая) onOpen(другая.id);
+        const other = lot.positions.find((position) => position.id !== only);
+        if (other) onOpen(other.id);
       }
       onDone();
     },
   });
-  const убыток = lot.margin_percent !== null && lot.margin_percent <= 0;
-  const неполный = lot.priced < lot.positions.length;
+  const loss = lot.margin_percent !== null && lot.margin_percent <= 0;
+  const partial = lot.priced < lot.positions.length;
 
   return (
     <section
       className={cx(
         "overflow-hidden rounded-[10px] border",
-        убыток ? "border-critical/40" : "border-hairline",
+        loss ? "border-critical/40" : "border-hairline",
       )}
     >
       <header
         className={cx(
           "flex items-center justify-between gap-3 px-4 py-2.5",
-          убыток ? "bg-critical/10" : "bg-plane",
+          loss ? "bg-critical/10" : "bg-plane",
         )}
       >
         <div className="text-sm font-medium text-ink">
@@ -694,12 +694,12 @@ function LotCard({
           <div
             className={cx(
               "text-sm font-semibold tabular-nums",
-              убыток ? "text-critical" : "text-good",
+              loss ? "text-critical" : "text-good",
             )}
           >
             {/* Знак словом, а не только цветом: при дальтонизме «плюс» и
                 «минус» одинаковы, а разница здесь — идти в закупку или нет. */}
-            {убыток ? "убыток " : "маржа "}
+            {loss ? "убыток " : "маржа "}
             {lot.margin_percent}%
           </div>
         )}
@@ -718,7 +718,7 @@ function LotCard({
             <dd
               className={cx(
                 "mt-0.5 text-sm font-medium tabular-nums",
-                label === "Заработок" && убыток ? "text-critical" : "text-ink",
+                label === "Заработок" && loss ? "text-critical" : "text-ink",
               )}
             >
               {value === null ? "—" : `${money(value)} ₸`}
@@ -727,11 +727,11 @@ function LotCard({
         ))}
       </dl>
 
-      {неполный && (
+      {partial && (
         <p className="border-b border-hairline bg-warning/10 px-4 py-2 text-xs text-ink-secondary">
           ⚠ Себестоимость известна по {lot.priced} позиции из{" "}
           {lot.positions.length}. Итог по лоту выглядит лучше, чем он есть:
-          непосчитанная позиция считается бесплатной.
+          непосчитанная position считается бесплатной.
         </p>
       )}
 

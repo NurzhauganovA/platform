@@ -48,18 +48,18 @@ def assign(db: DbSession, module: str, prefix: str, keys: Sequence[str]) -> dict
     if not keys:
         return {}
 
-    выданные = _known(db, module, keys)
-    новые = [key for key in dict.fromkeys(keys) if key not in выданные]
-    if not новые:
-        return {code: _format(prefix, code_number) for code, code_number in выданные.items()}
+    issued_codes = _known(db, module, keys)
+    fresh = [key for key in dict.fromkeys(keys) if key not in issued_codes]
+    if not fresh:
+        return {code: _format(prefix, code_number) for code, code_number in issued_codes.items()}
 
-    следующий = _next_number(db, module)
+    next_one = _next_number(db, module)
     db.execute(
         insert(WorklistCode)
         .values(
             [
-                {"module": module, "row_key": key, "number": следующий + shift}
-                for shift, key in enumerate(новые)
+                {"module": module, "row_key": key, "number": next_one + shift}
+                for shift, key in enumerate(fresh)
             ]
         )
         # Тот же список могли открыть двое разом. Проигравший не падает и не
@@ -67,10 +67,10 @@ def assign(db: DbSession, module: str, prefix: str, keys: Sequence[str]) -> dict
         .on_conflict_do_nothing(constraint="module_row")
     )
     db.flush()
-    logger.info("Выданы коды строк", module=module, added=len(новые))
+    logger.info("Выданы коды строк", module=module, added=len(fresh))
 
-    выданные = _known(db, module, keys)
-    return {key: _format(prefix, number) for key, number in выданные.items()}
+    issued_codes = _known(db, module, keys)
+    return {key: _format(prefix, number) for key, number in issued_codes.items()}
 
 
 def _known(db: DbSession, module: str, keys: Sequence[str]) -> dict[str, int]:
@@ -90,10 +90,10 @@ def _next_number(db: DbSession, module: str) -> int:
     закупка свой номер не освобождает — иначе он достался бы другой позиции, и
     ссылка «TN-00042» из переписки повела бы не туда.
     """
-    высший = db.execute(
+    best = db.execute(
         select(func.max(WorklistCode.number)).where(WorklistCode.module == module)
     ).scalar()
-    return (высший or 0) + 1
+    return (best or 0) + 1
 
 
 def _format(prefix: str, number: int) -> str:

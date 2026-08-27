@@ -75,16 +75,16 @@ export function WorksPage({ role }: { role: Role }) {
 
   // Чей ход — то же правило, что и на самом лоте: разбор работает, пока лот
   // не у снабжения, снабжение — пока он у него.
-  const мой = (work: WorkListItem) =>
+  const mine = (work: WorkListItem) =>
     analysis ? work.stage !== "supply" : work.stage === "supply";
 
-  const свои = data
-    .filter((work) => мой(work) && work.stage !== "returned")
+  const own = data
+    .filter((work) => mine(work) && work.stage !== "returned")
     .sort(
       (left, right) => (right.waiting_days ?? 0) - (left.waiting_days ?? 0),
     );
-  const чужие = data.filter((work) => !мой(work));
-  const готовые = data.filter((work) => work.stage === "returned" && мой(work));
+  const theirs = data.filter((work) => !mine(work));
+  const ready = data.filter((work) => work.stage === "returned" && mine(work));
 
   return (
     <>
@@ -100,7 +100,7 @@ export function WorksPage({ role }: { role: Role }) {
             <Group
               title="Ваш ход"
               hint="ждут вашей работы"
-              works={свои}
+              works={own}
               analysis={analysis}
               accent
               empty={
@@ -112,13 +112,13 @@ export function WorksPage({ role }: { role: Role }) {
             <Group
               title={analysis ? "У снабжения" : "У разбора"}
               hint="работает другой отдел"
-              works={чужие}
+              works={theirs}
               analysis={analysis}
             />
             <Group
               title="Готово к КП"
               hint="цены подтверждены, можно считать предложение"
-              works={готовые}
+              works={ready}
               analysis={analysis}
             />
           </>
@@ -201,13 +201,13 @@ function Group({
 
 function Row({ work, analysis }: { work: WorkListItem; analysis: boolean }) {
   const stage = STAGES[work.stage];
-  const дней = work.waiting_days ?? 0;
+  const days = work.waiting_days ?? 0;
   // Неделя у одного отдела — это уже не «идёт работа», а «забыли». Три дня —
   // ещё не тревога, но уже повод спросить.
-  const тон =
-    дней >= 7
+  const tone =
+    days >= 7
       ? "font-medium text-critical"
-      : дней >= 3
+      : days >= 3
         ? "text-warning"
         : "text-ink";
 
@@ -253,9 +253,9 @@ function Row({ work, analysis }: { work: WorkListItem; analysis: boolean }) {
           <span className="text-ink-muted">—</span>
         ) : (
           <>
-            <span className={тон}>
-              {дней === 0 ? "сегодня" : `${дней} ${_days(дней)}`}
-              {дней >= 7 && " — забыли?"}
+            <span className={tone}>
+              {days === 0 ? "сегодня" : `${days} ${_days(days)}`}
+              {days >= 7 && " — забыли?"}
             </span>
             {work.sent_at && (
               <div className="mt-0.5 text-ink-muted">

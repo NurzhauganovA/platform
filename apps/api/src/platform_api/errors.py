@@ -78,9 +78,9 @@ def job_failure(exc: Exception) -> str:
     """
     ref = _reference()
     logger.exception("Задача не выполнена", reference=ref)
-    понятная = _spoken(exc)
-    if понятная:
-        return понятная
+    spoken = _spoken(exc)
+    if spoken:
+        return spoken
     return (
         "Прогон прервался из-за ошибки в платформе. Это не ваши данные —"
         f" покажите администратору код {ref}."
@@ -96,8 +96,8 @@ def _spoken(exc: Exception) -> str:
     """
     for base in type(exc).__mro__:
         if base.__name__ in _OUR_ERRORS:
-            текст = str(exc).strip()
-            return текст if текст else ""
+            text = str(exc).strip()
+            return text if text else ""
     return ""
 
 

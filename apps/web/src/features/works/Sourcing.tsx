@@ -59,9 +59,9 @@ export function Sourcing({
   const [editingId, setEditingId] = useState("");
 
   const editing = position.options.find((option) => option.id === editingId);
-  const порядок = ranked(position);
-  const дешёвый = best(position, (option) => option.price);
-  const быстрый = best(position, (option) => option.delivery_days);
+  const ordered = ranked(position);
+  const cheapest = best(position, (option) => option.price);
+  const fastest = best(position, (option) => option.delivery_days);
 
   return (
     <div>
@@ -117,7 +117,7 @@ export function Sourcing({
               </tr>
             </thead>
             <tbody>
-              {порядок.map((option) => (
+              {ordered.map((option) => (
                 <Row
                   key={option.id}
                   work={work}
@@ -125,8 +125,8 @@ export function Sourcing({
                   option={option}
                   analysis={analysis}
                   editable={editable}
-                  cheapest={дешёвый}
-                  fastest={быстрый}
+                  cheapest={cheapest}
+                  fastest={fastest}
                   onEdit={() => setEditingId(option.id)}
                   onDone={onDone}
                 />
@@ -207,16 +207,16 @@ function Row({
     mutationFn: () => worksApi.dropOption(work.id, option.id),
     onSuccess: onDone,
   });
-  const беда = choose.error ?? drop.error;
+  const trouble = choose.error ?? drop.error;
 
   // Заявка разбора: заполнено одно название, остальное выясняет снабжение.
   // Это задание, а не сломанная запись, и выглядеть должно заданием.
-  const заявка = option.source === "asked" && option.price === null;
-  const количество = position.quantity ?? 1;
-  const итого = option.price === null ? null : option.price * количество;
-  const заработок =
-    analysis && итого !== null && position.total !== null
-      ? position.total - итого
+  const request = option.source === "asked" && option.price === null;
+  const quantity = position.quantity ?? 1;
+  const lineTotal = option.price === null ? null : option.price * quantity;
+  const profit =
+    analysis && lineTotal !== null && position.total !== null
+      ? position.total - lineTotal
       : null;
 
   return (
@@ -225,7 +225,7 @@ function Row({
         className={cx(
           "border-b border-hairline last:border-0",
           option.chosen && "bg-good/5",
-          заявка && "bg-warning/5",
+          request && "bg-warning/5",
         )}
       >
         <td className="px-2 py-2.5 align-top">
@@ -236,7 +236,7 @@ function Row({
             >
               ✓
             </span>
-          ) : analysis && editable && !заявка ? (
+          ) : analysis && editable && !request ? (
             <button
               type="button"
               onClick={() => choose.mutate()}
@@ -252,7 +252,7 @@ function Row({
 
         <td className="px-2 py-2.5 align-top">
           <div className="font-medium text-ink">
-            {option.supplier || (заявка ? "Поставщика ищет снабжение" : "—")}
+            {option.supplier || (request ? "Поставщика ищет снабжение" : "—")}
           </div>
           {option.name && (
             <div className="mt-0.5 break-words text-ink-secondary">
@@ -301,13 +301,13 @@ function Row({
         </td>
 
         <td className="px-2 py-2.5 text-right align-top tabular-nums">
-          {итого === null ? (
+          {lineTotal === null ? (
             <span className="text-ink-muted">—</span>
           ) : (
-            <span className="font-medium text-ink">{money(итого)}</span>
+            <span className="font-medium text-ink">{money(lineTotal)}</span>
           )}
-          {итого !== null && cheapest !== null && (
-            <Delta value={итого} best={cheapest * количество} suffix="₸" />
+          {lineTotal !== null && cheapest !== null && (
+            <Delta value={lineTotal} best={cheapest * quantity} suffix="₸" />
           )}
         </td>
 
@@ -327,17 +327,17 @@ function Row({
 
         <td className="px-2 py-2.5 text-right align-top">
           {analysis ? (
-            заработок === null ? (
+            profit === null ? (
               <span className="text-ink-muted">—</span>
             ) : (
               <span
                 className={cx(
                   "font-medium tabular-nums",
-                  заработок > 0 ? "text-good" : "text-critical",
+                  profit > 0 ? "text-good" : "text-critical",
                 )}
               >
-                {заработок > 0 ? "+" : "−"}
-                {money(Math.abs(заработок))}
+                {profit > 0 ? "+" : "−"}
+                {money(Math.abs(profit))}
               </span>
             )
           ) : (
@@ -359,7 +359,7 @@ function Row({
                   ✎
                 </button>
               )}
-              {!(заявка && !analysis) && (
+              {!(request && !analysis) && (
                 <button
                   type="button"
                   onClick={() => drop.mutate()}
@@ -375,10 +375,10 @@ function Row({
           )}
         </td>
       </tr>
-      {беда && (
+      {trouble && (
         <tr>
           <td colSpan={8} className="px-2 pb-2 text-xs text-critical">
-            {беда instanceof Error ? беда.message : "Не получилось"}
+            {trouble instanceof Error ? trouble.message : "Не получилось"}
           </td>
         </tr>
       )}
@@ -422,13 +422,13 @@ function Amount({
     },
   });
 
-  const принять = () => {
-    const число = Number((draft ?? "").replace(",", ".").replace(/\s/g, ""));
-    if (!(draft ?? "").trim() || !Number.isFinite(число)) {
+  const accept = () => {
+    const amount = Number((draft ?? "").replace(",", ".").replace(/\s/g, ""));
+    if (!(draft ?? "").trim() || !Number.isFinite(amount)) {
       setDraft(null);
       return;
     }
-    save.mutate(field === "delivery_days" ? Math.round(число) : число);
+    save.mutate(field === "delivery_days" ? Math.round(amount) : amount);
   };
 
   if (draft !== null)
@@ -438,22 +438,22 @@ function Amount({
         value={draft}
         inputMode="decimal"
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={принять}
+        onBlur={accept}
         onKeyDown={(event) => {
-          if (event.key === "Enter") принять();
+          if (event.key === "Enter") accept();
           if (event.key === "Escape") setDraft(null);
         }}
         className="w-full rounded-[6px] border border-series-1 bg-surface px-1.5 py-0.5 text-right text-[13px] tabular-nums text-ink focus:outline-none"
       />
     );
 
-  const текст = value === null ? null : `${money(value)}${unit}`;
+  const text = value === null ? null : `${money(value)}${unit}`;
 
   if (!editable)
-    return текст === null ? (
+    return text === null ? (
       <span className="text-warning">{missing}</span>
     ) : (
-      <span className="font-medium tabular-nums text-ink">{текст}</span>
+      <span className="font-medium tabular-nums text-ink">{text}</span>
     );
 
   return (
@@ -465,10 +465,10 @@ function Amount({
         "w-full rounded-[6px] px-1.5 py-0.5 text-right transition",
         "hover:bg-series-1/10 hover:ring-1 hover:ring-series-1/40",
         save.isPending && "opacity-50",
-        текст === null ? "text-warning" : "font-medium tabular-nums text-ink",
+        text === null ? "text-warning" : "font-medium tabular-nums text-ink",
       )}
     >
-      {текст ?? missing}
+      {text ?? missing}
     </button>
   );
 }
@@ -498,23 +498,23 @@ function Delta({
  * «нет срока» читается одинаково у всех.
  */
 function Gaps({ option }: { option: WorkOption }) {
-  const дыры = [
+  const gaps = [
     option.price === null && "цена",
     option.delivery_days === null && "срок",
     !option.url && "ссылка",
     !option.supplier && "поставщик",
   ].filter(Boolean) as string[];
 
-  if (!дыры.length)
+  if (!gaps.length)
     return <span className="text-xs font-medium text-good">всё заполнено</span>;
   return (
     <div className="flex flex-wrap justify-end gap-1">
-      {дыры.map((дыра) => (
+      {gaps.map((gap) => (
         <span
-          key={дыра}
+          key={gap}
           className="rounded-full bg-warning/15 px-1.5 py-0.5 text-xs text-ink"
         >
-          нет: {дыра}
+          нет: {gap}
         </span>
       ))}
     </div>
@@ -546,7 +546,7 @@ function AskForm({
       </div>
       <p className="mt-1 mb-2 text-xs text-ink-secondary">
         Найденное моделью по этой позиции уйдёт: заказ поиска и означает, что
-        оно не подходит. Подтверждённый вами поставщик останется.
+        оно не подходит. Подтверждённый вами supplier останется.
       </p>
       <div className="flex flex-wrap gap-2">
         <input

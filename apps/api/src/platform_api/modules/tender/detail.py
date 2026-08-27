@@ -415,7 +415,7 @@ def documents_of(folder_path: str, title: str) -> tuple[Field, ...]:
     """
     from platform_api.modules.tender.worklist import case_files, ranked, row_id
 
-    найдена = next(
+    found = next(
         (
             item
             for item in ranked()
@@ -423,10 +423,10 @@ def documents_of(folder_path: str, title: str) -> tuple[Field, ...]:
         ),
         None,
     )
-    if найдена is None:
+    if found is None:
         return ()
 
-    item_id = row_id(найдена)
+    item_id = row_id(found)
     return tuple(
         Field(
             label=item.kind or "файл",
