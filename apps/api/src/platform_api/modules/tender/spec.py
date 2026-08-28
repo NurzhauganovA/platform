@@ -424,15 +424,50 @@ def _customer_documents(case: Any) -> tuple[Source, ...]:
     второй раз незачем, а открытая страница не тратит денег.
     """
     out: list[Source] = []
+    seen: set[str] = set()
     for kind in _CUSTOMER_ORDER:
         for document in case.documents:
-            insight = document.insight
-            if insight is None or str(insight.kind) != kind:
+            if document.source.name in seen or not _is_kind(document, kind):
                 continue
             content = _readable(document.extraction)
             if content:
+                seen.add(document.source.name)
                 out.append(Source(name=document.source.name, kind=kind, body=content))
     return tuple(out)
+
+
+def _is_kind(document: Any, kind: str) -> bool:
+    """Тот ли это вид документа — по разбору, а не вышло, так по имени файла.
+
+    Разбор путается на технических спецификациях: из двух сотен файлов, у
+    которых это написано в названии, три десятка остались без вида вовсе.
+    Такой файл выпадал из задания целиком, и снабжение получало количество без
+    единого требования — при том, что требования лежали в той же папке.
+
+    Имя файла тендерщик пишет сам и пишет одинаково: «Т.С. -Разъедин…»,
+    «Тех.спецификация _ Блок питания…». Признак бесплатный и переживает ошибку
+    модели, а перепутать им КП с заданием нельзя: у предложения в названии
+    стоит «КП».
+    """
+    insight = document.insight
+    if insight is not None and str(insight.kind) == kind:
+        return True
+    if kind != "ТЗ":
+        return False
+    if insight is not None and str(insight.kind) in _NOT_CUSTOMER:
+        return False
+    return bool(_SPEC_NAME.search(document.source.name))
+
+
+_NOT_CUSTOMER = frozenset({"КП", "прайс", "договор", "счёт", "сертификат"})
+"""Виды, которые техническим заданием не бывают, как их ни назови."""
+
+_SPEC_NAME = re.compile(
+    r"тех\.?\s?спецификац|техническ\w*\s+специфик|техническое\s+задание|"
+    r"(?:^|[\s_-])Т\.?\s?С\.?[\s.-]",
+    re.IGNORECASE,
+)
+"""Название файла, говорящее о техническом задании."""
 
 
 def _readable(extraction: Any) -> str:
