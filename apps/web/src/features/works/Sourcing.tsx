@@ -546,7 +546,7 @@ function AskForm({
       </div>
       <p className="mt-1 mb-2 text-xs text-ink-secondary">
         Найденное моделью по этой позиции уйдёт: заказ поиска и означает, что
-        оно не подходит. Подтверждённый вами supplier останется.
+        оно не подходит. Подтверждённый вами поставщик останется.
       </p>
       <div className="flex flex-wrap gap-2">
         <input

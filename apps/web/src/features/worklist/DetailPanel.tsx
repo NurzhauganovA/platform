@@ -330,7 +330,7 @@ function SectionBlock({
           aria-expanded={open}
           className="mb-2 flex w-full items-center gap-1.5 text-[11px] font-semibold tracking-wide text-ink-muted uppercase transition hover:text-ink"
         >
-          {/* Треугольник, а не только colour и положение: state «свёрнут»
+          {/* Треугольник, а не только цвет и положение: состояние «свёрнут»
               должно читаться и в чёрно-белой распечатке. */}
           <span
             aria-hidden
@@ -731,7 +731,7 @@ function LotCard({
         <p className="border-b border-hairline bg-warning/10 px-4 py-2 text-xs text-ink-secondary">
           ⚠ Себестоимость известна по {lot.priced} позиции из{" "}
           {lot.positions.length}. Итог по лоту выглядит лучше, чем он есть:
-          непосчитанная position считается бесплатной.
+          непосчитанная позиция считается бесплатной.
         </p>
       )}
 

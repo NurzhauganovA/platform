@@ -11,7 +11,7 @@
  * его задаёт книга того же проекта, и разойтись они не должны.
  */
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type {
   ColumnSet,
@@ -20,7 +20,7 @@ import type {
   WorklistColumn,
   WorklistRow,
 } from "@/api/worklist";
-import { cx } from "@/ui";
+import { cx, money } from "@/ui";
 import { verdictLookup } from "./verdicts";
 import { ColumnFilterButton } from "./ColumnFilter";
 import type { ColumnFilter, FilterState, Filterable } from "./filters";
@@ -98,6 +98,11 @@ export function WorkTable({
     [data.columns, columns],
   );
 
+  // Какие лоты раскрыты. Свёрнуты по умолчанию: лот из семи позиций занимает
+  // семь строк, и таблица перестаёт читаться ради связи, которую видно и по
+  // одной строке.
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+
   const rows = useMemo(() => {
     if (!sort) return given;
 
@@ -133,7 +138,7 @@ export function WorkTable({
       {/*
         Раскладка фиксированная, ширины — из книги. Без этого длинное title
         заказчика растягивает свою колонку на пол-экрана, и таблица на девятнадцать
-        columns разъезжается до девяти тысяч точек: margin оказывается за краем,
+        колонок разъезжается до девяти тысяч точек: маржа оказывается за краем,
         а ради неё человек сюда и пришёл.
 
         `min-w-full` — про широкий монитор. Ширины в книге подобраны под лист
@@ -141,8 +146,8 @@ export function WorkTable({
         даты оставалась пустая полоса, а заливка строки обрывалась на полпути,
         будто таблица недогрузилась. Так таблица берёт ширину из columns, но
         не меньше карточки, и лишнее место уходит им соразмерно — то есть
-        названиям, которым его и не хватает. Когда columns больше, чем
-        помещается, всё как before: ширины из книги и прокрутка вбок.
+        названиям, которым его и не хватает. Когда колонок больше, чем
+        помещается, всё как было: ширины из книги и прокрутка вбок.
 
         Ширину задаёт `table-fixed` по `colgroup`, а не содержимое. Стояло
         `w-max`, и это работало ровно до появления воронок в шапке: они
@@ -162,7 +167,7 @@ export function WorkTable({
           <tr>
             {/* Код не сортируется: он выдан по времени появления закупки, и
                 сортировка по нему — это «сначала старые», что уже делает
-                column даты. */}
+                колонка даты. */}
             <th
               scope="col"
               className={cx(
@@ -212,85 +217,310 @@ export function WorkTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            /*
-              Строка открывает разбор целиком, и она же — то, чем его
-              открывают с клавиатуры. Колонки-кнопки «Разбор» больше нет, и
-              без `tabIndex` с обработкой Enter раздел стал бы недоступен
-              тому, who работает без мыши.
-
-              Решение подписано в `title` и в `aria-label`: заливка строки
-              его показывает, но при дальтонизме colour сам по себе неразличим,
-              а слова колонки в «Главном» нет.
-            */
-            <tr
-              key={row.id || row.cells[0]?.text}
-              tabIndex={row.id ? 0 : -1}
-              role={row.id ? "button" : undefined}
-              aria-label={
-                row.id
-                  ? `${verdict(row.tone)?.title ?? "Без решения"}: ${row.cells[0]?.text ?? ""}. Открыть разбор`
-                  : undefined
-              }
-              title={verdict(row.tone)?.title}
-              onClick={() => row.id && onOpen(row.id)}
-              onKeyDown={(event) => {
-                if (!row.id) return;
-                if (event.key === "Enter" || event.key === " ") {
-                  // Пробел иначе прокрутит страницу вместо открытия разбора.
-                  event.preventDefault();
-                  onOpen(row.id);
-                }
-              }}
-              className={cx(
-                "group cursor-pointer",
-                TONES[row.tone] ?? TONES[""],
-                // Полоса слева у строк одного лота: связь надо видеть при
-                // прокрутке, а сортировка их разводит по списку.
-                row.lot && "border-l-2 border-l-series-1",
-                // Взятое в работу приглушается: решение по нему принято, и
-                // взгляд не должен возвращаться к нему при просмотре списка.
-                row.work && "opacity-60",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-series-1",
-                openId === row.id &&
-                  "outline outline-2 -outline-offset-2 outline-series-1",
-              )}
-            >
-              {/* Код, а не место в списке. Место сдвигается от каждой новой
-                  закупки: сотрудник говорит «посмотри сорок вторую», а у
-                  собеседника это уже other line. Код выдан один раз и
-                  остаётся при позиции. */}
-              <td className="border-b border-hairline px-2.5 py-1.5 text-left align-top text-xs text-ink-muted tabular-nums">
-                {row.code || row.number}
-                {row.lot && <LotMark lot={row.lot} />}
-                {row.work && <WorkMark work={row.work} />}
-              </td>
-              {shown.map(({ column, index }) => (
-                <td
-                  key={column.key}
-                  className={cx(
-                    "border-b border-hairline px-2.5 py-1.5 align-top",
-                    column.align === "right"
-                      ? "text-right whitespace-nowrap"
-                      : "text-left",
-                    CELL_TONES[row.cells[index]?.tone ?? ""],
-                  )}
-                >
-                  {column.format === "datetime" ? (
-                    <Deadline cell={row.cells[index]} />
-                  ) : column.compact ? (
-                    <Compact cell={row.cells[index]} />
-                  ) : (
-                    render(row.cells[index], column)
-                  )}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {grouped(rows).map((group) =>
+            group.lot && !opened.has(group.lot) ? (
+              <Fragment key={group.lot}>
+                {renderRow(group.rows[0])}
+                <Folded
+                  rows={group.rows.slice(1)}
+                  verdict={verdict}
+                  columns={shown.length + 1}
+                  onOpen={() =>
+                    setOpened((was) => new Set(was).add(group.lot as string))
+                  }
+                />
+              </Fragment>
+            ) : (
+              <Fragment key={group.lot ?? group.rows[0].id}>
+                {group.rows.map((row, at) => renderRow(row, at))}
+                {group.lot && (
+                  <Unfolded
+                    count={group.rows.length - 1}
+                    columns={shown.length + 1}
+                    onClose={() =>
+                      setOpened((was) => {
+                        const next = new Set(was);
+                        next.delete(group.lot as string);
+                        return next;
+                      })
+                    }
+                  />
+                )}
+              </Fragment>
+            ),
+          )}
         </tbody>
       </table>
     </div>
   );
+
+  function renderRow(row: WorklistRow, at = 0) {
+    return (
+      /*
+              Строка открывает разбор целиком, и она же — то, чем его
+              открывают с клавиатуры. Колонки-кнопки «Разбор» больше нет, и
+              без `tabIndex` с обработкой Enter раздел стал бы недоступен
+              тому, кто работает без мыши.
+
+              Решение подписано в `title` и в `aria-label`: заливка строки
+              его показывает, но при дальтонизме цвет сам по себе неразличим,
+              а слова колонки в «Главном» нет.
+            */
+      <tr
+        key={row.id || row.cells[0]?.text}
+        tabIndex={row.id ? 0 : -1}
+        role={row.id ? "button" : undefined}
+        aria-label={
+          row.id
+            ? `${verdict(row.tone)?.title ?? "Без решения"}: ${row.cells[0]?.text ?? ""}. Открыть разбор`
+            : undefined
+        }
+        title={verdict(row.tone)?.title}
+        onClick={() => row.id && onOpen(row.id)}
+        onKeyDown={(event) => {
+          if (!row.id) return;
+          if (event.key === "Enter" || event.key === " ") {
+            // Пробел иначе прокрутит страницу вместо открытия разбора.
+            event.preventDefault();
+            onOpen(row.id);
+          }
+        }}
+        className={cx(
+          "group cursor-pointer",
+          TONES[row.tone] ?? TONES[""],
+          // Полоса слева у строк одного лота: связь надо видеть при
+          // прокрутке, а сортировка их разводит по списку.
+          row.lot && "border-l-2 border-l-series-1",
+          // Вторая и следующие позиции лота — подчинённые: первая и есть лот
+          // в списке, по ней его находят и открывают. Приглушение говорит это
+          // без слов, а слова здесь заняли бы строку.
+          at > 0 && "bg-plane/30",
+          // Взятое в работу приглушается: решение по нему принято, и
+          // взгляд не должен возвращаться к нему при просмотре списка.
+          row.work && "opacity-60",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-series-1",
+          openId === row.id &&
+            "outline outline-2 -outline-offset-2 outline-series-1",
+        )}
+      >
+        {/* Код, а не место в списке. Место сдвигается от каждой новой
+                  закупки: сотрудник говорит «посмотри сорок вторую», а у
+                  собеседника это уже другая строка. Код выдан один раз и
+                  остаётся при позиции. */}
+        <td className="border-b border-hairline px-2.5 py-1.5 text-left align-top text-xs text-ink-muted tabular-nums">
+          {row.code || row.number}
+          {row.lot && <LotMark lot={row.lot} />}
+          {row.work && <WorkMark work={row.work} />}
+        </td>
+        {shown.map(({ column, index }) => (
+          <td
+            key={column.key}
+            className={cx(
+              "border-b border-hairline px-2.5 py-1.5 align-top",
+              column.align === "right"
+                ? "text-right whitespace-nowrap"
+                : "text-left",
+              CELL_TONES[row.cells[index]?.tone ?? ""],
+            )}
+          >
+            {column.format === "datetime" ? (
+              <Deadline cell={row.cells[index]} />
+            ) : column.compact ? (
+              <Compact cell={row.cells[index]} />
+            ) : (
+              render(row.cells[index], column)
+            )}
+          </td>
+        ))}
+      </tr>
+    );
+  }
+}
+
+/**
+ * Строки одного лота — одним блоком.
+ *
+ * Группируются подряд идущие: сервер уже поставил их рядом, а сортировка по
+ * колонке их разводит — и тогда лот распадается на одиночные строки сам, без
+ * особого случая. Это правильно: отсортировав по марже, человек смотрит уже
+ * не на лоты.
+ */
+function grouped(
+  rows: WorklistRow[],
+): { lot: string | null; rows: WorklistRow[] }[] {
+  const out: { lot: string | null; rows: WorklistRow[] }[] = [];
+  for (const row of rows) {
+    const key = row.lot?.key ?? null;
+    const last = out[out.length - 1];
+    if (key !== null && last?.lot === key) last.rows.push(row);
+    else out.push({ lot: key, rows: [row] });
+  }
+  // Лот из одной строки — не лот: сворачивать нечего.
+  return out.map((group) =>
+    group.rows.length > 1 ? group : { lot: null, rows: group.rows },
+  );
+}
+
+/**
+ * Свёрнутый хвост лота: одна строка вместо шести.
+ *
+ * Первая позиция остаётся полной — она и есть лот в списке, по ней его находят
+ * и открывают. Остальные схлопываются, но не исчезают: их названия и вердикты
+ * стоят здесь же. Прятать за щелчком то, по чему принимают решение, значит
+ * заставить раскрывать каждый лот подряд, — а тогда сворачивать незачем.
+ */
+function Folded({
+  rows,
+  verdict,
+  columns,
+  onOpen,
+}: {
+  rows: WorklistRow[];
+  verdict: (tone: string) => { title: string } | undefined;
+  columns: number;
+  onOpen: () => void;
+}) {
+  const titles = rows
+    .map((row) => row.cells.find((cell) => cell.text)?.text ?? "")
+    .filter(Boolean);
+  // Итог по лоту — то, ради чего лот и собирали: позиция бывает прибыльной, а
+  // лот в минусе. Стоит в свёрнутой строке, а не только в подсказке значка:
+  // раскрывать лот ради числа, которое решает, стоит ли его раскрывать, —
+  // ровно то, от чего сворачивание и избавляет.
+  const lot = rows[0]?.lot;
+
+  return (
+    <tr
+      tabIndex={0}
+      role="button"
+      aria-expanded={false}
+      aria-label={`Показать ещё ${rows.length} ${plural(rows.length)} лота`}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+      className={cx(
+        "cursor-pointer border-l-2 border-l-series-1 bg-plane/40 hover:bg-plane",
+        "focus-visible:outline focus-visible:outline-2",
+        "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
+      )}
+    >
+      <td className="border-b border-hairline py-1.5 pr-1 text-right align-middle">
+        <span aria-hidden className="text-xs text-series-1">
+          ▸
+        </span>
+      </td>
+      <td
+        colSpan={columns - 1}
+        className="border-b border-hairline px-2.5 py-1.5 align-middle"
+      >
+        <span className="flex items-center gap-2 text-xs">
+          <span className="shrink-0 font-medium text-series-1">
+            ещё {rows.length} {plural(rows.length)} лота
+          </span>
+          {lot?.total != null && (
+            <span className="shrink-0 tabular-nums text-ink-secondary">
+              лот {money(lot.total)} ₸
+              {lot.margin_percent != null && (
+                <span
+                  className={cx(
+                    "ml-1.5",
+                    lot.margin_percent > 0 ? "text-good" : "text-critical",
+                  )}
+                >
+                  {lot.margin_percent > 0 ? "+" : ""}
+                  {lot.margin_percent}%
+                </span>
+              )}
+            </span>
+          )}
+          <span className="truncate text-ink-muted" title={titles.join(" · ")}>
+            {titles.join(" · ")}
+          </span>
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {rows.map((row, at) => (
+              <span
+                key={at}
+                title={verdict(row.tone)?.title ?? "Без решения"}
+                className={cx(
+                  "size-1.5 rounded-full",
+                  DOTS[row.tone] ?? DOTS[""],
+                )}
+              />
+            ))}
+          </span>
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+/** Свернуть раскрытый лот обратно. Стоит там же, где стояла строка «ещё». */
+function Unfolded({
+  count,
+  columns,
+  onClose,
+}: {
+  count: number;
+  columns: number;
+  onClose: () => void;
+}) {
+  return (
+    <tr
+      tabIndex={0}
+      role="button"
+      aria-expanded
+      aria-label={`Свернуть ${count} ${plural(count)} лота`}
+      onClick={onClose}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+      className={cx(
+        "cursor-pointer border-l-2 border-l-series-1 bg-plane/40 hover:bg-plane",
+        "focus-visible:outline focus-visible:outline-2",
+        "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
+      )}
+    >
+      <td className="border-b border-hairline py-1 pr-1 text-right align-middle">
+        <span
+          aria-hidden
+          className="inline-block rotate-90 text-xs text-series-1"
+        >
+          ▸
+        </span>
+      </td>
+      <td
+        colSpan={columns - 1}
+        className="border-b border-hairline px-2.5 py-1 text-xs text-ink-muted"
+      >
+        свернуть лот
+      </td>
+    </tr>
+  );
+}
+
+/** Точка вердикта у свёрнутой позиции. Цвет не один: рядом подпись в title. */
+const DOTS: Record<string, string> = {
+  good: "bg-good",
+  warning: "bg-warning",
+  serious: "bg-serious",
+  critical: "bg-critical",
+  info: "bg-series-1",
+  "": "bg-hairline",
+};
+
+function plural(count: number): string {
+  const last = count % 10;
+  const teen = count % 100 >= 11 && count % 100 <= 14;
+  if (!teen && last === 1) return "позиция";
+  if (!teen && last >= 2 && last <= 4) return "позиции";
+  return "позиций";
 }
 
 /**

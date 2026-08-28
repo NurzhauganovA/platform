@@ -251,7 +251,10 @@ def _with_lots(
             out.lot = RowLotOut(
                 key=label,
                 positions=count,
-                total=float(amount) if amount is not None else None,
+                # Сумма лота — те же деньги, что и в колонке: закупщику она не
+                # уходит. Раздел ему и так не показан, но спрятать пункт меню и
+                # оставить открытым ответ — самый частый способ отдать лишнее.
+                total=float(amount) if money and amount is not None else None,
                 margin_percent=(
                     float((profit / amount * 100).quantize(Decimal("0.1")))
                     if profit is not None and amount
