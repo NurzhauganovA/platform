@@ -122,6 +122,41 @@ class WriterSettings(BaseModel):
     вызов держит место в очереди, а замечание пишется под срок."""
 
 
+class NotifySettings(BaseModel):
+    """Связь с сервисом уведомлений.
+
+    Сервис отдельный и живёт своей жизнью: свой ключ бота, свой ящик, свой
+    темп отправки. Платформа только ставит заявку и идёт дальше — ждать
+    Телеграм в обработчике значит отвечать человеку пять секунд в лучший день
+    и минуту в тот, когда у Телеграма неполадки.
+
+    Адрес пуст — уведомлений нет, и это рабочее состояние, а не поломка. У
+    разработчика сервис обычно не поднят, и платформа не должна из-за этого ни
+    падать, ни писать в журнал по строке на каждое действие.
+    """
+
+    url: str = ""
+    """Где сервис. Пусто — не оповещаем."""
+
+    token: str = ""
+    """Служебный ключ, тот же, что в `NOTIFY__API__TOKEN` сервиса. Уходит
+    заголовком `X-Service-Token`."""
+
+    timeout_seconds: float = Field(default=5.0, gt=0)
+    """Сколько ждать сервис. Пять секунд: заявка кладётся в его базу, это
+    быстро, а больше ждать нельзя — за нами человек и его страница."""
+
+    bot_username: str = ""
+    """Имя бота без собачки. Из него собирается ссылка «напишите боту» на
+    странице настроек: человеку надо куда-то нажать, а не искать бота
+    поиском по названию, где их три похожих."""
+
+    @property
+    def ready(self) -> bool:
+        """Есть ли куда и чем ставить заявки."""
+        return bool(self.url.strip() and self.token.strip())
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -137,6 +172,7 @@ class Settings(BaseSettings):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     writer: WriterSettings = Field(default_factory=WriterSettings)
+    notify: NotifySettings = Field(default_factory=NotifySettings)
 
     environment: Literal["dev", "prod"] = "dev"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

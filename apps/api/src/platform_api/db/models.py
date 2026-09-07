@@ -138,6 +138,40 @@ class User(Base, UUIDPrimaryKey, Timestamps):
         return self.locked_until is not None and self.locked_until > utcnow()
 
 
+class PasswordReset(Base, UUIDPrimaryKey, Timestamps):
+    """Код для сброса пароля: короткий, одноразовый, с быстрым сроком.
+
+    Хранится отпечатком, как и пароль. Утечка базы иначе означала бы, что
+    любой действующий код читается глазами, а за ним — вход под чужой учётной
+    записью со всеми ценами и ключами к платным моделям.
+
+    Число попыток считается здесь, а не в памяти процесса: процессов бывает
+    два, и счётчик в памяти обнуляется выкладкой — то есть тогда, когда его
+    как раз и обходят.
+
+    Куда код ушёл, записано (`channel`). Человек звонит и говорит «код не
+    пришёл»: без этой отметки нельзя отличить «ушёл в Телеграм, а он его не
+    открывал» от «почта не настроена и не ушёл никуда».
+    """
+
+    __tablename__ = "password_resets"
+    __table_args__ = (Index("password_reset_user", "user_id", "used_at"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+    code_hash: Mapped[str] = mapped_column(Text)
+    """Отпечаток кода. Сам код живёт только в письме и в Телеграме."""
+
+    channel: Mapped[str] = mapped_column(String(16), default="")
+    """Куда ушёл: `telegram` или `email`. Пусто — не ушёл никуда."""
+
+    expires_at: Mapped[datetime] = mapped_column()
+    attempts: Mapped[int] = mapped_column(default=0, server_default="0")
+    used_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
 class Membership(Base, UUIDPrimaryKey, Timestamps):
     """Человек в организации и его роль."""
 

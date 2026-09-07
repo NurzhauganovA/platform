@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from platform_api.config import Settings
 from platform_api.db.base import utcnow
 from platform_api.db.models import (
     Approval,
@@ -35,6 +36,7 @@ from platform_api.db.models import (
     LotEvent,
     LotFile,
     LotStatus,
+    Membership,
     Participation,
     Role,
     StoredFile,
@@ -43,6 +45,9 @@ from platform_api.db.models import (
     User,
 )
 from platform_api.errors import SpokenError
+from platform_api.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -168,6 +173,51 @@ DISCUSSION_STAGE_NAMES: dict[DiscussionStage, str] = {
 Повторены, а не взяты оттуда: `remarks` про обсуждения знает всё и читает
 карточки, а карточкам от него нужны пять слов. Общий импорт свёл бы два
 модуля в кольцо ради словаря на пять строк. Тест на совпадение есть."""
+
+
+DEPARTMENT_ROLES: dict[Department, tuple[Role, ...]] = {
+    Department.DISCUSSION: (Role.ADMIN, Role.MANAGER, Role.LAWYER),
+    Department.ANALYSIS: (Role.ADMIN, Role.MANAGER, Role.ANALYST),
+    Department.SUPPLY: (Role.ADMIN, Role.MANAGER, Role.BUYER),
+    Department.LEGAL: (Role.ADMIN, Role.MANAGER, Role.LAWYER),
+    Department.TECHNOLOGIST: (Role.ADMIN, Role.TECHNOLOGIST),
+    Department.ASSEMBLER: (Role.ADMIN, Role.ASSEMBLER),
+    Department.APPROVAL: (Role.ADMIN, Role.MANAGER),
+    Department.SUBMISSION: (Role.ADMIN, Role.MANAGER),
+}
+"""Кого звать, когда работа пришла отделу.
+
+Отдел — про очередь, роль — про право видеть цифры, и связи между ними в базе
+нет: задача адресуется отделу, а человек числится ролью. Сводится это здесь,
+одним объявлением на всю платформу. Раскладывать по месту в каждом обработчике
+значило бы завести пять ответов на вопрос «кто у нас разборщики» и однажды
+разослать лот мимо тех, кто его ждёт.
+
+Наблюдателя нет нигде: он смотрит отчёты, а уведомление зовёт к работе.
+"""
+
+
+def people_of(db: DbSession, organization_id: uuid.UUID, desk: Department) -> list[uuid.UUID]:
+    """Кто работает в отделе — по ролям, действующие.
+
+    Выключенный сотрудник не зовётся: уволившийся продолжал бы получать письма
+    о наших закупках, и заметили бы это не скоро.
+    """
+    roles = DEPARTMENT_ROLES.get(desk, ())
+    if not roles:
+        return []
+    return list(
+        db.scalars(
+            select(User.id)
+            .join(Membership, Membership.user_id == User.id)
+            .where(
+                Membership.organization_id == organization_id,
+                Membership.role.in_(roles),
+                User.is_active.is_(True),
+            )
+            .distinct()
+        )
+    )
 
 
 DEPARTMENT_NAMES: dict[Department, str] = {
@@ -351,11 +401,18 @@ def open_card(
     row_id: str,
     snapshot: Snapshot,
     by: uuid.UUID | None = None,
+    settings: Settings | None = None,
 ) -> LotCard:
     """Заводит карточку. Уже заведённую возвращает как есть.
 
     Идемпотентно: кнопку «Взять в работу» нажимают дважды, и второе нажатие не
     должно ни падать, ни заводить вторую карточку по тому же лоту.
+
+    `settings` — чтобы позвать разбор и обсуждение. Не передали — не зовём:
+    так работают прогоны проверок и переносы, где рассылка людям не нужна.
+    Оповещение стоит здесь, а не в обработчике HTTP, по той же причине, по
+    которой отсюда пишется лента: карточка заводится и кнопкой, и выборкой по
+    номеру, и оба пути должны звать одних и тех же людей.
     """
     found = _find(db, organization_id, module, row_id)
     if found is not None:
@@ -380,6 +437,8 @@ def open_card(
     )
     db.add(found)
     db.flush()
+
+    _opened(db, settings, found)
 
     # Пять подписей заводятся сразу пустыми, а не по мере появления. Иначе
     # «согласовано» у лота с одной подписью выглядит так же, как у лота с
@@ -662,6 +721,7 @@ def add_task(
     body: str = "",
     assignee_id: uuid.UUID | None = None,
     due_at: datetime | None = None,
+    settings: Settings | None = None,
 ) -> Task:
     """Заводит задачу по лоту.
 
@@ -694,6 +754,7 @@ def add_task(
         detail=clean,
     )
     db.flush()
+    _task_added(db, settings, task, card)
     return task
 
 
@@ -1210,6 +1271,37 @@ def _talk(row: Discussion | None, now: datetime) -> Talk | None:
         burning=burning,
         overdue=overdue,
     )
+
+
+def _opened(db: DbSession, settings: Settings | None, card: LotCard) -> None:
+    """Зовёт отделы на новый лот. Отказ рассылки не роняет заведение карточки.
+
+    Несделанная рассылка — это плохо; незаведённая карточка — хуже: человек
+    нажал «взять в работу» и получил красный экран из-за того, что у бота
+    неполадки.
+    """
+    if settings is None:
+        return
+    from platform_api.modules import alerts
+
+    try:
+        alerts.lot_opened(db, settings, card)
+    # Ловим всё: рассылка не должна ронять работу.
+    except Exception as exc:
+        logger.warning("Не позвали отделы на новый лот", card=str(card.id), error=str(exc))
+
+
+def _task_added(db: DbSession, settings: Settings | None, task: Task, card: LotCard) -> None:
+    """Зовёт исполнителя или отдел. Отказ рассылки не роняет заведение задачи."""
+    if settings is None:
+        return
+    from platform_api.modules import alerts
+
+    try:
+        alerts.task_added(db, settings, task, card)
+    # Ловим всё: рассылка не должна ронять работу.
+    except Exception as exc:
+        logger.warning("Не позвали на задачу", task=str(task.id), error=str(exc))
 
 
 def _ordered(approvals: Sequence[Approval]) -> list[Approval]:

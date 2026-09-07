@@ -26,6 +26,7 @@ import { ApprovalPage } from "@/features/cards/ApprovalPage";
 import { SubmitPage } from "@/features/cards/SubmitPage";
 import { AnalysisDesk, LegalDesk, SupplyDesk } from "@/features/cards/DeskPage";
 import { CodesPage } from "@/features/goszakup/CodesPage";
+import { ProfilePage } from "@/features/profile/ProfilePage";
 import { GoszakupPage } from "@/features/worklist/GoszakupPage";
 import { RemarkPage } from "@/features/remarks/RemarkPage";
 import { RemarksPage } from "@/features/remarks/RemarksPage";
@@ -84,6 +85,7 @@ function Routing() {
     <Routes>
       <Route path="/" element={<AppShell me={me} />}>
         <Route index element={<Landing />} />
+        <Route path="profile" element={<ProfilePage me={me} />} />
         <Route path="skstore/bargains" element={<BargainsPage />} />
         <Route path="omarket/preorders" element={<PreordersPage />} />
         <Route path="tender/worklist" element={<TenderPage />} />

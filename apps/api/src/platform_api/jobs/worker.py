@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from functools import partial
 from typing import Any, ClassVar
 
 from arq import create_pool
@@ -81,18 +82,21 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["sessions"] = session_factory
     from platform_api.modules.tender.workspace import CaseWorkspace
 
+    handlers = collect_handlers(registry)
     ctx["runner"] = JobRunner(
         session_factory,
         redis,
         storage,
-        collect_handlers(registry),
+        handlers,
         CaseWorkspace(settings.storage.cases_root, storage),
     )
 
     # Задачи, оставшиеся в «выполняется» от убитого исполнителя, подбираются
     # здесь: иначе они висят в списке как живые, и человек ждёт результата,
     # которого не будет.
-    recovered = await asyncio.to_thread(recover_stale_jobs, session_factory, redis)
+    recovered = await asyncio.to_thread(
+        partial(recover_stale_jobs, session_factory, redis, handlers=handlers)
+    )
 
     logger.info(
         "Исполнитель запущен",

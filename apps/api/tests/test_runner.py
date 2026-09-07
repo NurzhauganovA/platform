@@ -209,6 +209,29 @@ def test_stale_jobs_are_picked_up(
     assert job.error is not None and "прерван" in job.error
 
 
+def test_fail_broshennaya_vykladkoy_zadacha_podbiraetsya_srazu(
+    db: DbSession, factory: sessionmaker[DbSession], redis: FakeRedis
+) -> None:
+    """Задача, брошенная выкладкой секунду назад, тоже прервана.
+
+    Час выдержки, стоявший здесь раньше, отменял всю защиту: подбор идёт при
+    запуске, а второй раз в этот запуск он не случится. Задача, брошенная
+    тридцать секунд назад, под «старше часа» не попадала и не попадала уже
+    никогда — на экране это выглядело как модель, которая пишет замечание
+    восемнадцать минут и не собирается заканчивать.
+    """
+    job = _queue(db, redis)
+    service = JobService(db, redis)  # type: ignore[arg-type]
+    service.start(job.id)
+    db.commit()
+
+    recovered = recover_stale_jobs(factory, redis)
+
+    db.refresh(job)
+    assert recovered == 1
+    assert job.status is JobStatus.FAILED
+
+
 # --- сбор обработчиков ----------------------------------------------------
 
 
@@ -277,3 +300,34 @@ def test_fail_vnutrennyaya_polomka_ne_pokazyvaetsya_slovami_pitona(
     assert job.error is not None
     assert "NoneType" not in job.error and "TypeError" not in job.error
     assert "код" in job.error
+
+
+def test_fail_moduly_otpuskayut_svoyo_pri_podbore(
+    db: DbSession, factory: sessionmaker[DbSession], redis: FakeRedis
+) -> None:
+    """Прерванная задача отпускает и то, что заперла в модуле.
+
+    Пометка задачи сама по себе ничего не открывает: обсуждение остаётся в
+    «модель пишет», а писать заново, пока «идёт», нельзя — так задумано, чтобы
+    одно нажатие не стоило двух вызовов модели. Человек по-прежнему смотрел бы
+    на колесо, хотя прогона давно нет.
+    """
+    from platform_api.jobs.contract import JobSpec
+
+    отпущено: list[str] = []
+
+    job = _queue(db, redis)
+    service = JobService(db, redis)  # type: ignore[arg-type]
+    service.start(job.id)
+    db.commit()
+
+    spec = JobSpec(
+        kind=job.kind,
+        handler=lambda ctx, **_: {},
+        on_lost=lambda _db, lost: отпущено.append(str(lost.id)),
+    )
+
+    recovered = recover_stale_jobs(factory, redis, handlers={(job.module, job.kind): spec})
+
+    assert recovered == 1
+    assert отпущено == [str(job.id)]

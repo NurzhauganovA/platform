@@ -53,6 +53,20 @@ x-app: &app
     SKSTORE__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_skstore
     OMARKET__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_omarket
     GOSZAKUP__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_goszakup
+
+    # Сервис уведомлений. Он живёт отдельным набором служб и своей базой:
+    # свой ключ бота, свой ящик, свой темп отправки. Отсюда — только адрес и
+    # служебный ключ; ключ и имя бота лежат в `.env`, как и остальные секреты.
+    #
+    # Адрес через `host.docker.internal`: сервис поднимают своим `make up` в
+    # соседнем каталоге, и его контейнеры в нашей сети не состоят. Стоит он на
+    # той же машине — обращение никуда наружу не уходит.
+    PLATFORM__NOTIFY__URL: ${PLATFORM__NOTIFY__URL:-http://host.docker.internal:8100}
+  # Имя машины, на которой мы стоим. На macOS Docker Desktop заводит его сам,
+  # на сервере с Linux — нет, и обращение к сервису уведомлений уходило бы в
+  # никуда ровно там, где это заметят не сразу.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   env_file:
     # Ключи моделей и настройки платформы. Читается и платформой, и SDK
     # подключённых проектов — им нужен `GEMINI_API_KEY` из окружения.

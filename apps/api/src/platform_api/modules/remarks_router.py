@@ -17,7 +17,7 @@ from dataclasses import asdict
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_remarks
@@ -178,6 +178,7 @@ def post_move(
     body: MoveIn,
     identity: CurrentUser,
     db: Db,
+    request: Request,
     _guard: Annotated[None, requires_remarks] = None,
 ) -> RemarkOut:
     """Следующий этап: на проверку, юристам, отправлено, не требуется.
@@ -192,6 +193,7 @@ def post_move(
             role=identity.role,
             user_id=identity.user.id,
             to=body.to,
+            settings=request.app.state.settings,
         )
     )
     db.commit()

@@ -113,4 +113,17 @@ export const remarks = {
     api.post<{ remark_id: string; job_id: string }>(
       `/api/goszakup/lots/${encodeURIComponent(lotNumber)}/remark`,
     ),
+
+  /**
+   * Снять застрявшее написание.
+   *
+   * Пока задача числится идущей, писать заново нельзя — так одно нажатие не
+   * стоит двух вызовов модели. Обратная сторона: сбой модели или выкладка
+   * посреди прогона запирают обсуждение, и на экране «модель пишет» до конца
+   * дня. Отсюда и кнопка.
+   */
+  stop: (lotNumber: string) =>
+    api.post<{ remark_id: string; job_id: string | null }>(
+      `/api/goszakup/lots/${encodeURIComponent(lotNumber)}/remark/stop`,
+    ),
 };

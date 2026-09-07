@@ -358,6 +358,7 @@ def post_card(
     body: OpenIn,
     identity: CurrentUser,
     db: Db,
+    request: Request,
     _guard: Guard = None,
 ) -> CardOut:
     """Заводит карточку по строке рабочего списка.
@@ -381,6 +382,7 @@ def post_card(
             deadline=body.deadline,
         ),
         by=identity.user.id,
+        settings=request.app.state.settings,
     )
     db.commit()
     return _card_out(_one(db, identity, card.id))
@@ -775,6 +777,7 @@ def post_task(
     body: TaskIn,
     identity: CurrentUser,
     db: Db,
+    request: Request,
     _guard: Guard = None,
 ) -> TaskOut:
     try:
@@ -788,6 +791,7 @@ def post_task(
             body=body.body,
             assignee_id=body.assignee_id,
             due_at=body.due_at,
+            settings=request.app.state.settings,
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

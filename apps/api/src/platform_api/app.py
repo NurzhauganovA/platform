@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -29,6 +30,44 @@ from platform_api.modules.tender.workspace import CaseWorkspace
 from platform_api.storage import FileStorage
 
 logger = get_logger(__name__)
+
+
+def _share_people(sessions: Any, settings: Settings) -> None:
+    """Выгружает сотрудников в сервис уведомлений.
+
+    Молча уходит, если сервиса нет: у разработчика он обычно не поднят, и
+    строка в журнале на каждый запуск звала бы чинить то, чего не делаем
+    намеренно. Отказ сервиса тоже не мешает платформе подняться — уведомления
+    важны, но открытая страница важнее.
+    """
+    if not settings.notify.ready:
+        return
+    from sqlalchemy import select
+
+    from platform_api.db.models import Membership, User
+    from platform_api.modules import notify
+
+    try:
+        with sessions() as db:
+            rows = db.execute(
+                select(User, Membership.role).join(
+                    Membership, Membership.user_id == User.id, isouter=True
+                )
+            ).all()
+        people = [
+            {
+                "user_id": str(user.id),
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": str(role.value) if role is not None else "",
+                "is_active": bool(user.is_active),
+            }
+            for user, role in rows
+        ]
+        notify.sync_all(settings, people)
+        logger.info("Сотрудники выгружены в уведомления", count=len(people))
+    except Exception as exc:
+        logger.warning("Сотрудников выгрузить не вышло", error=str(exc))
 
 
 class ModuleOut(BaseModel):
@@ -64,6 +103,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             environment=settings.environment,
             modules=[module.slug for module in registry.all()],
         )
+        # Реестр людей сервису уведомлений отдаём при запуске. Он живёт своей
+        # жизнью и переживает наши выкладки; между ними человека могли завести,
+        # переименовать или выключить, и догонять это по одному событию значит
+        # однажды пропустить одно из них. В отдельном потоке: обращение
+        # блокирующее, а мы в цикле событий.
+        await asyncio.to_thread(_share_people, session_factory, settings)
         yield
         app.state.engine.dispose()
         app.state.redis.close()

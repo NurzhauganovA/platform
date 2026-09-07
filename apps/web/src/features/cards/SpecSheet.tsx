@@ -24,7 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { sheetApi, type Card, type Sheet, type SheetColumn } from "@/api/cards";
 import { worklists, type SpecFile, type WorklistSlug } from "@/api/worklist";
 import { ApiError } from "@/api/client";
-import { useJobStream, type JobRun } from "@/api/jobs";
+import { jobsApi, useJobStream, type JobRun } from "@/api/jobs";
 import { Button, Card as Panel, Progress, Spinner, cx } from "@/ui";
 
 /** Через сколько молчания сохранять правки. */
@@ -90,6 +90,17 @@ export function SpecSheet({ card }: { card: Card }) {
       ),
   });
 
+  // Остановка прогона. Исполнитель смотрит на состояние в базе между шагами,
+  // и внутри вызова модели шагов нет — поэтому счёт идёт не на мгновения. Но
+  // человеку нужно, чтобы отпустилась кнопка: без неё оборванный прогон
+  // держит разбор запертым, и на экране колесо крутится до конца дня.
+  const stop = useMutation({
+    mutationFn: () => jobsApi.cancel(jobId ?? ""),
+    onSuccess: () => setJobId(null),
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не остановилось"),
+  });
+
   const build = useMutation({
     mutationFn: () => sheetApi.build(card.id),
     onSuccess: (started) => {
@@ -141,8 +152,23 @@ export function SpecSheet({ card }: { card: Card }) {
         <div className="rounded-[10px] border border-hairline bg-surface px-4 py-3">
           <div className="flex items-center justify-between gap-4">
             <Spinner label={run?.note || "Ставим в очередь…"} />
-            <span className="text-xs text-ink-muted tabular-nums">
-              {run?.percent ?? 0}%
+            <span className="flex items-center gap-3">
+              <span className="text-xs text-ink-muted tabular-nums">
+                {run?.percent ?? 0}%
+              </span>
+              <button
+                type="button"
+                onClick={() => stop.mutate()}
+                disabled={!jobId || stop.isPending}
+                title="Снять разбор: прогон отменяется, кнопка отпускается"
+                className={cx(
+                  "rounded-[6px] px-1.5 py-0.5 text-xs text-ink-muted transition",
+                  "hover:bg-critical/10 hover:text-critical",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                )}
+              >
+                {stop.isPending ? "Останавливаем…" : "Остановить"}
+              </button>
             </span>
           </div>
           <div className="mt-2.5">

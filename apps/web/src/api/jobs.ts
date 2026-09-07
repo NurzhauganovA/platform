@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { api } from "@/api/client";
 
 export type JobRun = {
   id: string;
@@ -74,3 +75,8 @@ export function useJobStream<T extends JobRun = JobRun>(
 
   return job;
 }
+
+/** Отменить прогон. Исполнитель увидит это между шагами и остановится. */
+export const jobsApi = {
+  cancel: (id: string) => api.post<JobRun>(`/api/jobs/${id}/cancel`),
+};

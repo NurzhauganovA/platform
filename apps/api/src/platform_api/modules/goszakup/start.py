@@ -167,6 +167,62 @@ def discussion_deadline(lot: Any) -> datetime | None:
     return moment
 
 
+def stop_writing(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    lot_number: str,
+    redis: Any,
+) -> Discussion | None:
+    """Прекращает написание замечания: снимает задачу и отпускает обсуждение.
+
+    Нужна не для экономии, а чтобы выбраться. Пока задача числится идущей,
+    кнопка «написать» заперта — иначе одно нажатие стоило бы двух вызовов
+    модели. Значит, любой сбой на её стороне запирает обсуждение до срока:
+    выкладка посреди прогона, оборванная сеть, зависший ответ SDK. На экране
+    это выглядит как модель, которая пишет и не заканчивает.
+
+    Отмена доходит до исполнителя не мгновенно: он смотрит на состояние в базе
+    между шагами, а внутри вызова модели шагов нет. Поэтому пометка ставится
+    здесь же, сразу: человеку нужно, чтобы кнопка отпустилась, а не чтобы
+    где-то остановился поток.
+
+    Нечего останавливать — не ошибка: кнопку жмут по второму разу, и отказ на
+    это выглядел бы поломкой там, где всё уже хорошо.
+    """
+    remark = db.execute(
+        select(Discussion).where(
+            Discussion.organization_id == organization_id,
+            Discussion.module == "goszakup",
+            Discussion.row_id == lot_number,
+        )
+    ).scalar_one_or_none()
+    if remark is None:
+        return None
+
+    service = JobService(db, redis)
+    running = (
+        db.execute(
+            select(Job)
+            .where(Job.organization_id == organization_id)
+            .where(Job.module == "goszakup", Job.kind == "remark")
+            .where(Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)))
+            .where(Job.params["remark_id"].astext == str(remark.id))
+        )
+        .scalars()
+        .all()
+    )
+    for job in running:
+        service.cancel(job.id)
+
+    if remark.writing in (DiscussionWriting.QUEUED, DiscussionWriting.RUNNING):
+        remark.writing = DiscussionWriting.FAILED
+        remark.trouble = "Написание остановлено вручную. Можно запустить заново"
+    db.flush()
+    logger.info("goszakup.remark.stopped", lot=lot_number, jobs=len(running))
+    return remark
+
+
 def _needs_writing(db: DbSession, organization_id: uuid.UUID, remark: Discussion) -> bool:
     """Стоит ли звать модель.
 
@@ -193,4 +249,4 @@ def launch(settings: Settings, job_id: uuid.UUID | None) -> None:
         enqueue_sync(settings, job_id)
 
 
-__all__ = ["LotMissingError", "Started", "ensure", "launch"]
+__all__ = ["LotMissingError", "Started", "ensure", "launch", "stop_writing"]

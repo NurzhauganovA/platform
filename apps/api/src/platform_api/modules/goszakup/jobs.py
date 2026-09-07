@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -106,6 +107,7 @@ def fetch_lot(ctx: JobContext, *, number: str = "", **_: Any) -> dict[str, Any]:
     """
     from goszakup.application.harvest import HarvestService
 
+    from platform_api.config import get_settings
     from platform_api.modules import cards, codes
     from platform_api.modules.goszakup import core
     from platform_api.modules.goszakup.start import CODE_PREFIX, CODE_SEPARATOR, CODE_WIDTH
@@ -182,6 +184,7 @@ def fetch_lot(ctx: JobContext, *, number: str = "", **_: Any) -> dict[str, Any]:
                     category=row.enstru_name,
                 ),
                 by=ctx.user_id,
+                settings=get_settings(),
             )
             заведено.append(card.code)
     ctx.db.commit()
@@ -390,6 +393,34 @@ def _spec_of(lot_number: str) -> tuple[str, str]:
         return found.spec_text or "", found.spec_name or ""
 
 
+def release_remark(db: Any, job: Any) -> None:
+    """Отпускает обсуждение, если написание оборвалось вместе с исполнителем.
+
+    Пометка «модель пишет» ставится на время прогона и снимается им же. Прогон
+    убит выкладкой — пометка остаётся, а писать заново, пока «идёт», нельзя:
+    так задумано, чтобы одно нажатие не стоило двух вызовов модели. Человек
+    смотрит на колесо до конца дня.
+
+    Причина пишется словами: «прервано» и «модель не справилась» ведут к
+    разным действиям — первое просят повторить, во второе идут читать, что
+    именно не вышло.
+    """
+    from platform_api.db.models import Discussion, DiscussionWriting
+
+    remark_id = (job.params or {}).get("remark_id")
+    if not remark_id:
+        return
+    found = db.get(Discussion, uuid.UUID(str(remark_id)))
+    if found is None or found.writing not in (
+        DiscussionWriting.QUEUED,
+        DiscussionWriting.RUNNING,
+    ):
+        return
+    found.writing = DiscussionWriting.FAILED
+    found.trouble = "Написание прервано: исполнитель остановлен. Можно запустить заново"
+    logger.info("goszakup.remark.released", remark=str(remark_id))
+
+
 jobs = (
     # На тридцать пятой минуте. Обход идёт строго по списку ЕНС ТРУ и денег
     # не стоит: открытое API портала не требует ни токена, ни ЭЦП.
@@ -404,7 +435,12 @@ jobs = (
     # обходит номенклатуру целиком, а это выборка по одному номеру, который
     # называет человек.
     JobSpec(kind="fetch", handler=fetch_lot, title="Выборка закупки по номеру"),
-    JobSpec(kind="remark", handler=write_remark, title="Написание замечания"),
+    JobSpec(
+        kind="remark",
+        handler=write_remark,
+        title="Написание замечания",
+        on_lost=release_remark,
+    ),
     JobSpec(kind="sheet", handler=build_sheet, title="Разбор спецификации таблицей"),
 )
 

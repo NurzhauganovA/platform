@@ -18,11 +18,31 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { remarks as api, type Remark } from "@/api/remarks";
+import { remarks as api, type Remark, type Stage } from "@/api/remarks";
 import { ApiError } from "@/api/client";
 import type { Card } from "@/api/cards";
 import { Badge, Button, Card as Panel, EmptyState, Spinner, cx } from "@/ui";
 import { SpecHint } from "./SpecHint";
+
+/**
+ * Переходы обсуждения — те же и в том же порядке, что в разделе обсуждений.
+ *
+ * Повторены списком, а не взяты оттуда: там они лежат рядом с экраном, у
+ * которого своя раскладка, и общий импорт свёл бы две страницы в одну ради
+ * пяти строк. Что можно нажать, всё равно решает сервер — `can` в ответе.
+ */
+const MOVES: { to: Stage; title: string; hint: string; strong?: boolean }[] = [
+  { to: "moderation", title: "На проверку", hint: "Передать менеджеру" },
+  { to: "drafting", title: "Вернуть на правку", hint: "Ещё дорабатываем" },
+  { to: "lawyers", title: "Юристам", hint: "Передать юристам" },
+  { to: "not_needed", title: "Не требуется", hint: "Придраться не к чему" },
+  {
+    to: "sent",
+    title: "Отправлено заказчику",
+    hint: "Отметить, что замечание ушло. Отменить нельзя",
+    strong: true,
+  },
+];
 
 const WRITING: Record<string, string> = {
   queued: "в очереди на написание",
@@ -66,6 +86,26 @@ export function Discussion({ card }: { card: Card }) {
 
   const start = useMutation({
     mutationFn: () => api.start(card.row_id),
+    onSuccess: () => {
+      setTrouble("");
+      void client.invalidateQueries({ queryKey: ["remarks"] });
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  const stop = useMutation({
+    mutationFn: () => api.stop(card.row_id),
+    onSuccess: () => {
+      setTrouble("");
+      void client.invalidateQueries({ queryKey: ["remarks"] });
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  const move = useMutation({
+    mutationFn: (to: Stage) => api.move(data?.id ?? "", to),
     onSuccess: () => {
       setTrouble("");
       void client.invalidateQueries({ queryKey: ["remarks"] });
@@ -130,6 +170,7 @@ export function Discussion({ card }: { card: Card }) {
   const busy = data.writing === "running" || data.writing === "queued";
   const text = draft ?? data.text;
   const editable = data.can.includes("edit");
+  const moves = MOVES.filter((item) => data.can.includes(item.to));
 
   return (
     <div className="space-y-3">
@@ -155,6 +196,22 @@ export function Discussion({ card }: { card: Card }) {
             <span className="flex items-center gap-1.5 text-sm text-ink-secondary">
               <Spinner />
               {WRITING[data.writing]}
+              {/* Кнопка рядом с колесом, а не внизу страницы: смотрят в этот
+                  момент именно сюда, и искать выход в другом месте экрана
+                  человек не станет — он просто уйдёт и вернётся завтра. */}
+              <button
+                type="button"
+                onClick={() => stop.mutate()}
+                disabled={stop.isPending}
+                title="Снять написание: задача снимается, кнопка отпускается"
+                className={cx(
+                  "rounded-[6px] px-1.5 py-0.5 text-xs text-ink-muted transition",
+                  "hover:bg-critical/10 hover:text-critical",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                )}
+              >
+                {stop.isPending ? "Останавливаем…" : "Остановить"}
+              </button>
             </span>
           )}
           {data.left && (
@@ -200,7 +257,7 @@ export function Discussion({ card }: { card: Card }) {
             )}
           />
           {editable ? (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="primary"
                 onClick={() => save.mutate(text)}
@@ -213,6 +270,21 @@ export function Discussion({ card }: { card: Card }) {
                   Вернуть как было
                 </Button>
               )}
+
+              {/* Написать заново — только пока текста нет. Модель стоит денег,
+                  а перезапуск поверх правленого руками текста затирает работу,
+                  которую восстановить неоткуда. Есть текст — сперва очистите
+                  поле и сохраните. */}
+              {!busy && !data.text.trim() && (
+                <Button
+                  variant="accent"
+                  onClick={() => start.mutate()}
+                  disabled={start.isPending}
+                  title="Позвать модель ещё раз"
+                >
+                  {start.isPending ? "Запускаем…" : "Написать моделью"}
+                </Button>
+              )}
             </div>
           ) : (
             <p className="text-xs text-ink-muted">
@@ -221,6 +293,31 @@ export function Discussion({ card }: { card: Card }) {
                 : "Править замечание вашей роли не открыто."}
             </p>
           )}
+          {/* Переходы те же, что в разделе обсуждений, и в том же порядке.
+              Раньше отсюда можно было только сохранить текст: передать его
+              юристам или отметить отправку человек уходил в соседний раздел и
+              искал там свой лот — то самое хождение, ради ухода от которого
+              обсуждение и появилось на карточке.
+
+              Что можно нажать, решает сервер: второй набор правил в браузере
+              однажды разъедется с первым, и человек нажмёт кнопку, получив
+              отказ, — уже будучи уверенным, что отправил. */}
+          {moves.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-t border-hairline pt-2.5">
+              {moves.map((item) => (
+                <Button
+                  key={item.to}
+                  variant={item.strong ? "primary" : "secondary"}
+                  onClick={() => move.mutate(item.to)}
+                  disabled={move.isPending || busy}
+                  title={item.hint}
+                >
+                  {item.title}
+                </Button>
+              ))}
+            </div>
+          )}
+
           {trouble && <p className="text-sm text-critical">{trouble}</p>}
 
           {/* Под полем, а не над: пишут сверху вниз, и требования нужны в тот

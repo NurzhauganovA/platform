@@ -242,7 +242,51 @@ export const auth = {
   login: (email: string, password: string) =>
     api.post<Me>("/api/auth/login", { email, password }),
   logout: () => api.post<{ ok: boolean }>("/api/auth/logout"),
+
+  /** Своё имя и почта. Почтой входят — она же адрес для кодов. */
+  rename: (full_name: string, email: string) =>
+    api.patch<Me>("/api/auth/me", { full_name, email }),
+
+  /** Смена пароля гасит все сессии, включая эту: вход будет заново. */
+  password: (current: string, fresh: string) =>
+    api.post<{ ok: boolean }>("/api/auth/password", { current, fresh }),
+
+  channels: () => api.get<Channels>("/api/auth/me/channels"),
+
+  setChannels: (body: {
+    telegram_enabled?: boolean;
+    email_enabled?: boolean;
+  }) => api.patch<Channels>("/api/auth/me/channels", body),
+
+  unlinkTelegram: () => api.delete<Channels>("/api/auth/me/telegram"),
+
+  /** Код смены пароля. Куда его нести, решает сервис уведомлений. */
+  askReset: (email: string) =>
+    api.post<{ channel: string }>("/api/auth/reset/ask", { email }),
+
+  resetPassword: (email: string, code: string, fresh: string) =>
+    api.post<{ ok: boolean }>("/api/auth/reset/confirm", {
+      email,
+      code,
+      fresh,
+    }),
 };
+
+/**
+ * Куда приходят уведомления.
+ *
+ * `ready` — поднят ли сервис вообще. Без него экран не отличит «Телеграм не
+ * привязан» от «настройки сейчас недоступны», а это разные ответы: в первом
+ * случае надо написать боту, во втором — подождать.
+ */
+export interface Channels {
+  ready: boolean;
+  telegram_enabled: boolean;
+  email_enabled: boolean;
+  telegram_linked: boolean;
+  /** Имя бота без собачки — из него собирается ссылка «написать боту». */
+  bot_username: string;
+}
 
 export const platform = {
   modules: () => api.get<PlatformModule[]>("/api/modules"),

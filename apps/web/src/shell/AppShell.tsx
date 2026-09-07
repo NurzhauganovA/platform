@@ -203,37 +203,80 @@ export function AppShell({ me }: { me: Me }) {
           )}
         >
           {folded ? (
-            <button
-              type="button"
-              onClick={() => logout.mutate()}
-              title={`${me.full_name || me.email} · выйти`}
-              className={cx(
-                "mx-auto flex h-9 w-9 items-center justify-center rounded-full",
-                "bg-series-1/10 text-xs font-semibold text-series-1 transition",
-                "hover:bg-critical/10 hover:text-critical",
-              )}
-            >
-              {initials(me.full_name || me.email)}
-            </button>
-          ) : (
-            <div className="flex items-center gap-2.5 rounded-[9px] px-1.5 py-1">
-              <span
-                aria-hidden
-                className={cx(
-                  "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
-                  "bg-series-1/10 text-xs font-semibold text-series-1",
-                )}
+            // Кружок ведёт в профиль, а не гасит сессию. Выход рядом отдельной
+            // кнопкой: одно нажатие мимо не должно выкидывать из платформы.
+            <div className="flex flex-col items-center gap-1.5">
+              <NavLink
+                to="/profile"
+                title={`${me.full_name || me.email} · профиль`}
+                className={({ isActive }) =>
+                  cx(
+                    "flex h-9 w-9 items-center justify-center rounded-full text-xs font-semibold transition",
+                    isActive
+                      ? "bg-series-1 text-white"
+                      : "bg-series-1/10 text-series-1 hover:bg-series-1/20",
+                  )
+                }
               >
                 {initials(me.full_name || me.email)}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] text-ink" title={me.email}>
-                  {me.full_name || me.email}
-                </div>
-                <div className="mt-0.5 flex items-center gap-2">
-                  <Badge tone="info">{ROLE_TITLES[me.role] ?? me.role}</Badge>
-                </div>
-              </div>
+              </NavLink>
+              <button
+                type="button"
+                onClick={() => logout.mutate()}
+                title="Выйти"
+                className="rounded-[8px] p-1 text-ink-muted transition hover:bg-critical/10 hover:text-critical"
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden
+                >
+                  <path
+                    d="M15 4.5h3.5A1.5 1.5 0 0 1 20 6v12a1.5 1.5 0 0 1-1.5 1.5H15M10 8l-4 4 4 4M6 12h9"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-[9px] px-1.5 py-1">
+              {/* Имя ведёт в профиль. Туда заходят редко и с разными поводами —
+                  привязать Телеграм, сменить пароль, переключить тему, — и
+                  отдельный пункт меню ради этого занимал бы строку каждый
+                  день ради нажатия раз в месяц. */}
+              <NavLink
+                to="/profile"
+                title="Профиль: уведомления, пароль, тема"
+                className={({ isActive }) =>
+                  cx(
+                    "flex min-w-0 flex-1 items-center gap-2.5 rounded-[8px] px-1 py-1 transition",
+                    isActive ? "bg-series-1/10" : "hover:bg-plane",
+                  )
+                }
+              >
+                <span
+                  aria-hidden
+                  className={cx(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+                    "bg-series-1/10 text-xs font-semibold text-series-1",
+                  )}
+                >
+                  {initials(me.full_name || me.email)}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-ink">
+                    {me.full_name || me.email}
+                  </span>
+                  <span className="mt-0.5 block">
+                    <Badge tone="info">{ROLE_TITLES[me.role] ?? me.role}</Badge>
+                  </span>
+                </span>
+              </NavLink>
               <button
                 onClick={() => logout.mutate()}
                 title="Выйти"

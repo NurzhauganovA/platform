@@ -373,6 +373,43 @@ def start_remark(
     return RemarkStartedOut(remark_id=str(made.remark.id), job_id=made.job_id)
 
 
+@router.post(
+    "/lots/{lot_number}/remark/stop",
+    summary="Остановить написание замечания",
+    status_code=status.HTTP_200_OK,
+)
+def stop_remark(
+    lot_number: str,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_remarks] = None,
+) -> RemarkStartedOut:
+    """Снимает написание, если оно застряло.
+
+    Пока задача числится идущей, писать заново нельзя — так задумано, чтобы
+    одно нажатие не стоило двух вызовов модели. Обратная сторона: любой сбой на
+    стороне модели или выкладка посреди прогона запирают обсуждение до срока,
+    и человек смотрит на «модель пишет» до конца дня.
+
+    Отдаёт то же, что и заведение: тот же экран, та же запись, только без
+    задачи. Отдельная форма ответа означала бы второй разбор ответа в браузере
+    ради одного поля.
+    """
+    remark = start.stop_writing(
+        db,
+        organization_id=identity.organization.id,
+        lot_number=lot_number,
+        redis=request.app.state.redis,
+    )
+    if remark is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Обсуждения по этому лоту нет"
+        )
+    db.commit()
+    return RemarkStartedOut(remark_id=str(remark.id), job_id=None)
+
+
 @router.get("/codes", summary="Коды ЕНС ТРУ, по которым идёт обход")
 def list_codes(
     identity: CurrentUser,

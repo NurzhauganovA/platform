@@ -31,8 +31,10 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from platform_api.config import Settings
 from platform_api.db.base import utcnow
 from platform_api.db.models import (
+    Department,
     Discussion,
     DiscussionOutcome,
     DiscussionStage,
@@ -41,6 +43,9 @@ from platform_api.db.models import (
     User,
 )
 from platform_api.errors import SpokenError
+from platform_api.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -374,12 +379,18 @@ def move(
     role: Role,
     user_id: uuid.UUID,
     to: DiscussionStage,
+    settings: Settings | None = None,
 ) -> Discussion:
     """Переводит замечание на следующий этап.
 
     Пустое замечание не уходит наружу: отправить нечего, а отправленная
     пустота выглядит для заказчика как ошибка в системе — и отвечать он на неё
     не станет.
+
+    Передача юристам заводит им задачу. Раньше это был перевод и тишина:
+    замечание ложилось в состояние «у юристов», а юрист узнавал о нём, когда
+    сам заходил в раздел. Отправляют официально они, срок у обсуждения — два
+    рабочих дня, и «узнал, когда зашёл» здесь означает не отправленное вовсе.
     """
     row = _required(db, organization_id, remark_id)
     if to is row.stage:
@@ -409,7 +420,77 @@ def move(
     if not row.assignee_id:
         row.assignee_id = user_id
     db.flush()
+    if to is DiscussionStage.WITH_LAWYERS:
+        _ask_lawyers(db, settings, row, by=user_id)
     return row
+
+
+def _ask_lawyers(
+    db: DbSession, settings: Settings | None, row: Discussion, *, by: uuid.UUID
+) -> None:
+    """Заводит юристам задачу отправить замечание заказчику.
+
+    Задачей, а не одним уведомлением: уведомление читают и забывают, а задача
+    остаётся в очереди отдела и видна на его столе, пока её не закроют с
+    отчётом. Отправка необратима и делается руками через портал — забытая
+    задача здесь стоит участия в закупке.
+
+    Срок задачи — срок обсуждения: позже него отправлять уже некуда.
+
+    Карточки лота может не быть: замечание заводится и по строке, которую в
+    работу не брали. Тогда остаётся уведомление — задача без лота в очереди
+    работы бессмысленна, очередь на то и очередь, что каждая запись о чём-то.
+    """
+    from platform_api.modules import cards
+
+    card = cards.by_row(
+        db, organization_id=row.organization_id, module=row.module, row_id=row.row_id
+    )
+    if card is None:
+        if settings is not None:
+            _tell_lawyers(db, settings, row)
+        return
+
+    try:
+        cards.add_task(
+            db,
+            organization_id=row.organization_id,
+            card_id=card.id,
+            created_by=by,
+            title=f"Отправить замечание заказчику · {row.code}",
+            department=Department.LEGAL,
+            body=(
+                "Замечание проверено менеджером и передано юристам. "
+                "Отправка идёт через портал и обратной силы не имеет."
+            ),
+            due_at=row.deadline,
+            settings=settings,
+        )
+    except Exception as exc:
+        # Задача не завелась — перевод всё равно состоялся. Откатывать его
+        # значит врать о состоянии замечания, которое юрист уже видит у себя.
+        logger.warning("Юристам не завелась задача", remark=str(row.id), error=str(exc))
+        if settings is not None:
+            _tell_lawyers(db, settings, row)
+
+
+def _tell_lawyers(db: DbSession, settings: Settings, row: Discussion) -> None:
+    """Запасной путь: позвать юристов без задачи, когда завести её не вышло."""
+    from platform_api.modules import cards, notify
+
+    people = cards.people_of(db, row.organization_id, Department.LEGAL)
+    if not people:
+        return
+    notify.about(
+        settings,
+        event="remark.ready",
+        payload={"lot": row.title, "number": row.code, "author": ""},
+        users=people,
+        url=f"/goszakup/remarks/{row.id}",
+        deadline=row.deadline.isoformat() if row.deadline else "",
+        group=f"remark:{row.id}",
+        idempotency_key=f"remark-lawyers-{row.id}",
+    )
 
 
 def resolve(
