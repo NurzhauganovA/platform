@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from platform_api.jobs.contract import JobContext, JobSpec
@@ -73,6 +74,133 @@ def harvest(
         "failed": list(outcome.failed),
         "broken": len(outcome.broken),
         "interrupted": outcome.interrupted,
+    }
+
+
+def _step(ctx: JobContext) -> Callable[[str, int, int], None]:
+    """Ход прогона наружу. Отдельной функцией — у лямбды mypy не выводит тип."""
+
+    def say(note: str, done: int = 0, total: int = 0) -> None:
+        ctx.advance(done, total=total, note=note)
+
+    return say
+
+
+def fetch_lot(ctx: JobContext, *, number: str = "", **_: Any) -> dict[str, Any]:
+    """Забирает с портала одну закупку по номеру — мимо списка кодов ЕНС ТРУ.
+
+    Обход идёт строго по кодам, и это правильно: без списка раздел был бы
+    чужой лентой на сотни тысяч лотов. Но список ведут люди, а заказчик
+    объявляет закупку под тем кодом, каким считает нужным: моноблоки уходят в
+    «прочее», серверы в «оборудование». Такая закупка не появляется нигде, и
+    узнают о ней от заказчика или из чужой жалобы — когда приём уже закрыт.
+
+    Найденное сразу берётся в работу. Эту кнопку нажимают не из любопытства:
+    закупку уже пропустили, её ищут по номеру из письма, и заставлять человека
+    после выборки идти в соседний раздел и брать её там второй кнопкой значит
+    делить одно действие надвое.
+
+    Заводится карточка на каждый найденный лот. Номер объявления с четырьмя
+    лотами даёт четыре: торги идут по объявлению целиком, и взять из него один
+    лот, а три оставить — это выиграть выгодный и уйти в минус на соседнем.
+    """
+    from goszakup.application.harvest import HarvestService
+
+    from platform_api.modules import cards, codes
+    from platform_api.modules.goszakup import core
+    from platform_api.modules.goszakup.start import CODE_PREFIX, CODE_SEPARATOR, CODE_WIDTH
+
+    искомое = number.strip()
+    if not искомое:
+        raise ValueError("Не указан номер лота или объявления")
+
+    from goszakup.exceptions import PortalError
+
+    from platform_api.errors import SpokenError
+
+    ctx.advance(0, total=1, note=f"Ищем {искомое} на портале")
+    try:
+        with core.session() as portal:
+            outcome = HarvestService(core.core_settings()).by_number(
+                portal,
+                искомое,
+                on_progress=_step(ctx),
+            )
+            portal.commit()
+    except PortalError as exc:
+        # Отказ портала — не наша поломка, и человеку нужно знать именно это.
+        # `SpokenError`, а не что попало: всё прочее исполнитель заменяет кодом
+        # обращения к администратору, и человек идёт к нам вместо того, чтобы
+        # подождать две минуты и нажать ещё раз.
+        logger.warning("goszakup.fetch.portal_down", number=искомое, error=str(exc))
+        raise SpokenError(
+            "Портал не отвечает. Это его сторона, не наша: подождите пару минут и нажмите ещё раз"
+        ) from exc
+
+    if outcome.broken:
+        logger.warning("goszakup.fetch.broken", records=list(outcome.broken))
+
+    if not outcome.found:
+        # Не ошибка прогона: набранный с опечаткой номер и снятое объявление
+        # выглядят одинаково, и красный крест отправляет человека искать
+        # поломку у нас вместо того, чтобы перечитать номер в письме.
+        return {"number": искомое, "found": 0, "taken": 0, "codes": []}
+
+    ctx.advance(0, total=1, note="Заводим карточки")
+    from goszakup.infrastructure.db.models import LotRecord
+    from sqlalchemy import select as _select
+
+    заведено: list[str] = []
+    with core.session() as portal:
+        rows = (
+            portal.execute(_select(LotRecord).where(LotRecord.lot_number.in_(outcome.lots)))
+            .scalars()
+            .all()
+        )
+        коды = codes.assign(
+            ctx.db,
+            module="goszakup",
+            prefix=CODE_PREFIX,
+            keys=[row.lot_number for row in rows],
+            width=CODE_WIDTH,
+            separator=CODE_SEPARATOR,
+        )
+        for row in rows:
+            card = cards.open_card(
+                ctx.db,
+                organization_id=ctx.organization_id,
+                module="goszakup",
+                row_id=row.lot_number,
+                snapshot=cards.Snapshot(
+                    code=коды.get(row.lot_number, ""),
+                    source_number=row.purchase_number,
+                    title=row.name or row.enstru_name,
+                    customer=row.customer,
+                    amount=row.amount,
+                    enstru_code=row.enstru_code,
+                    deadline=row.end_date,
+                    category=row.enstru_name,
+                ),
+                by=ctx.user_id,
+            )
+            заведено.append(card.code)
+    ctx.db.commit()
+
+    logger.info(
+        "goszakup.fetch.done",
+        number=искомое,
+        by=outcome.by,
+        found=outcome.found,
+        taken=len(заведено),
+    )
+    return {
+        "number": искомое,
+        "by": outcome.by,
+        "found": outcome.found,
+        "added": outcome.added,
+        "updated": outcome.updated,
+        "taken": len(заведено),
+        "codes": заведено,
     }
 
 
@@ -272,6 +400,10 @@ jobs = (
         every_hours=1,
         at_minute=35,
     ),
+    # По кнопке и только по кнопке: в расписание он не идёт. Расписание
+    # обходит номенклатуру целиком, а это выборка по одному номеру, который
+    # называет человек.
+    JobSpec(kind="fetch", handler=fetch_lot, title="Выборка закупки по номеру"),
     JobSpec(kind="remark", handler=write_remark, title="Написание замечания"),
     JobSpec(kind="sheet", handler=build_sheet, title="Разбор спецификации таблицей"),
 )

@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { sheetApi, type Card, type Sheet, type SheetColumn } from "@/api/cards";
+import { worklists, type SpecFile, type WorklistSlug } from "@/api/worklist";
 import { ApiError } from "@/api/client";
 import { useJobStream, type JobRun } from "@/api/jobs";
 import { Button, Card as Panel, Progress, Spinner, cx } from "@/ui";
@@ -45,6 +46,18 @@ export function SpecSheet({ card }: { card: Card }) {
     queryFn: () => sheetApi.get(card.id),
     staleTime: 30_000,
   });
+
+  // Сам файл спецификации — из сведений о строке. Ключ тот же, что у ссылки
+  // «На площадке» в шапке карточки: ответ уже в кэше вкладки, и второй раз по
+  // сети никто не идёт.
+  const { data: facts } = useQuery({
+    queryKey: [card.module, "item", card.row_id, "facts"],
+    queryFn: () =>
+      worklists.detail(card.module as WorklistSlug, card.row_id, "", true),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const spec = facts?.spec ?? null;
 
   // Ход разбора живьём. Модель читает три тысячи знаков и раскладывает их по
   // предметам — это минута с лишним, и всё это время кнопка без ответа
@@ -114,6 +127,7 @@ export function SpecSheet({ card }: { card: Card }) {
     <div className="space-y-3">
       <Head
         sheet={draft}
+        spec={spec}
         busy={build.isPending || building}
         note={note(run, build.isPending)}
         saving={save.isPending}
@@ -150,22 +164,46 @@ export function SpecSheet({ card }: { card: Card }) {
       )}
 
       {empty ? (
+        /* Пустое состояние честно разделяет два случая. «Спецификация ещё не
+           разобрана» звучало одинаково и когда файл приложен, и когда его
+           вовсе нет, — и по этой фразе нельзя было понять, чего ждать от
+           кнопки. */
         <Panel className="px-5 py-8 text-center">
-          <p className="text-sm text-ink">Спецификация ещё не разобрана.</p>
-          <p className="mx-auto mt-1 max-w-lg text-sm text-ink-muted">
-            Модель разложит требования заказчика по предметам: процессор,
-            память, накопитель. Требования переносятся дословно — по ним потом
-            меряют соответствие заявки.
+          <p className="text-sm text-ink">
+            {spec
+              ? `Спецификация приложена: ${spec.name}`
+              : "К этой закупке спецификация не приложена."}
           </p>
-          <div className="mt-4">
-            <Button
-              variant="primary"
-              onClick={() => build.mutate()}
-              disabled={build.isPending || building}
-            >
-              {note(run, build.isPending) || "Разобрать спецификацию"}
-            </Button>
-          </div>
+          <p className="mx-auto mt-1 max-w-lg text-sm text-ink-muted">
+            {spec
+              ? spec.chars > 0
+                ? "Модель разложит требования заказчика по предметам: процессор, память, накопитель. Требования переносятся дословно — по ним потом меряют соответствие заявки."
+                : "Файл есть, но текст из него прочитать не удалось — разбор моделью по нему не соберётся. Откройте файл и заполните таблицу руками."
+              : "Заполните таблицу руками или проверьте документы на портале: у большинства лотов портала спецификации действительно нет."}
+          </p>
+          {spec?.url && (
+            <p className="mt-2">
+              <a
+                href={spec.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-series-1 hover:underline"
+              >
+                Скачать {spec.name} ↓
+              </a>
+            </p>
+          )}
+          {spec && spec.chars > 0 && (
+            <div className="mt-4">
+              <Button
+                variant="primary"
+                onClick={() => build.mutate()}
+                disabled={build.isPending || building}
+              >
+                {note(run, build.isPending) || "Разобрать спецификацию"}
+              </Button>
+            </div>
+          )}
         </Panel>
       ) : (
         <Grid sheet={draft} onChange={change} />
@@ -192,6 +230,7 @@ function note(run: JobRun | null, queuing: boolean): string {
 /** Полоса над таблицей: чем собрано, когда и чем это пересобрать. */
 function Head({
   sheet,
+  spec,
   busy,
   note: doing,
   saving,
@@ -199,6 +238,8 @@ function Head({
   onBuild,
 }: {
   sheet: Sheet;
+  /** Файл, из которого разбор собирается. Пусто — площадка его не забрала. */
+  spec: SpecFile | null;
   busy: boolean;
   note: string;
   saving: boolean;
@@ -208,10 +249,27 @@ function Head({
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
       <h2 className="text-sm font-semibold text-ink">Разбор спецификации</h2>
+      {/* Сам файл — ссылкой рядом с заголовком. Разбор собирается из него, и
+          вопрос «а что там в оригинале» задают ровно здесь: до сих пор файл
+          лежал в базе, а из карточки его нельзя было ни увидеть, ни скачать. */}
       <p className="flex-1 text-xs text-ink-muted">
-        {sheet.source_name
-          ? `по файлу ${sheet.source_name}`
-          : "первые три столбца заполняет модель, остальные — вы"}
+        {spec ? (
+          spec.url ? (
+            <a
+              href={spec.url}
+              target="_blank"
+              rel="noreferrer"
+              title="Скачать файл заказчика с портала"
+              className="text-series-1 hover:underline"
+            >
+              {spec.name} ↓
+            </a>
+          ) : (
+            spec.name
+          )
+        ) : (
+          "первые три столбца заполняет модель, остальные — вы"
+        )}
       </p>
 
       {/* Состояние сохранения словом, а не значком: «сохранено» и «сохраняем»

@@ -31,7 +31,30 @@ export type Purge = {
   total: number;
 };
 
+/** Что дала выборка по номеру. Приходит в итоге прогона. */
+export type Fetched = {
+  number: string;
+  /** Чем нашли: по номеру лота или по номеру объявления. Пусто — не нашли. */
+  by?: "lot" | "announce" | "";
+  found: number;
+  added?: number;
+  updated?: number;
+  /** Сколько карточек завелось. */
+  taken: number;
+  /** Коды заведённых лотов — по ним человек их и найдёт в списке. */
+  codes: string[];
+};
+
 export const goszakup = {
+  /**
+   * Забрать закупку по номеру, мимо списка кодов ЕНС ТРУ.
+   *
+   * Задачей, а не запросом: портал отвечает секунду в тихий час и полторы
+   * минуты в неудачный.
+   */
+  fetch: (number: string) =>
+    api.post<{ job_id: string }>("/api/goszakup/fetch", { number }),
+
   /** Что удалится — спрашивается до нажатия, а не после. */
   purgePreview: () => api.get<Purge>("/api/goszakup/purge"),
 

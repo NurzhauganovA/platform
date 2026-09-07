@@ -281,6 +281,55 @@ def start_sync(
     return StartedJobOut(job_id=job.id)
 
 
+class FetchIn(BaseModel):
+    """Что искать: номер лота или номер объявления, как он написан в письме."""
+
+    number: str
+
+
+@router.post("/fetch", summary="Забрать закупку по номеру", status_code=status.HTTP_202_ACCEPTED)
+def start_fetch(
+    body: FetchIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Annotated[None, requires_read] = None,
+) -> StartedJobOut:
+    """Ставит в очередь выборку одной закупки по номеру, мимо списка кодов.
+
+    Обход идёт строго по номенклатуре, и без неё раздел был бы чужой лентой на
+    сотни тысяч лотов. Но код у закупки ставит заказчик: моноблоки уходят в
+    «прочее», серверы в «оборудование», и такая закупка не появляется нигде.
+    Узнают о ней из письма или от заказчика — с номером на руках.
+
+    Задачей, а не в запросе: портал отвечает секунду в тихий час и полторы
+    минуты в неудачный, а обработчик, который столько держит соединение, — это
+    истёкший срок у человека и повторное нажатие поверх идущей работы.
+
+    Бесплатно, как и обход: открытое API портала не требует ни токена, ни ЭЦП.
+    Поэтому доступно всем, кто работает с разделом.
+    """
+    номер = body.number.strip()
+    if not номер:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Укажите номер лота или объявления",
+        )
+
+    settings: Settings = request.app.state.settings
+    job = JobService(db, request.app.state.redis).create(
+        organization_id=identity.organization.id,
+        created_by_id=identity.user.id,
+        module="goszakup",
+        kind="fetch",
+        params={"number": номер},
+        total=1,
+    )
+    db.commit()
+    enqueue_sync(settings, job.id)
+    return StartedJobOut(job_id=job.id)
+
+
 @router.post(
     "/lots/{lot_number}/remark",
     summary="Завести обсуждение по лоту",

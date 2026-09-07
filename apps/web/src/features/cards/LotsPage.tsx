@@ -28,6 +28,7 @@ import {
 import { LotBoard } from "@/features/cards/LotBoard";
 import { PageHeader } from "@/shell/AppShell";
 import { PeopleFilter, type Load } from "@/ui/people";
+import { FetchByNumber } from "./FetchByNumber";
 import {
   Card as Panel,
   EmptyState,
@@ -159,6 +160,20 @@ export function LotsPage() {
       />
 
       <Page>
+        {/* Выборка по номеру — над отбором, а не в нём: отбор сужает то, что
+            уже есть, а это добавляет то, чего нет. */}
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-[10px] border border-hairline bg-surface px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">Закупку пропустили?</p>
+            <p className="mt-0.5 max-w-lg text-xs text-ink-muted">
+              Обход идёт по списку кодов ЕНС ТРУ, а код закупке ставит заказчик.
+              Введите номер — заберём с портала строго по нему и возьмём в
+              работу.
+            </p>
+          </div>
+          <FetchByNumber />
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-3">
           {board ? (
             <Tabs

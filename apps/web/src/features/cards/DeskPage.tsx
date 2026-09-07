@@ -6,17 +6,17 @@
  * Три отдельных экрана означали бы три места, где чинить сортировку, и
  * сотрудника, который переучивается при переходе между отделами.
  *
- * Задачи выше лотов. Лот — это где мы в процессе, задача — что от меня хотят;
- * приходя утром, смотрят второе.
+ * Только задачи. Списки лотов отсюда убраны: те же лоты, теми же колонками и
+ * с тем же отбором по сотруднику лежат в «Лотах в работе», и второй их показ
+ * означал бы второе место, где чинить сортировку. Стол отвечает на «что от
+ * меня хотят», а не на «где мы в процессе».
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { auth } from "@/api/tender";
 import {
   cardsApi,
-  type Card,
   type Department,
   type Job,
   type TaskState,
@@ -32,30 +32,13 @@ import {
   Spinner,
   Tabs,
   cx,
-  money,
 } from "@/ui";
 
-/** Какие лоты отдел считает своими: те, что стоят на его шаге. */
-const OWN_STATUS: Record<Department, string[]> = {
-  discussion: ["discussion"],
-  analysis: ["new", "analysis"],
-  supply: ["fulfilling"],
-  legal: ["discussion"],
-  // Технолог и сборщик смотрят лот там же, где ставят подпись: их работа —
-  // ответить, подходит ли товар и соберём ли в срок, а не вести лот.
-  technologist: ["approval", "ready"],
-  assembler: ["approval", "ready"],
-  approval: ["approval", "ready"],
-  submission: ["ready", "awaiting", "won", "contract", "awaiting_payment"],
-};
-
-type Tab = "mine" | "queue" | "lots" | "desk" | "closed";
+type Tab = "mine" | "queue" | "closed";
 
 const TABS: { key: Tab; title: string }[] = [
   { key: "mine", title: "Мои задачи" },
   { key: "queue", title: "Очередь отдела" },
-  { key: "lots", title: "Мои лоты" },
-  { key: "desk", title: "Лоты отдела" },
   { key: "closed", title: "Закрытые" },
 ];
 
@@ -70,8 +53,6 @@ export function DeskPage({
 }) {
   const [tab, setTab] = useState<Tab>("mine");
   const cache = useQueryClient();
-
-  const { data: me } = useQuery({ queryKey: ["me"], queryFn: auth.me });
 
   const { data: mine, isLoading: loadingMine } = useQuery({
     queryKey: ["desk-tasks", department, "mine"],
@@ -88,38 +69,12 @@ export function DeskPage({
     queryFn: () => cardsApi.tasks({ department, mine: true, state: "done" }),
     enabled: tab === "closed",
   });
-  const { data: cards } = useQuery({
-    queryKey: ["cards"],
-    queryFn: () => cardsApi.list(),
-    refetchInterval: 60_000,
-  });
-
-  // Мои и отдельские лоты разведены. Одним списком «Мои лоты» показывал и
-  // чужие — те, что просто стоят на шаге отдела, — и по нему нельзя было
-  // ответить на вопрос, с которого начинают: что закреплено за мной.
-  const mineLots = useMemo(
-    () =>
-      (cards ?? []).filter(
-        (item) => me && (item.owner_id === me.id || item.manager_id === me.id),
-      ),
-    [cards, me],
-  );
-  const deskLots = useMemo(
-    () =>
-      (cards ?? []).filter((item) =>
-        OWN_STATUS[department].includes(item.status),
-      ),
-    [cards, department],
-  );
-
   const refresh = () =>
     void cache.invalidateQueries({ queryKey: ["desk-tasks", department] });
 
   const counts: Record<Tab, number> = {
     mine: mine?.length ?? 0,
     queue: queue?.length ?? 0,
-    lots: mineLots.length,
-    desk: deskLots.length,
     closed: closed?.length ?? 0,
   };
 
@@ -142,12 +97,7 @@ export function DeskPage({
       <Page>
         <Tabs tabs={TABS} value={tab} counts={counts} onChange={setTab} />
 
-        {tab === "lots" || tab === "desk" ? (
-          <Lots
-            lots={tab === "lots" ? mineLots : deskLots}
-            mine={tab === "lots"}
-          />
-        ) : loadingMine ? (
+        {loadingMine ? (
           <Panel className="px-5 py-4">
             <Spinner label="Читаем задачи…" />
           </Panel>
@@ -318,70 +268,6 @@ function JobRow({ job, onDone }: { job: Job; onDone: () => void }) {
 
       {trouble && <p className="w-full text-xs text-critical">{trouble}</p>}
     </li>
-  );
-}
-
-function Lots({ lots, mine }: { lots: Card[]; mine: boolean }) {
-  if (!lots.length) {
-    return (
-      <Panel>
-        <EmptyState
-          title={mine ? "За вами лотов нет" : "На отделе лотов нет"}
-          description={
-            mine
-              ? "Здесь те, где вы менеджер или текущий ответственный."
-              : "Здесь те, что стоят на шаге вашего отдела, независимо от того, кто их ведёт."
-          }
-        />
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel className="overflow-hidden">
-      <ul className="divide-y divide-hairline">
-        {lots.map((card) => (
-          <li key={card.id}>
-            <Link
-              to={`/work/lots/${card.id}`}
-              className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 transition hover:bg-plane"
-            >
-              <span className="font-mono text-xs text-ink-muted">
-                {card.code}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm text-ink">
-                  {card.title}
-                </span>
-                <span className="mt-0.5 block truncate text-xs text-ink-muted">
-                  {card.customer || card.row_id}
-                </span>
-              </span>
-              <span className="text-sm tabular-nums text-ink-secondary">
-                {card.amount === null ? "—" : `${money(card.amount)} ₸`}
-              </span>
-              {card.left && (
-                <span
-                  className={cx(
-                    "text-sm tabular-nums whitespace-nowrap",
-                    card.overdue
-                      ? "text-ink-muted"
-                      : card.burning
-                        ? "font-semibold text-critical"
-                        : "text-ink-secondary",
-                  )}
-                >
-                  {card.left}
-                </span>
-              )}
-              <span className="w-28 truncate text-sm text-ink">
-                {card.status_name}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </Panel>
   );
 }
 

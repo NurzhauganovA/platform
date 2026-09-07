@@ -27,6 +27,7 @@ from platform_api.modules.schemas import (
     DetailOut,
     DetailSection,
     DetailTable,
+    SpecFile,
     TakeOut,
 )
 
@@ -34,6 +35,9 @@ logger = get_logger(__name__)
 
 ANNOUNCE_LOTS = "announce_lots"
 """Ключ раздела с лотами объявления. Карточка лота показывает его у себя."""
+
+TECH_SPEC = "tech_spec"
+"""Ключ раздела с технической спецификацией. По нему его находит карточка."""
 
 
 def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
@@ -43,13 +47,17 @@ def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
     платформы, а этот файл видит только базу площадки. Пустой код означает,
     что карточку по этой строке завести нечем.
 
-    `facts` — только сроки и что покупают, без спецификации и соседних лотов.
-    Так карточка лота открывает «Данные закупки»: спецификация у неё своя, во
-    вкладке разбора. Дело не в двух лишних разделах, а в походе на портал за
-    соседями: он занимает до минуты, и панель, которая показывает восемь полей
-    из базы, минуту крутила колесо ради того, что в ней не нарисуется.
+    `facts` — всё, что лежит в своей базе: сроки, что покупают, спецификация и
+    лоты объявления. Отличие от полного разбора одно, и оно про портал: там
+    соседние лоты дочитываются с него, и это до минуты ожидания. Здесь не
+    дочитываются, о чём сказано под таблицей.
     """
     if facts:
+        # Соседние лоты — из своей базы, портал не спрашиваем. В объявлении их
+        # бывает четыре, и знать об этом надо: торги идут по объявлению
+        # целиком. Но связь между лотами известна нам самим, по `announce_id`,
+        # а поход на портал за чужими — это та самая минута, ради ухода от
+        # которой режим и заведён. Что список неполон, сказано под таблицей.
         return DetailOut(
             id=core.row_id(lot),
             title=lot.name or lot.purchase_number,
@@ -57,7 +65,13 @@ def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
             verdict=_verdict(lot),
             tone=core.tone_of(lot),
             url=_where(lot),
-            sections=[_about(lot), _what(lot)],
+            spec=_spec_file(lot),
+            sections=[
+                _about(lot),
+                _what(lot),
+                _spec(lot),
+                _neighbours(lot, _from_base(lot.announce_id), "", asked_portal=False),
+            ],
         )
 
     neighbours, trouble = _announce_neighbours(lot)
@@ -71,12 +85,29 @@ def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
         url=_where(lot),
         remark_key=lot.lot_number,
         take=_take(lot, code) if code else None,
+        spec=_spec_file(lot),
         sections=[
             _about(lot),
             _what(lot),
             _spec(lot),
             _neighbours(lot, neighbours, trouble),
         ],
+    )
+
+
+def _spec_file(lot: Any) -> SpecFile | None:
+    """Файл спецификации строки. Нет файла — нет и поля.
+
+    Собирается здесь, а не в каждом месте, где он нужен: по нему работают
+    вкладка разбора, вкладка файлов и панель сведений, и три своих способа
+    ответить на «а есть ли спецификация» однажды дали бы три разных ответа.
+    """
+    if not lot.spec_name and not lot.spec_url:
+        return None
+    return SpecFile(
+        name=str(lot.spec_name or "Спецификация"),
+        url=f"/api/goszakup/item/{lot.lot_number}/spec" if lot.spec_url else "",
+        chars=len((lot.spec_text or "").strip()),
     )
 
 
@@ -229,6 +260,7 @@ def _spec(lot: Any) -> DetailSection:
     text = (lot.spec_text or "").strip()
     if not text:
         return DetailSection(
+            key=TECH_SPEC,
             title="Техническая спецификация",
             empty=(
                 "К этому объявлению спецификация не приложена. "
@@ -241,6 +273,7 @@ def _spec(lot: Any) -> DetailSection:
     # — по такому имени в папке «Загрузки» ничего не найти.
     файл = f"/api/goszakup/item/{lot.lot_number}/spec" if lot.spec_url else None
     return DetailSection(
+        key=TECH_SPEC,
         title="Техническая спецификация",
         note=f"Из файла {lot.spec_name}" if lot.spec_name else "",
         collapsed=True,
@@ -258,12 +291,23 @@ def _spec(lot: Any) -> DetailSection:
     )
 
 
-def _neighbours(lot: Any, found: tuple[_Neighbour, ...], trouble: str) -> DetailSection:
+def _neighbours(
+    lot: Any,
+    found: tuple[_Neighbour, ...],
+    trouble: str,
+    *,
+    asked_portal: bool = True,
+) -> DetailSection:
     """Все лоты объявления, наш отмечен.
 
     Торги идут по объявлению целиком, и соседние лоты — это и конкуренты за
     то же внимание заказчика, и повод взять закупку целиком, если остальное
     мы тоже возим.
+
+    `asked_portal` меняет подпись, а не таблицу. Список, собранный без портала,
+    полон только по нашим кодам ЕНС ТРУ, и молчать об этом нельзя: «в
+    объявлении один лот» и «мы выгрузили из объявления один лот» выглядят
+    одинаково, а означают разное.
     """
     if not found:
         return DetailSection(
@@ -277,7 +321,7 @@ def _neighbours(lot: Any, found: tuple[_Neighbour, ...], trouble: str) -> Detail
     return DetailSection(
         key=ANNOUNCE_LOTS,
         title="Лоты объявления",
-        note=_note(len(found), mine),
+        note=_note(len(found), mine) if asked_portal else _own_note(len(found)),
         table=DetailTable(
             columns=["", "Номер лота", "Наименование", "Кол-во", "Сумма, ₸", "Статус"],
             aligns=["left", "left", "left", "right", "right", "left"],
@@ -294,6 +338,21 @@ def _neighbours(lot: Any, found: tuple[_Neighbour, ...], trouble: str) -> Detail
             ],
         ),
         collapsed=len(found) > 6,
+    )
+
+
+def _own_note(total: int) -> str:
+    """Подпись, когда список собран без портала — по одной нашей выгрузке.
+
+    Прямо о неполноте: под наши коды ЕНС ТРУ из объявления подходит одна
+    позиция из четырёх, и человек, увидевший здесь один лот, должен понимать,
+    что это наш один, а не единственный у заказчика.
+    """
+    свои = "лот" if total == 1 else "лота" if 2 <= total <= 4 else "лотов"
+    return (
+        f"Из этого объявления у нас выгружено {total} {свои}; наш отмечен. "
+        "Полный список объявления — в разборе на «Лотах портала»: он читается "
+        "с портала и потому идёт дольше."
     )
 
 

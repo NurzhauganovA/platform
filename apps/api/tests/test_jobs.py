@@ -269,3 +269,18 @@ def test_result_is_served(
     body = app_client.get(f"/api/jobs/{job.id}").json()
 
     assert body["result"] == {"usd": 0.08, "ocr_pages": 6}
+
+
+def test_fail_oshibki_goszakupa_govoryat_po_chelovecheski() -> None:
+    """Отказ портала должен доехать до человека словами, а не кодом обращения.
+
+    `GoszakupError` — корень исключений подключённого проекта, как
+    `SkstoreError` у соседей, и пишет он по-человечески: «Портал не отвечает».
+    Пока его не было в списке своих, такой отказ подменялся фразой «ошибка в
+    платформе, покажите администратору код» — и человек шёл к нам вместо того,
+    чтобы подождать две минуты и нажать ещё раз.
+    """
+    from goszakup.exceptions import PortalError
+    from platform_api.errors import job_failure
+
+    assert job_failure(PortalError("Портал не отвечает")) == "Портал не отвечает"

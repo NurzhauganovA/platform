@@ -110,36 +110,51 @@ export function Files({ card }: { card: Card }) {
  * спецификация, и она же самая нужная: по ней собирают заявку и по ней пишут
  * замечание заказчику.
  *
- * Ищется по адресу ссылки, а не по заголовку раздела: заголовки пишутся для
- * человека и меняются, а `/spec` — это договорённость с сервером.
+ * Берётся полем `spec`, а не поиском по разделам разбора. Раньше файл искался
+ * перебором полей по ссылке, кончающейся на `/spec`, — и ради этого поиска
+ * тянулся полный разбор, который ходит на портал за соседними лотами и
+ * отвечает до минуты. Вкладка файлов ждала эту минуту ради одной строки.
+ * Теперь тот же запрос сведений, что и у ссылки «На площадке»: ответ уже в
+ * кэше вкладки.
  */
 function Portal({ card }: { card: Card }) {
   const { data } = useQuery({
-    queryKey: [card.module, "item", card.row_id],
-    queryFn: () => worklists.detail(card.module as WorklistSlug, card.row_id),
+    queryKey: [card.module, "item", card.row_id, "facts"],
+    queryFn: () =>
+      worklists.detail(card.module as WorklistSlug, card.row_id, "", true),
     retry: false,
     staleTime: 60_000,
   });
 
-  const spec = data?.sections
-    .flatMap((section) => section.fields)
-    .find((field) => field.link?.endsWith("/spec"));
-  if (!spec?.link) return null;
+  const spec = data?.spec;
+  if (!spec) return null;
 
   return (
     <div className="border-b border-hairline bg-plane/40 px-4 py-2.5">
       <p className="text-xs tracking-wide text-ink-muted uppercase">
         Документы закупки
       </p>
-      <a
-        href={spec.link}
-        className="mt-1 block truncate text-sm text-ink hover:underline"
-        title={spec.text}
-      >
-        {spec.text}
-      </a>
+      {spec.url ? (
+        <a
+          href={spec.url}
+          className="mt-1 block truncate text-sm text-ink hover:underline"
+          title={spec.name}
+        >
+          {spec.name}
+        </a>
+      ) : (
+        <p className="mt-1 truncate text-sm text-ink" title={spec.name}>
+          {spec.name}
+        </p>
+      )}
+      {/* Прочитан файл или нет — разные ответы на «почему разбор пустой».
+          Нечитаемый файл выглядел как отсутствующий, и человек шёл жать
+          «Разобрать» по второму разу. */}
       <p className="text-xs text-ink-muted">
-        с портала · по нему собран разбор во вкладке «Разбор»
+        с портала ·{" "}
+        {spec.chars > 0
+          ? "по нему собирается разбор во вкладке «Разбор»"
+          : "текст из него прочитать не удалось — разбор моделью не соберётся"}
       </p>
     </div>
   );
@@ -265,7 +280,7 @@ export function Chat({ card }: { card: Card }) {
             полем кнопка сжимала его до половины ширины панели. */}
         <div className="mt-2 flex items-center justify-between gap-3">
           <span className="text-[11px] text-ink-muted">
-            Ctrl+Enter — отправить
+            Ctrl+Enter - отправить
           </span>
           <Button
             variant="primary"

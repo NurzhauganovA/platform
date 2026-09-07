@@ -101,7 +101,15 @@ def _spoken(exc: Exception) -> str:
     return ""
 
 
-_OUR_ERRORS = frozenset({"SkstoreError", "OmarketError", "TenderAnalyzeError", "SpokenError"})
+_OUR_ERRORS = frozenset(
+    {
+        "SkstoreError",
+        "OmarketError",
+        "TenderAnalyzeError",
+        "GoszakupError",
+        "SpokenError",
+    }
+)
 """Корни иерархий исключений, которые пишут по-человечески. По имени, а не по
 классу: импортировать ядро ради проверки типа значит уронить платформу там,
 где ядро не установлено."""
