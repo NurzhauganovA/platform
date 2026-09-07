@@ -64,7 +64,7 @@ ifdef OMARKET_DIR
 export OMARKET_DIR
 endif
 
-.PHONY: help sources build up prod down restart logs ps user shell migrate check clean backup restore \
+.PHONY: help sources build up prod down restart logs ps user shell migrate check prune clean backup restore \
 	prod-user stage stage-down stage-logs stage-ps stage-user
 
 help:
@@ -77,6 +77,7 @@ help:
 	@echo "make logs     поток журналов"
 	@echo "make ps       что запущено"
 	@echo "make down     остановить"
+	@echo "make prune    освободить диск Docker (тома не трогает)"
 	@echo "make clean    остановить и удалить данные платформы"
 
 # Исходники соседних проектов переносятся в контекст сборки: Docker читает
@@ -187,6 +188,22 @@ migrate:
 # Готовность модулей глазами самой платформы: что настроено, чего не хватает.
 check:
 	@curl -fsS http://localhost:8000/api/health | python3 -m json.tool
+
+# Освобождает диск Docker: слои прошлых сборок и образы без контейнеров.
+#
+# Тома не трогает — в них база. Поэтому отдельной целью, а не
+# `docker system prune -a --volumes`: та же команда с лишним ключом уносит
+# базу целиком, и набирают её обычно в спешке, когда всё уже встало.
+#
+# Нужна регулярно. Каждая пересборка оставляет слой, и за день работы их
+# набирается на десятки гигабайт. Диск виртуальной машины Docker кончается
+# раньше диска ноутбука, и первым это замечает PostgreSQL: он падает на
+# докатке журнала с «No space left on device» и больше не поднимается, пока
+# место не освободят.
+prune:
+	@docker builder prune -af
+	@docker image prune -af
+	@docker system df
 
 # Удаляет тома платформы: базу, очередь и загруженные папки. Базы подключённых
 # проектов лежат на машине и остаются нетронутыми.

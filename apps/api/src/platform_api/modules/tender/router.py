@@ -37,7 +37,9 @@ from platform_api.modules.schemas import (
     RowLotOut,
     RowOut,
     RowWorkOut,
+    Scope,
     WorklistOut,
+    in_scope,
 )
 from platform_api.modules.table import build_table, sees_money
 from platform_api.modules.tender import core, lots, worklist, works
@@ -86,6 +88,7 @@ def get_health() -> ModuleHealth:
 def get_worklist(
     identity: CurrentUser,
     db: Db,
+    scope: Scope = "focus",
     _guard: Annotated[None, requires_read] = None,
 ) -> WorklistOut:
     """Разобранные закупки так же, как их показывает лист «Отбор».
@@ -133,10 +136,15 @@ def get_worklist(
     )
     money = sees_money(identity.role)
 
+    # Собранные строки нужны дважды: отобранные уезжают, полное число
+    # показывается плиткой «Показано 28 из 184».
+    _ready = _with_lots(table.rows, ordered, marked, code_map, in_work, money=money)
+
     return WorklistOut(
         sheet=worklist.sheet_title(),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=_with_lots(table.rows, ordered, marked, code_map, in_work, money=money),
+        rows=in_scope(_ready, scope),
+        rows_total=len(_ready),
         legend=[
             LegendItem(tone=tone, title=title, hint=hint) for tone, title, hint in worklist.legend()
         ],
@@ -260,6 +268,7 @@ def _with_lots(
                     if profit is not None and amount
                     else None
                 ),
+                hint="Поставить придётся все.",
             )
         ready.append(out)
     return ready

@@ -9,7 +9,24 @@
 
 import { api } from "./client";
 
-export type Role = "admin" | "analyst" | "buyer" | "viewer";
+/**
+ * Роли платформы. Полный список — он же в `Role` на сервере.
+ *
+ * Держать здесь урезанный набор нельзя: `me.role` приходит с сервера как есть,
+ * и роль, которой тип не знает, ломает разбор в местах, где по ней ветвятся, —
+ * молча, потому что строка есть строка.
+ */
+export type Role =
+  | "admin"
+  | "manager"
+  | "analyst"
+  | "buyer"
+  | "lawyer"
+  | "technologist"
+  | "assembler"
+  | "head"
+  | "commercial"
+  | "viewer";
 
 export interface Me {
   id: string;
@@ -203,6 +220,14 @@ export interface NavItem {
   title: string;
   path: string;
   icon: string | null;
+  /**
+   * В каком разделе меню показать.
+   *
+   * Группировка по делу, а не по источнику данных: человек ищет по вопросу
+   * «что мне делать», а не «в какой это системе лежит». Приходит с сервера —
+   * раскладка меню это решение платформы, а не оболочки.
+   */
+  group: string;
 }
 
 export interface PlatformModule {

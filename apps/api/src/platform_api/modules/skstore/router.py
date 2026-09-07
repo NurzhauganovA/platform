@@ -3,27 +3,38 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_money, requires_read
 from platform_api.config import Settings
-from platform_api.errors import broke, unavailable
+from platform_api.errors import unavailable
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
+from platform_api.modules import codes
 from platform_api.modules.detail import for_role
 from platform_api.modules.schemas import (
     ColumnOut,
     DetailOut,
     LegendItem,
     RowOut,
+    Scope,
     StartedJobOut,
     WorklistOut,
+    in_scope,
 )
 from platform_api.modules.skstore import core
-from platform_api.modules.skstore.columns import COMPACT, ESSENTIAL, POLICY, ROLES
+from platform_api.modules.skstore.columns import (
+    CODE_PREFIX,
+    CODE_SEPARATOR,
+    CODE_WIDTH,
+    COMPACT,
+    ESSENTIAL,
+    POLICY,
+    ROLES,
+)
 from platform_api.modules.skstore.health import check as check_health
 from platform_api.modules.skstore.schemas import ModuleHealth
 from platform_api.modules.table import build_table, sees_money
@@ -44,6 +55,8 @@ def get_health() -> ModuleHealth:
 @router.get("/worklist", summary="Рабочий список закупов")
 def get_worklist(
     identity: CurrentUser,
+    db: Db,
+    scope: Scope = "focus",
     _guard: Annotated[None, requires_read] = None,
 ) -> WorklistOut:
     """Закупы так же, как их показывает лист «Открытые торги (фокус)».
@@ -82,6 +95,10 @@ def get_worklist(
     )
     money = sees_money(identity.role)
 
+    # Собранные строки нужны дважды: отобранные уезжают, полное число
+    # показывается плиткой «Показано 28 из 184».
+    _ready = _with_codes(db, table.rows)
+
     return WorklistOut(
         sheet=core.sheet_title(),
         legend=[
@@ -92,9 +109,10 @@ def get_worklist(
         # книге себестоимость и маржа целиком — и то и другое закрыто тем же
         # `requires_money`, что и эндпоинты. Кнопка, которая ответит 403, —
         # это обещание, которого раздел не выполнит.
-        actions=["sync"] + (["analyze", "export"] if money else []),
+        actions=["sync"] + (["analyze", "build"] if money else []),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=[RowOut.model_validate(asdict(row)) for row in table.rows],
+        rows=in_scope(_ready, scope),
+        rows_total=len(_ready),
         hidden_columns=table.hidden_columns,
         total=data.total,
         shown=data.focused,
@@ -202,26 +220,61 @@ def start_analyze(
     return StartedJobOut(job_id=job.id)
 
 
-@router.get("/export", summary="Выгрузить книгу Excel")
+@router.post("/export", summary="Собрать книгу Excel", status_code=status.HTTP_202_ACCEPTED)
+def start_export(
+    request: Request,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_money] = None,
+) -> StartedJobOut:
+    """Ставит сборку книги в очередь.
+
+    Задачей, а не в обработчике. Сборка занимает процессор целиком: в тишине
+    это около десяти секунд, но процесс API один, и под нагрузкой время растёт
+    вместе с очередью — замер под открытыми разделами дал 156 секунд. Браузер
+    к тому моменту запрос бросал, а сервер его всё равно досчитывал, задерживая
+    соседние разделы.
+
+    Денег не стоит: обогащение выключено, книга собирается из того, что уже
+    посчитано. Право всё равно тендерщиково — в книге себестоимость и маржа
+    целиком, и урезать их по ролям нечем.
+    """
+    settings: Settings = request.app.state.settings
+    job = JobService(db, request.app.state.redis).create(
+        organization_id=identity.organization.id,
+        created_by_id=identity.user.id,
+        module="skstore",
+        kind="export",
+        params={},
+        total=1,
+    )
+    db.commit()
+    enqueue_sync(settings, job.id)
+    return StartedJobOut(job_id=job.id)
+
+
+@router.get("/export", summary="Скачать собранную книгу")
 def export(
     identity: CurrentUser,
     _guard: Annotated[None, requires_money] = None,
 ) -> FileResponse:
-    """Отдаёт ту же книгу, что делает `skstore export`.
+    """Отдаёт последнюю собранную книгу — ту же, что делает `skstore export`.
 
     Только тендерщику: в книге листы с себестоимостью и маржой целиком, и
     урезать их по ролям здесь нечем — файл уходит одним куском и дальше живёт
     своей жизнью, в почте и на флешках.
 
-    Собирается синхронно, а не задачей: без обогащения это секунды, а очередь
-    ради секунд добавила бы человеку ещё один экран ожидания. Обогащение здесь
-    выключено намеренно — скачивание отчёта не должно списывать со счёта.
+    Читает с диска и ничего не считает. Сборка — отдельная задача: пока она
+    жила здесь, один нажавший «Скачать Excel» занимал единственный процесс API
+    настолько, что переставала отвечать даже проверка готовности.
     """
     del identity
-    try:
-        path = core.export_workbook()
-    except Exception as exc:
-        raise broke("Книга не собралась", exc) from exc
+    path = core.latest_workbook()
+    if path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Книга ещё не собрана — нажмите «Собрать книгу»",
+        )
 
     return FileResponse(
         path,
@@ -231,3 +284,28 @@ def export(
 
 
 __all__ = ["router"]
+
+
+def _with_codes(db: Db, rows: Any) -> list[RowOut]:
+    """Дописывает строкам постоянный код «SK000001».
+
+    Порядковый номер для этого не годится: список пересобирается при каждой
+    выгрузке, и «сорок вторая» у собеседника уже другая строка. Код выдаётся
+    один раз и остаётся при позиции.
+
+    Одним запросом на весь список: строк сотни, и обращение на каждую
+    превратило бы открытие страницы в сотни обходов базы.
+    """
+    ready = [RowOut.model_validate(asdict(row)) for row in rows]
+    issued = codes.assign(
+        db,
+        "skstore",
+        CODE_PREFIX,
+        [row.id for row in ready if row.id],
+        width=CODE_WIDTH,
+        separator=CODE_SEPARATOR,
+    )
+    db.commit()
+    for row in ready:
+        row.code = issued.get(row.id, "")
+    return ready

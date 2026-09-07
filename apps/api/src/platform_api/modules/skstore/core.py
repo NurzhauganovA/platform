@@ -33,6 +33,7 @@ from platform_api.modules.detail import (
     percent_field,
     text_field,
 )
+from platform_api.modules.freshness import ByStamp
 from platform_api.modules.table import Visibility, is_past, to_utc
 
 if TYPE_CHECKING:
@@ -152,6 +153,50 @@ def _analyze(only: str | None = None) -> list[Any]:
         container.dispose()
 
 
+_STAMP = """
+select (select count(*) from bargain),
+       (select coalesce(max(updated_at)::text, '') from bargain),
+       (select coalesce(max(last_seen_at)::text, '') from bargain),
+       (select count(*) from bargain_analysis_cache),
+       (select coalesce(max(updated_at)::text, '') from bargain_analysis_cache),
+       (select count(*) from stock_item),
+       (select coalesce(max(last_seen_at)::text, '') from stock_item),
+       (select count(*) from price_position),
+       (select coalesce(max(last_seen_at)::text, '') from price_position),
+       (select coalesce(max(id)::text, '') from catalog_good),
+       (select coalesce(max(id)::text, '') from catalog_price_observation)
+"""
+"""Отпечаток базы ядра: изменился — пересобираем вердикты.
+
+Считается по тому, из чего собирается список: закупы, находки на рынке, склад
+и прайс. У каталога вместо счёта строк взят наибольший номер — в нём двести
+тридцать тысяч карточек, и `count(*)` по ним обходится дороже той работы,
+которую отпечаток экономит. Новые наблюдения цен получают новые номера, а
+пересчёт медианы по ТРУ нужен именно из-за них.
+"""
+
+
+def _fresh_stamp() -> str:
+    from sqlalchemy import text
+
+    container = _container()
+    try:
+        with container.engine.connect() as connection:
+            row = connection.execute(text(_STAMP)).one()
+    finally:
+        container.dispose()
+    return "|".join(str(value) for value in row)
+
+
+_ANALYSES: ByStamp[tuple[Any, ...]] = ByStamp("skstore", _fresh_stamp, lambda: tuple(_analyze()))
+"""Прогон ядра, собранный один раз на состояние базы.
+
+Список открывают тридцать человек, и каждое открытие пересчитывало тысячу с
+лишним закупов заново — при том, что между двумя открытиями в базе обычно не
+меняется ничего: выгрузка идёт раз в час.
+"""
+
+
 def worklist() -> Worklist:
     """Рабочий список закупов — без обращений к сети и без списаний.
 
@@ -173,7 +218,7 @@ def worklist() -> Worklist:
     оказывается посередине шестисот строк, и человек решает, что выгрузка его
     не забрала. По марже список сортируется щелчком по колонке.
     """
-    everything = _newest_first(_analyze())
+    everything = _newest_first(list(_ANALYSES.get()))
     # Счётчики считаются по действующим, а не по всему, что лежит в базе.
     # «Всего закупов 599» при пятистах истёкших — это неправда о том, сколько
     # работы на самом деле.
@@ -227,6 +272,24 @@ def export_workbook() -> Path:
         return ExportService(container).export_workbook(include_catalog=False, enrich=False)
     finally:
         container.dispose()
+
+
+def latest_workbook() -> Path | None:
+    """Последняя собранная книга. `None` — ещё ни разу не собирали.
+
+    Отдаётся с диска, а не собирается на месте. Сборка занимает процессор
+    целиком: в тишине это около десяти секунд, но процесс API один, и под
+    нагрузкой время растёт вместе с очередью — замер под открытыми разделами
+    дал 156 секунд, клиенты отвалились по своему сроку, а брошенная работа
+    досчитывалась и тянула за собой всех остальных. Собирает задача,
+    скачивание — только чтение готового файла.
+    """
+    folder = Path(core_settings().export_dir)
+    try:
+        books = sorted(folder.glob("*.xlsx"), key=lambda item: item.stat().st_mtime)
+    except OSError:  # pragma: no cover — каталога выгрузок ещё нет
+        return None
+    return books[-1] if books else None
 
 
 def readiness() -> dict[str, Any]:
@@ -363,16 +426,25 @@ def _container() -> Any:
 def _count_bargains() -> int | None:
     """Сколько активных закупов в базе. `None` — базы ещё нет.
 
+    Запросом, а не перебором. Раньше здесь поднимались объектами все закупы и
+    считались в питоне: ради одного числа база отдавала тысячу с лишним строк,
+    и проверка готовности шла девять секунд. Контейнер меряет её пятью — и
+    помечал работающий API больным, а `depends_on` по здоровью не пускал бы
+    зависимые службы.
+
     Отсутствие базы не ошибка и не должно превращаться в пятисотый ответ:
     проект только что поставили, и это ровно то, о чём сводка обязана сказать
     человеческими словами.
     """
-    from skstore.domain.enums import BargainStatus
+    from sqlalchemy import text
 
     container = _container()
     try:
-        with container.unit_of_work() as uow:
-            return sum(1 for _ in uow.bargains.iter_by_status(BargainStatus.ACTIVE))
+        with container.engine.connect() as connection:
+            found = connection.execute(
+                text("select count(*) from bargain where status = 'active'")
+            ).scalar_one()
+        return int(found)
     except Exception:
         return None
     finally:

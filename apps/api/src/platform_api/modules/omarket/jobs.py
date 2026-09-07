@@ -123,7 +123,15 @@ def analyze(ctx: JobContext, *, search_market: bool = True, **_: Any) -> dict[st
 
 
 jobs = (
-    JobSpec(kind="sync", handler=sync_sources, title="Обновление данных с площадки"),
+    # На двадцатой минуте, а не на пятой: у skstore своя выгрузка в это
+    # время, и вдвоём они делят единственный процессор.
+    JobSpec(
+        kind="sync",
+        handler=sync_sources,
+        title="Обновление данных с площадки",
+        every_hours=1,
+        at_minute=20,
+    ),
     JobSpec(kind="analyze", handler=analyze, title="Расчёт себестоимости и маржи"),
 )
 

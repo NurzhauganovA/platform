@@ -52,6 +52,7 @@ x-app: &app
     TENDER__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_tender
     SKSTORE__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_skstore
     OMARKET__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_omarket
+    GOSZAKUP__DB__URL: postgresql+psycopg://fintend:fintend@postgres:5432/fintend_goszakup
   env_file:
     # Ключи моделей и настройки платформы. Читается и платформой, и SDK
     # подключённых проектов — им нужен `GEMINI_API_KEY` из окружения.
@@ -95,6 +96,12 @@ x-app: &app
     redis:
       condition: service_healthy
   restart: unless-stopped
+  # Сборщик процессов первым номером. Без него первым номером стоит uvicorn, а
+  # он чужих потомков не хоронит: отработавший подпроцесс остаётся зомби, и на
+  # нём контейнер перестаёт останавливаться — `docker compose up` отвечает
+  # «PID is zombie and can not be killed», и выкатка встаёт до ручного
+  # `docker rm -f`. Один раз уже встала.
+  init: true
 
 services:
   postgres:

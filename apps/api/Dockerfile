@@ -41,16 +41,19 @@ COPY apps/api/pyproject.toml apps/api/README.md ./apps/api/
 COPY .docker/projects/tender-analyze/pyproject.toml ./projects/tender-analyze/
 COPY .docker/projects/skstore/pyproject.toml ./projects/skstore/
 COPY .docker/projects/omarket/pyproject.toml ./projects/omarket/
+COPY .docker/projects/goszakup/pyproject.toml ./projects/goszakup/
 
 # Пустые пакеты, чтобы установка зависимостей прошла до появления исходников.
 RUN mkdir -p apps/api/src/platform_api \
       projects/tender-analyze/src/tender_analyze \
       projects/skstore/src/skstore \
       projects/omarket/src/omarket \
+      projects/goszakup/src/goszakup \
     && touch apps/api/src/platform_api/__init__.py \
       projects/tender-analyze/src/tender_analyze/__init__.py \
       projects/skstore/src/skstore/__init__.py \
       projects/omarket/src/omarket/__init__.py \
+      projects/goszakup/src/goszakup/__init__.py \
     && for project in projects/*/; do touch "$project/README.md"; done
 
 RUN pip install --upgrade pip \
@@ -58,7 +61,8 @@ RUN pip install --upgrade pip \
         -e ./apps/api \
         -e ./projects/tender-analyze \
         -e ./projects/skstore \
-        -e ./projects/omarket
+        -e ./projects/omarket \
+        -e ./projects/goszakup
 
 
 FROM deps AS app
@@ -68,6 +72,7 @@ FROM deps AS app
 COPY .docker/projects/tender-analyze/ ./projects/tender-analyze/
 COPY .docker/projects/skstore/ ./projects/skstore/
 COPY .docker/projects/omarket/ ./projects/omarket/
+COPY .docker/projects/goszakup/ ./projects/goszakup/
 COPY apps/api/ ./apps/api/
 
 # Каталоги, которые проекты создают у себя сами. Если их не завести заранее,

@@ -23,6 +23,8 @@ from platform_api.db.session import create_db_engine, create_session_factory
 from platform_api.jobs.router import router as jobs_router
 from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
+from platform_api.modules.discussion_router import router as discussion_router
+from platform_api.modules.remarks_router import router as remarks_router
 from platform_api.modules.tender.workspace import CaseWorkspace
 from platform_api.storage import FileStorage
 
@@ -125,7 +127,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 title=module.title,
                 description=module.description,
                 nav=[
-                    {"title": item.title, "path": item.path, "icon": item.icon}
+                    {
+                        "title": item.title,
+                        "path": item.path,
+                        "icon": item.icon,
+                        # Пусто — оболочка подставит название модуля.
+                        "group": item.group or module.title,
+                    }
                     for item in module.nav
                     if not item.roles or identity.role.value in item.roles
                 ],
@@ -135,6 +143,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     api.include_router(auth_router)
     api.include_router(jobs_router)
+    api.include_router(discussion_router)
+    api.include_router(remarks_router)
     for module in registry.all():
         api.include_router(module.router)
 

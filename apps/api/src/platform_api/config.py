@@ -85,6 +85,43 @@ class StorageSettings(BaseModel):
         return value if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
 
+class WriterSettings(BaseModel):
+    """Модель, которая пишет замечания к спецификациям.
+
+    Настройка своя, а модель та же, что у подключённых ядер. Ключ один на всё
+    — `GEMINI_API_KEY` из окружения, куда его кладёт
+    `load_dotenv_into_environment()` при старте. Второй поставщик означал бы
+    второй счёт, второй ключ в `.env` и второй набор причин, по которым
+    сегодня не работает.
+    """
+
+    model: str = "gemini-3.1-pro-preview"
+    """Чем писать.
+
+    Та же модель, которой тендерный разбор выносит итог по закупке. Замечание
+    — работа того же рода: прочитать спецификацию, понять, какое требование
+    сужает круг участников, и приложить к нему норму. Быстрые модели на этом
+    начинают пересказывать спецификацию вместо разбора.
+    """
+
+    model_backups: tuple[str, ...] = ("gemini-3.6-flash", "gemini-3.5-flash")
+    """Чем писать, когда основная занята.
+
+    Так же, как у ядер: у предварительных моделей квота кончается посреди дня,
+    и замечание под срок важнее, чем то, какой именно моделью оно написано.
+    """
+
+    thinking_level: str = "MEDIUM"
+    """Сколько обдумывать. Уровнем, а не токенами: у линеек параметр разный,
+    и различает их `thinking_config` в ядре."""
+
+    max_tokens: int = Field(default=8192, ge=512, le=32_000)
+
+    timeout_seconds: float = Field(default=180.0, gt=0)
+    """Сколько ждать ответа. Задача фоновая, но не бесконечная: зависший
+    вызов держит место в очереди, а замечание пишется под срок."""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -99,6 +136,7 @@ class Settings(BaseSettings):
     redis: RedisSettings = Field(default_factory=RedisSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    writer: WriterSettings = Field(default_factory=WriterSettings)
 
     environment: Literal["dev", "prod"] = "dev"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

@@ -110,3 +110,157 @@ def test_roles_are_matched_by_set_not_by_seniority(guarded_app: FastAPI, db: DbS
 
         assert client.get("/api/probe/sourcing").status_code == 200
         assert client.get("/api/probe/money").status_code == 403
+
+
+def test_fail_proverki_prav_podklyucheny_cherez_depends(app: FastAPI) -> None:
+    """Проверка прав без `Depends` не выполняется вовсе.
+
+    FastAPI принимает такую за обычный параметр запроса: роль не проверяется, а
+    `_guard` вылезает в схеме API отдельным полем. Ошибка тихая — эндпоинт
+    отвечает, тесты на нужные роли проходят, — и находится только тогда, когда
+    список ролей сузили, а доступ остался у всех.
+
+    Проверяется по схеме, а не по коду: так ловится любой модуль, включая те,
+    которых ещё нет.
+    """
+    schema = app.openapi()
+    протекло = [
+        f"{method.upper()} {path}"
+        for path, methods in schema["paths"].items()
+        for method, operation in methods.items()
+        if any(item["name"].startswith("_") for item in operation.get("parameters", []))
+    ]
+    assert not протекло, "Проверка прав подключена без Depends — она не выполняется: " + ", ".join(
+        протекло
+    )
+
+
+def test_fail_kazhdaya_rol_vidit_svoyo(db: DbSession, app_client: TestClient) -> None:
+    """Матрица доступа целиком, а не по одной роли за тест.
+
+    Ролей десять, и права им раздавались по мере появления: шесть новых
+    завели под согласование и не вписали в `requires_read`. Менеджер поставки
+    — тот, кто ведёт лот от объявления до оплаты, — не видел ни одного
+    рабочего списка. Ошибка тихая: каждый отдельный тест на своей роли
+    проходил.
+
+    Здесь перечислено ожидаемое поведение целиком. Меняется набор ролей —
+    правится эта таблица, и расхождение видно сразу.
+    """
+    открыто = 200
+    закрыто = 403
+    ожидаем: dict[Role, dict[str, int]] = {
+        # Ведёт лот и решает об участии: нужны и списки, и цифры.
+        Role.MANAGER: {
+            "/api/goszakup/worklist": открыто,
+            "/api/cards": открыто,
+            "/api/jobs": открыто,
+        },
+        # Считает себестоимость. Работал и раньше.
+        Role.ANALYST: {
+            "/api/goszakup/worklist": открыто,
+            "/api/cards": открыто,
+            "/api/remarks": открыто,
+        },
+        # Ищет товар. Маржи не видит, но список и карточка нужны.
+        Role.BUYER: {
+            "/api/goszakup/worklist": открыто,
+            "/api/cards": открыто,
+            "/api/remarks": закрыто,
+        },
+        # Пишет замечания. За списками цены — туда не пускаем.
+        Role.LAWYER: {
+            "/api/goszakup/worklist": закрыто,
+            "/api/cards": открыто,
+            "/api/remarks": открыто,
+        },
+        # Подтверждают товар и сроки. Работают с карточки, список им не нужен.
+        Role.TECHNOLOGIST: {"/api/goszakup/worklist": закрыто, "/api/cards": открыто},
+        Role.ASSEMBLER: {"/api/goszakup/worklist": закрыто, "/api/cards": открыто},
+        # Решают, когда цифры спорные.
+        Role.HEAD: {"/api/goszakup/worklist": открыто, "/api/cards": открыто},
+        Role.COMMERCIAL: {"/api/goszakup/worklist": открыто, "/api/cards": открыто},
+        # Смотрит отчёты. Карточка — стол с задачами, не отчёт.
+        Role.VIEWER: {"/api/goszakup/worklist": открыто, "/api/cards": закрыто},
+    }
+
+    разошлось: list[str] = []
+    for роль, адреса in ожидаем.items():
+        _login(db, app_client, роль)
+        for адрес, ждём in адреса.items():
+            было = app_client.get(адрес).status_code
+            if было != ждём:
+                разошлось.append(f"{роль.value} {адрес}: ждали {ждём}, получили {было}")
+
+    assert not разошлось, "Права разошлись с ТЗ: " + "; ".join(разошлось)
+
+
+def test_fail_obhod_portala_zapuskayut_te_zhe_kto_chitayet(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Кнопка «Обновить» на лотах портала — всем, кому открыт раздел.
+
+    Обход бесплатен: открытое API портала не требует ни токена, ни ЭЦП, и
+    модель в нём не участвует. Ждать тендерщика ради свежего списка незачем —
+    объявление вешают посреди дня, а у запроса ценовых предложений на подачу
+    двое суток.
+
+    Закрыт он ровно от тех, кому закрыт сам список: кнопка, доступная тому,
+    кто не видит результата, — это расход запросов к государственному порталу
+    без единого читателя.
+    """
+    можно = 202
+    нельзя = 403
+    ожидаем = {
+        Role.MANAGER: можно,
+        Role.ANALYST: можно,
+        Role.BUYER: можно,
+        Role.HEAD: можно,
+        Role.COMMERCIAL: можно,
+        Role.LAWYER: нельзя,
+        Role.TECHNOLOGIST: нельзя,
+        Role.ASSEMBLER: нельзя,
+    }
+
+    разошлось: list[str] = []
+    for роль, ждём in ожидаем.items():
+        _login(db, app_client, роль)
+        было = app_client.post("/api/goszakup/sync").status_code
+        if было != ждём:
+            разошлось.append(f"{роль.value}: ждали {ждём}, получили {было}")
+
+    assert not разошлось, "Права на обход разошлись: " + "; ".join(разошлось)
+
+
+def test_fail_udalyat_loty_mozhet_tolko_administrator(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Очистка раздела — только администратору, и остальным отказ.
+
+    Действие необратимо: вместе с лотами уходят карточки, задачи, обсуждения
+    и устойчивые коды. Тендерщик и руководитель видят раздел и правят цифры,
+    но стереть работу пяти отделов — не то право, которое даётся заодно с
+    доступом к ценам.
+
+    Проверяется и просмотр объёма: он показывает, сколько чего заведено по
+    госзакупкам, и это тоже не для всех.
+    """
+    отказ = 403
+    for роль in (Role.MANAGER, Role.ANALYST, Role.BUYER, Role.HEAD, Role.COMMERCIAL):
+        _login(db, app_client, роль)
+        assert app_client.delete("/api/goszakup/lots").status_code == отказ, роль.value
+        assert app_client.get("/api/goszakup/purge").status_code == отказ, роль.value
+
+
+def test_fail_vklyuchit_kod_mozhet_tolko_administrator(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Возврат кода в обход — того же права, что и выключение.
+
+    Иначе получилось бы, что выключить код может только администратор, а
+    включить обратно — кто угодно: список кодов задаёт, что вообще попадёт в
+    отбор, и открытая половина этой пары обходит закрытую.
+    """
+    _login(db, app_client, Role.MANAGER)
+    ответ = app_client.put("/api/goszakup/codes/262011.100.000000/active")
+    assert ответ.status_code == 403

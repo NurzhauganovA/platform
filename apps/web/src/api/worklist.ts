@@ -63,6 +63,16 @@ export interface RowLot {
   positions: number;
   total: number | null;
   margin_percent: number | null;
+  /** Три формы слова для склонения: «лот, лота, лотов». Приходят с сервера —
+   *  у отбора группа собрана из позиций, у госзакупок из лотов. */
+  unit: [string, string, string];
+  /** Как называется сама группа: «лот», «объявление». */
+  whole: string;
+  /** Она же в родительном: «ещё 3 лота объявления». */
+  whole_of: string;
+  /** Чем связь обязывает. У лота отбора — поставить все позиции; у
+   *  объявления госзакупок ничем, заявка подаётся по каждому лоту. */
+  hint: string;
 }
 
 export interface WorklistRow {
@@ -70,6 +80,10 @@ export interface WorklistRow {
   lot: RowLot | null;
   /** Работа, если строку уже взяли: такие стоят в конце списка. */
   work: RowWork | null;
+  /** Сколько реплик в обсуждении строки. */
+  discussion: number;
+  /** Последняя реплика — подсказкой при наведении. */
+  discussion_last: string;
   /** Место в списке. Показывать нечего: сдвигается от каждой новой закупки. */
   number: number;
   /** Постоянный код: «TN-00042». Им строку и называют — он выдан один раз и
@@ -112,6 +126,9 @@ export interface DetailTable {
 }
 
 export interface DetailSection {
+  /** Чем раздел зовётся в коде. По нему карточка находит нужный:
+   *  сравнение с русским заголовком ломается от его правки. */
+  key: string;
   title: string;
   fields: DetailField[];
   table: DetailTable | null;
@@ -167,6 +184,35 @@ export interface Detail {
   sections: DetailSection[];
   hidden_sections: number;
   lot: Lot | null;
+  /**
+   * По какому ключу заводится обсуждение. Пусто — здесь оно не заводится.
+   *
+   * Решает сервер, а не этот файл. Список разделов, где обсуждение уместно,
+   * зашитый в браузере, — это ровно та кнопка, которая отвечает отказом:
+   * тендерный отбор идёт с детальным разбором и без обсуждения вовсе.
+   */
+  remark_key: string;
+  /**
+   * Чем заводить карточку лота. Пусто — раздел этого не умеет.
+   *
+   * Снимок собирает сервер: в разборе строки нет ни суммы, ни срока в
+   * пригодном виде, а собирать их из подписей разделов значит завести второй
+   * источник правды о закупке.
+   */
+  take: Take | null;
+}
+
+export interface Take {
+  module: string;
+  row_id: string;
+  code: string;
+  source_number: string;
+  title: string;
+  customer: string;
+  amount: number | null;
+  enstru_code: string;
+  category: string;
+  deadline: string | null;
 }
 
 export interface LegendItem {
@@ -180,7 +226,15 @@ export interface LegendItem {
 
 /** Что можно запустить в разделе. Приходит с сервера: у тендерного отбора нет
  *  ни обновления, ни пересчёта — папки разбирают на машине тендерщика. */
-export type WorklistAction = "sync" | "analyze" | "export";
+/**
+ * Что можно запустить в разделе.
+ *
+ * `export` — книга уже лежит и отдаётся ссылкой. `build` — её сначала надо
+ * собрать задачей: у skstore сборка занимает процессор целиком, и в
+ * обработчике запроса она держала единственный процесс API, пока браузер ждал
+ * молча.
+ */
+export type WorklistAction = "sync" | "analyze" | "export" | "build";
 
 export interface Worklist {
   /** Как этот же список называется в книге: человеку надо знать, с чем сверяться. */
@@ -201,6 +255,13 @@ export interface Worklist {
   /** Считали ли вообще. Пустой список без этого признака выглядит как «нечего
    *  смотреть», хотя строки, возможно, просто ещё не оценивали. */
   analyzed: boolean;
+  /** За сколько часов до конца приёма закуп горит. Порог задаёт раздел: у
+   *  площадок приём идёт неделями, на портале госзакупок этим же словом
+   *  покрашена строка, и порог там свой. */
+  urgent_hours: number;
+  /** Сколько строк было до отбора. По длине `rows` уже не посчитать: сервер
+   *  шлёт только отобранное. */
+  rows_total: number;
 }
 
 export interface WorklistHealth {
@@ -222,7 +283,7 @@ export interface WorklistHealth {
   companies_configured?: number;
 }
 
-export type WorklistSlug = "skstore" | "omarket" | "tender";
+export type WorklistSlug = "skstore" | "omarket" | "tender" | "goszakup";
 
 export type Scope = "focus" | "all";
 
@@ -249,7 +310,16 @@ export const worklists = {
    * переключатели срабатывают мгновенно, а не ждут полсекунды пересчёта на
    * сервере — при том, что данные уже лежат в памяти вкладки.
    */
-  worklist: (slug: WorklistSlug) => api.get<Worklist>(`/api/${slug}/worklist`),
+  /**
+   * Рабочий список.
+   *
+   * Отбор уходит в запрос, а не делается по приезде: раньше сервер слал весь
+   * список целиком (у skstore 1,9 МБ), а браузер выбрасывал из него пять
+   * шестых — строки с истёкшим приёмом. Полный список приходит вторым
+   * запросом по кнопке «Все строки» и остаётся в кэше запросов.
+   */
+  worklist: (slug: WorklistSlug, scope: Scope = "focus") =>
+    api.get<Worklist>(`/api/${slug}/worklist?scope=${scope}`),
 
   /**
    * Откуда взялась цифра: решение, деньги, где взять, что проверить.
@@ -258,11 +328,22 @@ export const worklists = {
    * тот же код, которым считается книга, — свой расчёт в браузере разошёлся
    * бы с ней на первой же закупке.
    */
-  detail: (slug: WorklistSlug, id: string, pick = "") =>
-    api.get<Detail>(
-      `/api/${slug}/item/${encodeURIComponent(id)}` +
-        (pick ? `?pick=${encodeURIComponent(pick)}` : ""),
-    ),
+  /**
+   * Разбор одной строки.
+   *
+   * `facts` просит только сроки и предмет — этим отвечает карточка лота на
+   * «Данные закупки». Площадка, которая такого не знает, лишний параметр
+   * просто не заметит и ответит разбором целиком.
+   */
+  detail: (slug: WorklistSlug, id: string, pick = "", facts = false) => {
+    const query = new URLSearchParams();
+    if (pick) query.set("pick", pick);
+    if (facts) query.set("facts", "1");
+    const tail = query.toString();
+    return api.get<Detail>(
+      `/api/${slug}/item/${encodeURIComponent(id)}` + (tail ? `?${tail}` : ""),
+    );
+  },
 
   /**
    * Собрать лот вокруг позиции.
@@ -288,6 +369,10 @@ export const worklists = {
 
   analyze: (slug: WorklistSlug) =>
     api.post<{ job_id: string }>(`/api/${slug}/analyze`),
+
+  /** Ставит сборку книги в очередь. Скачивается она потом, обычной ссылкой. */
+  build: (slug: WorklistSlug) =>
+    api.post<{ job_id: string }>(`/api/${slug}/export`),
 
   /**
    * Остановить прогон. Разбор шестисот закупов с поиском на рынках идёт
@@ -439,6 +524,41 @@ export interface OptionFields {
   delivery_days?: number | null;
   note?: string;
 }
+
+/** Реплика обсуждения. */
+export interface Message {
+  id: string;
+  body: string;
+  author: string;
+  author_id: string;
+  created_at: string;
+  edited_at: string;
+}
+
+/**
+ * Обсуждение строки — общее для всех разделов.
+ *
+ * Раздел передаётся в адресе: своя ветка в каждом модуле означала бы четыре
+ * одинаковых набора правил о том, кто что может править.
+ */
+export const discussionApi = {
+  thread: (module: string, rowId: string) =>
+    api.get<Message[]>(
+      `/api/discussion/${module}/${encodeURIComponent(rowId)}`,
+    ),
+
+  write: (module: string, rowId: string, body: string) =>
+    api.post<Message>(
+      `/api/discussion/${module}/${encodeURIComponent(rowId)}`,
+      { body },
+    ),
+
+  edit: (messageId: string, body: string) =>
+    api.patch<Message>(`/api/discussion/messages/${messageId}`, { body }),
+
+  remove: (messageId: string) =>
+    api.delete<void>(`/api/discussion/messages/${messageId}`),
+};
 
 export const worksApi = {
   list: () => api.get<WorkListItem[]>("/api/tender/works"),

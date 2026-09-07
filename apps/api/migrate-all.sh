@@ -17,14 +17,19 @@ set -euo pipefail
 # схема означала бы, что правка в одном проекте ломает соседа.
 #
 # Четвёртое поле — чем схему поднимать. У платформы, skstore и omarket это
-# alembic; у tender-analyze миграций нет вовсе, он создаёт таблицы командой
-# `init-db`. Вызывать его alembic'ом значит молча пропустить базу и получить
-# пустой раздел тендеров — ровно то, с чего этот скрипт и начался.
+# alembic; у tender-analyze и goszakup миграций нет вовсе, они создают таблицы
+# командой `init-db`. Вызывать их alembic'ом значит молча пропустить базу и
+# получить пустой раздел — ровно то, с чего этот скрипт и начался.
+#
+# `init-db` у goszakup заодно наполняет список кодов ЕНС ТРУ. Повторный запуск
+# не возвращает коды, которые администратор выключил: иначе каждая выкатка
+# отменяла бы вчерашнее решение о номенклатуре.
 projects=(
   "платформа:/app/apps/api:PLATFORM__DB__URL:alembic"
   "tender-analyze:/app/projects/tender-analyze:TENDER__DB__URL:tender_analyze"
   "skstore:/app/projects/skstore:SKSTORE__DB__URL:alembic"
   "omarket:/app/projects/omarket:OMARKET__DB__URL:alembic"
+  "goszakup:/app/projects/goszakup:GOSZAKUP__DB__URL:goszakup"
 )
 
 # Базы создаются здесь, а не в `docker-entrypoint-initdb.d`: тот отрабатывает

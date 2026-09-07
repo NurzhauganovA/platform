@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from platform_api.auth.dependencies import MONEY, READS, names
 from platform_api.modules import ModuleSpec, NavItem
 from platform_api.modules.tender import health
 from platform_api.modules.tender.jobs import jobs
@@ -36,17 +37,25 @@ module = ModuleSpec(
         # делать: суммы и маржа ему не показываются, а без них отбор пуст.
         # «В работе» видят оба — это их общий стол.
         NavItem(
-            title="Отбор закупок",
+            title="Отбор тендеров",
             path="/tender/worklist",
+            group="Площадки",
             icon="target",
-            roles=("admin", "analyst"),
+            roles=names(*MONEY),
         ),
-        NavItem(title="В работе", path="/tender/works", icon="briefcase"),
         NavItem(
-            title="Аналитика",
+            title="Тендеры в работе",
+            path="/tender/works",
+            group="Площадки",
+            icon="briefcase",
+            roles=names(*READS),
+        ),
+        NavItem(
+            title="Аналитика тендеров",
             path="/tender/analytics",
+            group="Площадки",
             icon="chart",
-            roles=("admin", "analyst"),
+            roles=names(*MONEY),
         ),
     ),
     jobs=jobs,

@@ -38,6 +38,15 @@ class NavItem:
     удобство, а не защита. Прятать кнопку и оставлять открытым эндпоинт —
     самый распространённый способ отдать себестоимость наружу."""
 
+    group: str = ""
+    """В каком разделе меню показать. Пусто — под названием модуля.
+
+    Группировка по делу, а не по источнику данных. Человек ищет по вопросу
+    «что мне делать», а не «в какой это системе лежит»: менеджер утром
+    смотрит задачи, потом лоты, потом согласование — и раскладка по модулям
+    разносит это по трём разным местам.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class ModuleSpec:
@@ -105,14 +114,17 @@ def discover_modules() -> list[ModuleSpec]:
     молча пропускает модуль, который не установился, — а «в меню нет раздела»
     гораздо труднее связать с причиной, чем упавший импорт при запуске.
     """
+    from platform_api.modules.goszakup import module as goszakup
     from platform_api.modules.omarket import module as omarket
     from platform_api.modules.skstore import module as skstore
     from platform_api.modules.tender import module as tender
+    from platform_api.modules.work import module as work
 
-    # Порядок задаёт и порядок разделов в меню. Сверху то, с чем работают
-    # каждый день: площадки обновляются сами и требуют решения к сроку, а
-    # тендерная папка приходит по почте и ждёт, пока её откроют.
-    return [skstore, omarket, tender]
+    # Порядок задаёт и порядок разделов в меню. Сверху то, с чего начинается
+    # день: взятые в работу лоты и то, чего от нас ждут. Дальше площадки —
+    # они обновляются сами и показывают, что появилось; тендерная папка
+    # приходит по почте и ждёт, пока её откроют.
+    return [work, skstore, omarket, tender, goszakup]
 
 
 __all__ = ["ModuleRegistry", "ModuleSpec", "NavItem", "discover_modules"]

@@ -15,11 +15,20 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { auth } from "@/api/tender";
+import { auth, platform } from "@/api/tender";
 import { ApiError } from "@/api/client";
 import { AppShell } from "@/shell/AppShell";
 import { LoginPage } from "@/features/auth/LoginPage";
 import { BargainsPage } from "@/features/worklist/BargainsPage";
+import { CardPage } from "@/features/cards/CardPage";
+import { LotsPage } from "@/features/cards/LotsPage";
+import { ApprovalPage } from "@/features/cards/ApprovalPage";
+import { SubmitPage } from "@/features/cards/SubmitPage";
+import { AnalysisDesk, LegalDesk, SupplyDesk } from "@/features/cards/DeskPage";
+import { CodesPage } from "@/features/goszakup/CodesPage";
+import { GoszakupPage } from "@/features/worklist/GoszakupPage";
+import { RemarkPage } from "@/features/remarks/RemarkPage";
+import { RemarksPage } from "@/features/remarks/RemarksPage";
 import { PreordersPage } from "@/features/worklist/PreordersPage";
 import { TenderPage } from "@/features/worklist/TenderPage";
 import { WorkPage } from "@/features/works/WorkPage";
@@ -29,7 +38,7 @@ import {
   PreordersAnalytics,
   TenderAnalytics,
 } from "@/features/analytics/pages";
-import { Spinner } from "@/ui";
+import { EmptyState, Spinner } from "@/ui";
 
 const client = new QueryClient({
   defaultOptions: {
@@ -74,13 +83,24 @@ function Routing() {
   return (
     <Routes>
       <Route path="/" element={<AppShell me={me} />}>
-        <Route index element={<Navigate to="/skstore/bargains" replace />} />
+        <Route index element={<Landing />} />
         <Route path="skstore/bargains" element={<BargainsPage />} />
         <Route path="omarket/preorders" element={<PreordersPage />} />
         <Route path="tender/worklist" element={<TenderPage />} />
         <Route path="skstore/analytics" element={<BargainsAnalytics />} />
         <Route path="omarket/analytics" element={<PreordersAnalytics />} />
         <Route path="tender/analytics" element={<TenderAnalytics />} />
+        <Route path="work/lots" element={<LotsPage />} />
+        <Route path="work/lots/:id" element={<CardPage />} />
+        <Route path="work/analysis" element={<AnalysisDesk />} />
+        <Route path="work/supply" element={<SupplyDesk />} />
+        <Route path="work/legal" element={<LegalDesk />} />
+        <Route path="work/approval" element={<ApprovalPage />} />
+        <Route path="work/submit" element={<SubmitPage />} />
+        <Route path="goszakup/lots" element={<GoszakupPage />} />
+        <Route path="goszakup/codes" element={<CodesPage />} />
+        <Route path="goszakup/remarks" element={<RemarksPage />} />
+        <Route path="goszakup/remarks/:id" element={<RemarkPage />} />
         <Route path="tender/works" element={<WorksPage role={me.role} />} />
         <Route path="tender/works/:id" element={<WorkPage role={me.role} />} />
         {/*
@@ -91,13 +111,50 @@ function Routing() {
           когда они поедут через платформу.
         */}
       </Route>
-      <Route
-        path="/login"
-        element={<Navigate to="/skstore/bargains" replace />}
-      />
-      <Route path="*" element={<Navigate to="/skstore/bargains" replace />} />
+      <Route path="/login" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
+}
+
+/**
+ * Куда попадает человек, войдя.
+ *
+ * В первый доступный ему пункт меню, а не в зашитый адрес. Зашитый вёл
+ * закупщика и тендерщика в их раздел, а юриста, технолога и сборщика — в
+ * чужой, где эндпоинт отвечает отказом: человек видел пустой экран сразу
+ * после входа и не понимал, сломалось ли что-то.
+ *
+ * Меню уже в кэше запросов — оболочка запросила его для боковой панели, — так
+ * что лишнего похода в сеть тут нет.
+ */
+function Landing() {
+  const { data: modules, isLoading } = useQuery({
+    queryKey: ["modules"],
+    queryFn: platform.modules,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Spinner label="Открываем…" />
+      </div>
+    );
+  }
+
+  const first = modules?.flatMap((module) => module.nav)[0];
+  if (!first) {
+    return (
+      <div className="px-8 py-6">
+        <EmptyState
+          title="Разделов пока нет"
+          description="Вашей роли не открыт ни один раздел. Обратитесь к администратору."
+        />
+      </div>
+    );
+  }
+  return <Navigate to={first.path} replace />;
 }
 
 export default function App() {

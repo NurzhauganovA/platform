@@ -89,6 +89,8 @@ export const api = {
     request<T>(path, { method: "POST", body }),
   patch: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PATCH", body }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PUT", body }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
   /** Загрузка файла: тело — FormData, заголовок ставит браузер. */
   upload: <T>(path: string, form: FormData) =>

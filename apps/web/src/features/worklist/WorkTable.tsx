@@ -223,6 +223,7 @@ export function WorkTable({
                 {renderRow(group.rows[0])}
                 <Folded
                   rows={group.rows.slice(1)}
+                  lot={group.rows[0].lot!}
                   verdict={verdict}
                   columns={shown.length + 1}
                   onOpen={() =>
@@ -236,6 +237,7 @@ export function WorkTable({
                 {group.lot && (
                   <Unfolded
                     count={group.rows.length - 1}
+                    lot={group.rows[0].lot!}
                     columns={shown.length + 1}
                     onClose={() =>
                       setOpened((was) => {
@@ -311,6 +313,9 @@ export function WorkTable({
           {row.code || row.number}
           {row.lot && <LotMark lot={row.lot} />}
           {row.work && <WorkMark work={row.work} />}
+          {row.discussion > 0 && (
+            <Talk count={row.discussion} last={row.discussion_last} />
+          )}
         </td>
         {shown.map(({ column, index }) => (
           <td
@@ -371,11 +376,13 @@ function grouped(
  */
 function Folded({
   rows,
+  lot,
   verdict,
   columns,
   onOpen,
 }: {
   rows: WorklistRow[];
+  lot: NonNullable<WorklistRow["lot"]>;
   verdict: (tone: string) => { title: string } | undefined;
   columns: number;
   onOpen: () => void;
@@ -383,18 +390,17 @@ function Folded({
   const titles = rows
     .map((row) => row.cells.find((cell) => cell.text)?.text ?? "")
     .filter(Boolean);
-  // Итог по лоту — то, ради чего лот и собирали: позиция бывает прибыльной, а
-  // лот в минусе. Стоит в свёрнутой строке, а не только в подсказке значка:
-  // раскрывать лот ради числа, которое решает, стоит ли его раскрывать, —
-  // ровно то, от чего сворачивание и избавляет.
-  const lot = rows[0]?.lot;
+  // Итог по группе стоит в свёрнутой строке, а не только в подсказке значка:
+  // раскрывать её ради числа, которое решает, стоит ли раскрывать, — ровно
+  // то, от чего сворачивание и избавляет. Позиция бывает прибыльной, а лот
+  // целиком в минусе.
 
   return (
     <tr
       tabIndex={0}
       role="button"
       aria-expanded={false}
-      aria-label={`Показать ещё ${rows.length} ${plural(rows.length)} лота`}
+      aria-label={`Показать ещё ${rows.length} ${plural(rows.length, lot.unit)} ${lot.whole_of}`}
       onClick={onOpen}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -419,7 +425,7 @@ function Folded({
       >
         <span className="flex items-center gap-2 text-xs">
           <span className="shrink-0 font-medium text-series-1">
-            ещё {rows.length} {plural(rows.length)} лота
+            ещё {rows.length} {plural(rows.length, lot.unit)} {lot.whole_of}
           </span>
           {lot?.total != null && (
             <span className="shrink-0 tabular-nums text-ink-secondary">
@@ -461,10 +467,12 @@ function Folded({
 /** Свернуть раскрытый лот обратно. Стоит там же, где стояла строка «ещё». */
 function Unfolded({
   count,
+  lot,
   columns,
   onClose,
 }: {
   count: number;
+  lot: NonNullable<WorklistRow["lot"]>;
   columns: number;
   onClose: () => void;
 }) {
@@ -473,7 +481,7 @@ function Unfolded({
       tabIndex={0}
       role="button"
       aria-expanded
-      aria-label={`Свернуть ${count} ${plural(count)} лота`}
+      aria-label={`Свернуть ${count} ${plural(count, lot.unit)} ${lot.whole_of}`}
       onClick={onClose}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -499,7 +507,7 @@ function Unfolded({
         colSpan={columns - 1}
         className="border-b border-hairline px-2.5 py-1 text-xs text-ink-muted"
       >
-        свернуть лот
+        свернуть {lot.whole}
       </td>
     </tr>
   );
@@ -515,12 +523,39 @@ const DOTS: Record<string, string> = {
   "": "bg-hairline",
 };
 
-function plural(count: number): string {
+/**
+ * Склоняет слово, три формы которого пришли с сервера.
+ *
+ * Формы именно с сервера: у отбора группа — позиции одного лота, у
+ * госзакупок — лоты одного объявления. Зашитая здесь «позиция» подписывала
+ * бы лоты объявления словом «позиций».
+ */
+function plural(count: number, forms: [string, string, string]): string {
   const last = count % 10;
   const teen = count % 100 >= 11 && count % 100 <= 14;
-  if (!teen && last === 1) return "позиция";
-  if (!teen && last >= 2 && last <= 4) return "позиции";
-  return "позиций";
+  if (!teen && last === 1) return forms[0];
+  if (!teen && last >= 2 && last <= 4) return forms[1];
+  return forms[2];
+}
+
+/**
+ * Сколько реплик в обсуждении строки.
+ *
+ * В списке, а не только в разборе: без счётчика человек открывает каждую
+ * строку, чтобы проверить, не написал ли кто-нибудь, — и первая же проверка
+ * вхолостую отучает смотреть вовсе. Последняя реплика в подсказке: чаще
+ * всего её и хватает.
+ */
+function Talk({ count, last }: { count: number; last: string }) {
+  return (
+    <span
+      title={last ? `Последнее: ${last}` : `Реплик: ${count}`}
+      className="mt-1 flex items-center gap-1 text-[10px] leading-none font-medium text-ink-secondary"
+    >
+      <span aria-hidden>💬</span>
+      {count}
+    </span>
+  );
 }
 
 /**
@@ -540,7 +575,7 @@ function WorkMark({ work }: { work: NonNullable<WorklistRow["work"]> }) {
     <Link
       to={`/tender/works/${work.id}`}
       onClick={(event) => event.stopPropagation()}
-      title={`Взято в работу как ${work.code} — ${place}. Открыть lot.`}
+      title={`Взято в работу как ${work.code} — ${place}. Открыть карточку.`}
       className="mt-1 flex items-center gap-1 text-[10px] leading-none font-medium text-good hover:underline"
     >
       <span aria-hidden>▸</span>в работе
@@ -564,13 +599,18 @@ function LotMark({ lot }: { lot: NonNullable<WorklistRow["lot"]> }) {
       : `${loss ? "убыток" : "маржа"} по лоту ${lot.margin_percent}%`;
   return (
     <span
-      title={`Лот из ${lot.positions} позиций — ${totals}. Поставить придётся everyOpen.`}
+      title={[
+        `${capitalize(lot.whole)} из ${lot.positions} ${plural(lot.positions, lot.unit)} — ${totals}`,
+        lot.hint,
+      ]
+        .filter(Boolean)
+        .join(". ")}
       className={cx(
         "mt-1 flex items-center gap-1 text-[10px] leading-none font-medium",
         loss ? "text-critical" : "text-ink-muted",
       )}
     >
-      {/* Звено цепи: знак связи, а не оценки. Оценку несёт colour и подпись. */}
+      {/* Звено цепи: знак связи, а не оценки. Оценку несёт цвет и подпись. */}
       <span aria-hidden>⛓</span>
       {lot.positions}
     </span>
@@ -698,4 +738,9 @@ function compare(left?: WorklistCell, right?: WorklistCell): number {
 
 function isEmpty(cell?: WorklistCell): boolean {
   return !cell || (cell.number == null && !cell.text);
+}
+
+/** «объявление» → «Объявление». Подсказка начинается с большой буквы. */
+function capitalize(word: string): string {
+  return word ? word[0].toUpperCase() + word.slice(1) : word;
 }

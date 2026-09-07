@@ -196,9 +196,40 @@ def analyze(ctx: JobContext, *, search_market: bool = True, **_: Any) -> dict[st
     }
 
 
+def export(ctx: JobContext, **_: Any) -> dict[str, Any]:
+    """Собирает книгу Excel — ту же, что делает `skstore export`.
+
+    Задачей, а не в обработчике запроса. Тысяча с лишним закупов занимают
+    процессор целиком: в тишине это около десяти секунд, но процесс API один,
+    и под нагрузкой время растёт вместе с очередью — замер под открытыми
+    разделами дал 156 секунд. Браузер к тому моменту запрос бросал, а сервер
+    его всё равно досчитывал, задерживая соседние разделы.
+
+    Денег не стоит: обогащение выключено, книга собирается из того, что уже
+    посчитано. За свежие числа отвечает «Пересчитать».
+    """
+    from platform_api.modules.skstore.core import export_workbook
+
+    ctx.advance(0, total=1, note="собираем книгу")
+    path = export_workbook()
+    ctx.advance(1, note="книга готова")
+    return {"file": path.name, "cost_usd": 0.0}
+
+
 jobs = (
-    JobSpec(kind="sync", handler=sync_sources, title="Обновление данных с площадки"),
+    # Раз в час, на пятой минуте. Выгрузка бесплатна, а закупы на площадке
+    # живут днями: пропущенный час — это закуп, который увидели уже с
+    # истёкшим приёмом. Пересчёт рядом расписания не имеет намеренно: он
+    # ходит в модель за деньги, и запускать его должен человек.
+    JobSpec(
+        kind="sync",
+        handler=sync_sources,
+        title="Обновление данных с площадки",
+        every_hours=1,
+        at_minute=5,
+    ),
     JobSpec(kind="analyze", handler=analyze, title="Расчёт себестоимости и маржи"),
+    JobSpec(kind="export", handler=export, title="Сборка книги Excel"),
 )
 
 __all__ = ["jobs"]

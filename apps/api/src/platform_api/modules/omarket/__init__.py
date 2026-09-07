@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from platform_api.auth.dependencies import READS, names
 from platform_api.modules import ModuleSpec, NavItem
 from platform_api.modules.omarket import health
 from platform_api.modules.omarket.jobs import jobs
@@ -28,8 +29,20 @@ module = ModuleSpec(
     description="Предзаказы OMarket.kz: себестоимость, маржа и что успеть сегодня",
     router=router,
     nav=(
-        NavItem(title="Предзаказы", path="/omarket/preorders", icon="table"),
-        NavItem(title="Аналитика", path="/omarket/analytics", icon="chart"),
+        NavItem(
+            title="Предзаказы OMarket",
+            path="/omarket/preorders",
+            icon="table",
+            roles=names(*READS),
+            group="Площадки",
+        ),
+        NavItem(
+            title="Аналитика предзаказов",
+            path="/omarket/analytics",
+            icon="chart",
+            roles=names(*READS),
+            group="Площадки",
+        ),
     ),
     jobs=jobs,
     health=health.check,

@@ -49,7 +49,7 @@ type ButtonProps = {
   children: ReactNode;
   onClick?: () => void;
   type?: "button" | "submit";
-  variant?: "primary" | "secondary" | "ghost" | "danger";
+  variant?: "primary" | "secondary" | "accent" | "ghost" | "danger";
   disabled?: boolean;
   className?: string;
   /** Подсказка при наведении. Слово на кнопке короткое по необходимости,
@@ -69,6 +69,10 @@ export function Button({
   const styles = {
     primary: "bg-series-1 text-white hover:opacity-90",
     secondary: "border border-baseline text-ink hover:bg-plane",
+    // Второе действие рядом с главным: цвет тот же, заливки нет. Две залитые
+    // кнопки подряд спорят за нажатие, а серая рядом с синей читается как
+    // отключённая. Слово на кнопке несёт смысл само — цвет только поддержка.
+    accent: "border border-series-1 text-series-1 hover:bg-series-1/10",
     ghost: "text-ink-secondary hover:bg-plane",
     danger: "border border-critical text-critical hover:bg-critical/10",
   }[variant];
@@ -311,4 +315,273 @@ export function bytes(value: number): string {
   if (value < 1024) return `${value} Б`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} КБ`;
   return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+// --- строение экрана ------------------------------------------------------
+
+/**
+ * Тело страницы под шапкой.
+ *
+ * Называется `Page`, а не `Screen`: `Screen` — это глобальный тип браузера, и
+ * забытый импорт не ломает сборку, а молча подставляет его. Ошибка выглядит
+ * как «компонент нельзя использовать в JSX» и ищется долго.
+ *
+ * Отступы заданы здесь, а не на каждом экране. Разъезжались они молча: на
+ * одном `px-8 py-6`, на соседнем `p-6`, и переход между разделами выглядел
+ * как переход между двумя разными программами.
+ */
+export function Page({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return <div className={cx("space-y-4 px-8 py-6", className)}>{children}</div>;
+}
+
+/**
+ * Полоса вкладок со счётчиками.
+ *
+ * Повторялась на пяти экранах слово в слово. Вынесена не ради экономии строк,
+ * а потому что каждая копия успела разойтись: где-то счётчик приглушён,
+ * где-то нет, где-то другой радиус — и одинаковые по смыслу экраны выглядели
+ * сделанными разными людьми.
+ */
+export function Tabs<T extends string>({
+  tabs,
+  value,
+  counts,
+  onChange,
+  label = "Отбор",
+}: {
+  tabs: { key: T; title: string }[];
+  value: T;
+  /**
+   * Счётчики по ключу вкладки. Тип нарочно свободный: `Partial<Record<T, …>>`
+   * — недружелюбное для вывода место, из-за него `T` схлопывался до `string`,
+   * и `onChange` переставал принимать типизированный обработчик.
+   */
+  counts?: Record<string, number>;
+  /**
+   * Обработчик исключён из вывода типа (`NoInfer`).
+   *
+   * Без этого `setTab` из `useState` ломал вывод: его тип
+   * `Dispatch<SetStateAction<Tab>>` даёт кандидата `Tab | ((prev) => Tab)`, а
+   * ограничение `T extends string` схлопывает такой союз до `string`. Ошибка
+   * читается как «нельзя присвоить обработчик» и указывает не туда: тип
+   * вкладок при этом объявлен верно.
+   */
+  onChange: (next: NoInfer<T>) => void;
+  label?: string;
+}) {
+  return (
+    <nav className="flex flex-wrap gap-0.5" aria-label={label}>
+      {tabs.map((tab) => {
+        const on = tab.key === value;
+        const count = counts?.[tab.key] ?? 0;
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            aria-current={on ? "page" : undefined}
+            onClick={() => onChange(tab.key)}
+            className={cx(
+              "rounded-[8px] px-3 py-1.5 text-sm transition",
+              on ? "bg-ink text-surface" : "text-ink-secondary hover:bg-plane",
+            )}
+          >
+            {tab.title}
+            {count > 0 && (
+              <span
+                className={cx(
+                  "ml-1.5 tabular-nums",
+                  on ? "opacity-70" : "text-ink-muted",
+                )}
+              >
+                {count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** Поле поиска. Одна ширина и одна высота на всю платформу. */
+export function Search({
+  value,
+  onChange,
+  placeholder = "Поиск",
+  className,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  return (
+    <input
+      type="search"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className={cx(
+        // Рамка `baseline`, а не `hairline`: то же, что у `Input`. Светлая
+        // разделительная рамка на поле ввода делает его неотличимым от
+        // подложки — человек не понимает, куда щёлкать.
+        "h-8 w-56 rounded-[8px] border border-baseline bg-surface px-3",
+        "text-sm text-ink placeholder:text-ink-muted",
+        "focus:border-series-1 focus:outline-none",
+        className,
+      )}
+    />
+  );
+}
+
+/**
+ * Выпадающий список отбора.
+ *
+ * Сработавший обведён рамкой цвета ряда. Без этого о включённом фильтре
+ * забывают, и «а где мой лот» становится ежедневным вопросом.
+ */
+export function Choice({
+  value,
+  onChange,
+  options,
+  className,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  options: [string, string][];
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className={cx(
+        "h-8 max-w-48 rounded-[8px] border bg-surface px-2 text-sm text-ink",
+        "focus:border-series-1 focus:outline-none",
+        value ? "border-series-1" : "border-baseline",
+        className,
+      )}
+    >
+      {options.map(([key, title]) => (
+        <option key={key} value={key}>
+          {title}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * Остаток времени словами.
+ *
+ * Просроченное и горящее выглядят по-разному, а не оттенками одного: по
+ * первому делать уже поздно, по второму ещё успеть, и это разные действия.
+ * Цифра моноширинная — колонку сроков просматривают сверху вниз.
+ */
+export function Left({
+  text,
+  burning,
+  overdue,
+  strike = "срок прошёл",
+}: {
+  text: string;
+  burning?: boolean;
+  overdue?: boolean;
+  strike?: string;
+}) {
+  if (!text) return <span className="text-sm text-ink-muted">—</span>;
+  if (overdue) {
+    return (
+      <span className="text-sm text-ink-muted line-through decoration-baseline">
+        {strike}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cx(
+        "text-sm tabular-nums whitespace-nowrap",
+        burning ? "font-semibold text-critical" : "text-ink-secondary",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
+/** Устойчивый код строки: моноширинный и приглушённый — его читают, не ищут. */
+export function Code({ children }: { children: ReactNode }) {
+  return <span className="font-mono text-xs text-ink-muted">{children}</span>;
+}
+
+/**
+ * Две строки в одной ячейке: главное и уточнение.
+ *
+ * Заказчик под названием закупки, лот под задачей. Обе обрезаются по ширине
+ * колонки — перенос ломает высоту строки, и таблица перестаёт просматриваться
+ * взглядом.
+ */
+export function Pair({ top, bottom }: { top: ReactNode; bottom?: ReactNode }) {
+  return (
+    <span className="min-w-0">
+      <span className="block truncate text-sm text-ink">{top}</span>
+      {bottom ? (
+        <span className="mt-0.5 block truncate text-xs text-ink-muted">
+          {bottom}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * Переключатель из двух-трёх положений.
+ *
+ * Выбранное отмечено не только цветом: `aria-pressed` читается озвучкой, а
+ * фон подкреплён жирностью — при дальтонизме одна заливка неразличима.
+ *
+ * Жил внутри рабочего списка, пока не понадобился доске. Копия разошлась бы с
+ * оригиналом на первой же правке — так уже случилось с полосой вкладок.
+ */
+export function Switch<T extends string>({
+  value,
+  onChange,
+  options,
+  label,
+}: {
+  value: T;
+  onChange: (next: NoInfer<T>) => void;
+  options: { value: T; title: string }[];
+  label?: string;
+}) {
+  return (
+    <div
+      className="flex rounded-[8px] border border-baseline p-0.5"
+      role="group"
+      aria-label={label}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          aria-pressed={value === option.value}
+          className={cx(
+            "rounded-[6px] px-2.5 py-1 text-xs transition",
+            value === option.value
+              ? "bg-series-1/10 font-semibold text-series-1"
+              : "font-medium text-ink-secondary hover:text-ink",
+          )}
+        >
+          {option.title}
+        </button>
+      ))}
+    </div>
+  );
 }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
@@ -13,9 +13,18 @@ from platform_api.config import Settings
 from platform_api.errors import broke, unavailable
 from platform_api.jobs import JobService
 from platform_api.jobs.worker import enqueue_sync
+from platform_api.modules import codes
 from platform_api.modules.detail import for_role
 from platform_api.modules.omarket import core
-from platform_api.modules.omarket.columns import COMPACT, ESSENTIAL, POLICY, ROLES
+from platform_api.modules.omarket.columns import (
+    CODE_PREFIX,
+    CODE_SEPARATOR,
+    CODE_WIDTH,
+    COMPACT,
+    ESSENTIAL,
+    POLICY,
+    ROLES,
+)
 from platform_api.modules.omarket.health import check as check_health
 from platform_api.modules.omarket.schemas import ModuleHealth
 from platform_api.modules.schemas import (
@@ -23,8 +32,10 @@ from platform_api.modules.schemas import (
     DetailOut,
     LegendItem,
     RowOut,
+    Scope,
     StartedJobOut,
     WorklistOut,
+    in_scope,
 )
 from platform_api.modules.table import build_table, sees_money
 
@@ -44,6 +55,8 @@ def get_health() -> ModuleHealth:
 @router.get("/worklist", summary="Рабочий список предзаказов")
 def get_worklist(
     identity: CurrentUser,
+    db: Db,
+    scope: Scope = "focus",
     _guard: Annotated[None, requires_read] = None,
 ) -> WorklistOut:
     """Предзаказы так же, как их показывает лист «Фокус (что смотреть)».
@@ -80,6 +93,10 @@ def get_worklist(
     )
     money = sees_money(identity.role)
 
+    # Собранные строки нужны дважды: отобранные уезжают, полное число
+    # показывается плиткой «Показано 28 из 184».
+    _ready = _with_codes(db, table.rows)
+
     return WorklistOut(
         sheet=core.sheet_title(),
         legend=[
@@ -92,7 +109,8 @@ def get_worklist(
         # это обещание, которого раздел не выполнит.
         actions=["sync"] + (["analyze", "export"] if money else []),
         columns=[ColumnOut.model_validate(asdict(item)) for item in table.columns],
-        rows=[RowOut.model_validate(asdict(row)) for row in table.rows],
+        rows=in_scope(_ready, scope),
+        rows_total=len(_ready),
         hidden_columns=table.hidden_columns,
         total=data.total,
         shown=data.focused,
@@ -220,3 +238,28 @@ def export(
 
 
 __all__ = ["router"]
+
+
+def _with_codes(db: Db, rows: Any) -> list[RowOut]:
+    """Дописывает строкам постоянный код «OM000001».
+
+    Порядковый номер для этого не годится: список пересобирается при каждой
+    выгрузке, и «сорок вторая» у собеседника уже другая строка. Код выдаётся
+    один раз и остаётся при позиции.
+
+    Одним запросом на весь список: строк сотни, и обращение на каждую
+    превратило бы открытие страницы в сотни обходов базы.
+    """
+    ready = [RowOut.model_validate(asdict(row)) for row in rows]
+    issued = codes.assign(
+        db,
+        "omarket",
+        CODE_PREFIX,
+        [row.id for row in ready if row.id],
+        width=CODE_WIDTH,
+        separator=CODE_SEPARATOR,
+    )
+    db.commit()
+    for row in ready:
+        row.code = issued.get(row.id, "")
+    return ready

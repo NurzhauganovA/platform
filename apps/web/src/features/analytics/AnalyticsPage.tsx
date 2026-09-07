@@ -20,7 +20,7 @@ import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { worklists, type WorklistSlug } from "@/api/worklist";
 import { PageHeader } from "@/shell/AppShell";
-import { Card, Spinner, cx, money } from "@/ui";
+import { Card, EmptyState, Page, Spinner, cx, money } from "@/ui";
 import {
   defaultSlice,
   indexOfRole,
@@ -39,9 +39,12 @@ export function AnalyticsPage({
   const [params, setParams] = useSearchParams();
   const [scope, setScope] = useState<"focus" | "all">("focus");
 
+  // Тот же ключ, что у рабочего списка: переход между списком и аналитикой
+  // раздела не должен тянуть по сети то, что уже лежит в кэше вкладки.
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: [slug, "worklist"],
-    queryFn: () => worklists.worklist(slug),
+    queryKey: [slug, "worklist", scope],
+    queryFn: () => worklists.worklist(slug, scope),
+    placeholderData: (previous) => previous,
   });
 
   const cuts = useMemo(() => (data ? sliceable(data) : []), [data]);
@@ -52,10 +55,8 @@ export function AnalyticsPage({
     setParams(next, { replace: true });
   };
 
-  const rows = useMemo(
-    () => (data ? data.rows.filter((row) => scope === "all" || row.focus) : []),
-    [data, scope],
-  );
+  // Отбор по области делает сервер — он и присылает только нужное.
+  const rows = useMemo(() => data?.rows ?? [], [data]);
 
   const cut = useMemo(
     () => (data && by ? slices(data, rows, by) : []),
@@ -89,7 +90,7 @@ export function AnalyticsPage({
         }
       />
 
-      <div className="space-y-4 px-8 py-6">
+      <Page>
         {isLoading && (
           <Card className="px-5 py-10">
             <Spinner label="Считаем…" />
@@ -97,13 +98,13 @@ export function AnalyticsPage({
         )}
 
         {isError && (
-          <Card className="px-5 py-10 text-center">
-            <p className="text-sm font-medium text-ink">
-              Данные пока недоступны
-            </p>
-            <p className="mt-1 text-sm text-ink-muted">
-              {error instanceof Error ? error.message : "Попробуйте позже"}
-            </p>
+          <Card>
+            <EmptyState
+              title="Данные пока недоступны"
+              description={
+                error instanceof Error ? error.message : "Попробуйте позже"
+              }
+            />
           </Card>
         )}
 
@@ -119,10 +120,13 @@ export function AnalyticsPage({
                       onClick={() => setBy(column.key)}
                       aria-pressed={column.key === by}
                       className={cx(
-                        "rounded-full border px-3 py-1 text-xs transition",
+                        // Тот же вид, что у вкладок на остальных экранах:
+                        // одно и то же действие не должно выглядеть на
+                        // каждой странице по-своему.
+                        "rounded-[8px] px-3 py-1.5 text-sm transition",
                         column.key === by
-                          ? "border-series-1 bg-series-1/10 font-semibold text-series-1"
-                          : "border-hairline font-medium text-ink-secondary hover:border-baseline hover:text-ink",
+                          ? "bg-ink text-surface"
+                          : "text-ink-secondary hover:bg-plane",
                       )}
                     >
                       {column.title}
@@ -140,7 +144,7 @@ export function AnalyticsPage({
             </Card>
           </>
         )}
-      </div>
+      </Page>
     </>
   );
 }

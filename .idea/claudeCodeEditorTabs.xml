@@ -1,20 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ClaudeCodeEditorTabs">
-    <option name="activeSessionId" value="a2efcf16-f5eb-4f41-a2c6-3184f9c8f1d4" />
+    <option name="activeSessionId" value="89434e81-5be3-40ba-87c2-02713c23c190" />
     <option name="openSessionIds">
       <list>
-        <option value="a2efcf16-f5eb-4f41-a2c6-3184f9c8f1d4" />
+        <option value="2c17f702-82e6-4846-9654-a8f481a89d1d" />
+        <option value="89434e81-5be3-40ba-87c2-02713c23c190" />
       </list>
     </option>
     <option name="sessionPaths">
       <map>
-        <entry key="a2efcf16-f5eb-4f41-a2c6-3184f9c8f1d4" value="/sessions/2107f808-4c79-414d-a657-fe6e3d5f8a7b" />
+        <entry key="2c17f702-82e6-4846-9654-a8f481a89d1d" value="/sessions/2107f808-4c79-414d-a657-fe6e3d5f8a7b" />
+        <entry key="89434e81-5be3-40ba-87c2-02713c23c190" value="/sessions/ab4be8f4-803c-4dd6-a994-80fff5d6b8be" />
       </map>
     </option>
     <option name="sessionTitles">
       <map>
-        <entry key="a2efcf16-f5eb-4f41-a2c6-3184f9c8f1d4" value="Изучи полностью мой проект. Здесь должен быть плат" />
+        <entry key="2c17f702-82e6-4846-9654-a8f481a89d1d" value="Изучи полностью мой проект. Здесь должен быть плат" />
+        <entry key="89434e81-5be3-40ba-87c2-02713c23c190" value="$USER_HOME$/Downloads/Приложение 1. Планировка жил" />
       </map>
     </option>
   </component>

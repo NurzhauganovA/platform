@@ -38,7 +38,15 @@ WIDTH = 5
 сортировались как текст."""
 
 
-def assign(db: DbSession, module: str, prefix: str, keys: Sequence[str]) -> dict[str, str]:
+def assign(
+    db: DbSession,
+    module: str,
+    prefix: str,
+    keys: Sequence[str],
+    *,
+    width: int = WIDTH,
+    separator: str = "-",
+) -> dict[str, str]:
     """Коды перечисленных строк. Кому не хватало — выдаёт новые.
 
     Одним запросом на весь список, а не по строке: строк восемьсот, и
@@ -51,7 +59,10 @@ def assign(db: DbSession, module: str, prefix: str, keys: Sequence[str]) -> dict
     issued_codes = _known(db, module, keys)
     fresh = [key for key in dict.fromkeys(keys) if key not in issued_codes]
     if not fresh:
-        return {code: _format(prefix, code_number) for code, code_number in issued_codes.items()}
+        return {
+            code: _format(prefix, code_number, width, separator)
+            for code, code_number in issued_codes.items()
+        }
 
     next_one = _next_number(db, module)
     db.execute(
@@ -70,7 +81,7 @@ def assign(db: DbSession, module: str, prefix: str, keys: Sequence[str]) -> dict
     logger.info("Выданы коды строк", module=module, added=len(fresh))
 
     issued_codes = _known(db, module, keys)
-    return {key: _format(prefix, number) for key, number in issued_codes.items()}
+    return {key: _format(prefix, number, width, separator) for key, number in issued_codes.items()}
 
 
 def _known(db: DbSession, module: str, keys: Sequence[str]) -> dict[str, int]:
@@ -96,8 +107,15 @@ def _next_number(db: DbSession, module: str) -> int:
     return (best or 0) + 1
 
 
-def _format(prefix: str, number: int) -> str:
-    return f"{prefix}-{number:0{WIDTH}d}"
+def _format(prefix: str, number: int, width: int, separator: str) -> str:
+    """Код строки.
+
+    Вид у разделов разный намеренно. Тендерная приставка «TN-00042» выдана
+    давно, ею закупки называют вслух и в переписке, и менять её форму значило
+    бы разослать всем новые имена для того же самого. У порталов вид свой —
+    «GZ000001»: они заводятся сейчас, и как их назвать, решается один раз.
+    """
+    return f"{prefix}{separator}{number:0{width}d}"
 
 
 __all__ = ["WIDTH", "assign"]

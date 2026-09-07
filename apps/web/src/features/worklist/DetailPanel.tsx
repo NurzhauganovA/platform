@@ -27,6 +27,8 @@ import {
 import { Badge, Button, Spinner, cx, money } from "@/ui";
 import { formatValue } from "./format";
 import { GLYPH, GLYPH_COLOR } from "./verdicts";
+import { RemarkStart } from "./RemarkStart";
+import { TakeToWork } from "./TakeToWork";
 import { FileViewer } from "./FileViewer";
 import { MIN_WIDTH, maxWidth, usePanelWidth } from "./usePanelWidth";
 
@@ -41,6 +43,7 @@ export function DetailPanel({
   slug,
   id,
   work,
+  facts = false,
   onClose,
   onOpen,
 }: {
@@ -48,6 +51,16 @@ export function DetailPanel({
   id: string;
   /** Взята ли эта строка в работу. Приходит из списка: там она уже есть. */
   work: RowWork | null;
+  /**
+   * Только сведения о закупке: до «Что покупают» включительно.
+   *
+   * Из карточки лота панель открывают кнопкой «Данные закупки» — за ответом на
+   * вопрос «что это вообще за закупка». Спецификация, документы, соседние лоты
+   * и «взять в работу» там уже есть своими блоками и вкладками, и второй раз
+   * они не нужны: человек нажимал «взять» на уже взятом и заводил обсуждение с
+   * той стороны, где его не ждут.
+   */
+  facts?: boolean;
   onClose: () => void;
   /** Открыть другую строку — переключение между позициями лота. */
   onOpen: (id: string) => void;
@@ -67,8 +80,10 @@ export function DetailPanel({
   useEffect(() => setDocument(null), [id]);
 
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: [slug, "detail", id, pick],
-    queryFn: () => worklists.detail(slug, id, pick),
+    // Режим в ключе: сведения и полный разбор — разные ответы, и общий ключ
+    // отдал бы карточке урезанный разбор из кэша «Лотов портала».
+    queryKey: [slug, "detail", id, pick, facts],
+    queryFn: () => worklists.detail(slug, id, pick, facts),
     // Прошлый расчёт остаётся на экране, пока считается новый: иначе панель
     // мигает пустотой на каждый выбор поставщика.
     placeholderData: (previous) => previous,
@@ -98,7 +113,7 @@ export function DetailPanel({
       />
       <aside
         role="dialog"
-        aria-label="Разбор"
+        aria-label={facts ? "Данные закупки" : "Разбор"}
         style={{ width: panel.width, maxWidth: "100vw" }}
         className={cx(
           "fixed top-0 right-0 z-50 flex h-full flex-col border-l border-hairline bg-surface shadow-2xl",
@@ -126,7 +141,7 @@ export function DetailPanel({
                   модель и характеристики: «…LBE-M5-23; 5,15-5,87 ГГц». Ради
                   них разбор и открывают, а троеточие прячет ровно их. */}
               <h2 className="text-base leading-snug font-semibold break-words text-ink">
-                {data?.title ?? "Разбор"}
+                {data?.title ?? (facts ? "Данные закупки" : "Разбор")}
               </h2>
             </div>
             {data?.subtitle && (
@@ -202,7 +217,7 @@ export function DetailPanel({
                   onDone={refresh}
                 />
               )}
-              {data.sections.map((section) => (
+              {shown(data.sections, facts).map((section) => (
                 <SectionBlock
                   key={section.title}
                   section={hide(section)}
@@ -211,7 +226,33 @@ export function DetailPanel({
                   busy={isFetching}
                 />
               ))}
-              {data.hidden_sections > 0 && (
+              {/* Действия по лоту — строкой настоящих кнопок под разбором.
+                  Полосами во всю ширину они терялись среди разделов: та же
+                  рамка, тот же цвет, и человек их не нажимал. Взять в работу
+                  идёт первым: это решение о лоте целиком, а обсуждение — один
+                  из шагов внутри него. Кнопки нет там, где сервер не дал
+                  ключа. */}
+              {!facts && (data.take || data.remark_key) && (
+                <div className="flex flex-wrap items-center gap-2 border-t border-hairline pt-4">
+                  {data.take && (
+                    <TakeToWork
+                      module={data.take.module}
+                      rowId={data.take.row_id}
+                      code={data.take.code}
+                      sourceNumber={data.take.source_number}
+                      title={data.take.title}
+                      customer={data.take.customer}
+                      amount={data.take.amount}
+                      enstruCode={data.take.enstru_code}
+                      deadline={data.take.deadline}
+                    />
+                  )}
+                  {data.remark_key && (
+                    <RemarkStart lotNumber={data.remark_key} />
+                  )}
+                </div>
+              )}
+              {!facts && data.hidden_sections > 0 && (
                 <p className="border-t border-hairline pt-4 text-xs text-ink-muted">
                   Ещё {data.hidden_sections}{" "}
                   {data.hidden_sections === 1 ? "раздел" : "раздела"} с
@@ -292,7 +333,14 @@ function ResizeHandle({ panel }: { panel: ReturnType<typeof usePanelWidth> }) {
   );
 }
 
-function SectionBlock({
+/**
+ * Раздел разбора: поля и таблица под заголовком.
+ *
+ * Вынесен наружу, потому что тот же разбор показывается на карточке лота.
+ * Пересобрать его там значило бы завести второй способ рисовать одни и те же
+ * данные — и разошлись бы они на первом же новом поле.
+ */
+export function SectionBlock({
   section,
   onPick,
   onOpenFile,
@@ -868,6 +916,23 @@ function TakeIntoWork({
       </Button>
     </div>
   );
+}
+
+/** Докуда режется панель в режиме сведений. */
+const FACTS_LAST = "Что покупают";
+
+/**
+ * Какие разделы показать.
+ *
+ * В режиме сведений — по «Что покупают» включительно. Резать по названию, а не
+ * по числу разделов: у площадок их разное количество, а «Что покупают» есть
+ * у всех и всегда стоит вторым. Названия такого нет — показываем всё: пустая
+ * панель хуже лишнего раздела.
+ */
+function shown(sections: DetailSection[], facts: boolean): DetailSection[] {
+  if (!facts) return sections;
+  const at = sections.findIndex((section) => section.title === FACTS_LAST);
+  return at === -1 ? sections : sections.slice(0, at + 1);
 }
 
 /** Поля разбора, которые на экране не нужны. */

@@ -45,6 +45,13 @@ POLICY: dict[str, Visibility] = {
 }
 
 CODE_PREFIX = "OM"
+CODE_WIDTH = 6
+CODE_SEPARATOR = ""
+"""Вид устойчивого кода: «OM000001».
+
+Без разделителя и в шесть знаков. У тендеров вид другой («TN-00042»): та
+приставка выдана давно, ею закупки называют вслух и в переписке, и менять её
+форму значило бы разослать всем новые имена для того же самого."""
 """Приставка постоянных кодов предзаказов OMarket: «OM-00042».
 
 Своя у каждого раздела: впереди Mitwork и госзакупки, и «сорок вторая» без
@@ -104,4 +111,4 @@ COMPACT: frozenset[str] = frozenset({"Где купить"})
 туда.
 """
 
-__all__ = ["CODE_PREFIX", "COMPACT", "ESSENTIAL", "POLICY"]
+__all__ = ["CODE_PREFIX", "CODE_SEPARATOR", "CODE_WIDTH", "COMPACT", "ESSENTIAL", "POLICY"]

@@ -25,7 +25,18 @@ import {
 } from "@/api/worklist";
 import type { Job } from "@/api/tender";
 import { PageHeader } from "@/shell/AppShell";
-import { Button, Card, Progress, Spinner, StatTile, cx, money } from "@/ui";
+import {
+  Button,
+  Card,
+  Page,
+  Progress,
+  Search,
+  Spinner,
+  StatTile,
+  Switch,
+  cx,
+  money,
+} from "@/ui";
 import { DetailPanel } from "./DetailPanel";
 import { WorkTable } from "./WorkTable";
 import { GLYPH, GLYPH_COLOR } from "./verdicts";
@@ -41,49 +52,9 @@ import {
   type Filterable,
   type FilterState,
 } from "./filters";
+import { useJobStream } from "@/api/jobs";
 import { summarise, type Tile } from "./summary";
 import { TZ } from "./format";
-
-/** Живой прогресс задачи. За минуты связь рвётся, и поток восстанавливается сам. */
-function useJobStream(jobId: string | null, onDone: () => void) {
-  const [job, setJob] = useState<Job | null>(null);
-  const finished = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!jobId) return;
-    setJob(null);
-    finished.current = null;
-
-    const source = new EventSource(`/api/jobs/${jobId}/stream`, {
-      withCredentials: true,
-    });
-    source.onmessage = (event) => {
-      const data = JSON.parse(event.data) as Partial<Job>;
-      setJob(
-        (current) =>
-          ({ ...(current ?? ({ id: jobId } as Job)), ...data }) as Job,
-      );
-
-      if (
-        data.status &&
-        ["succeeded", "failed", "cancelled"].includes(data.status)
-      ) {
-        source.close();
-        if (finished.current !== data.status) {
-          finished.current = data.status;
-          onDone();
-        }
-      }
-    };
-    source.onerror = () => source.close();
-    return () => source.close();
-    // `onDone` намеренно не в зависимостях: он пересоздаётся на каждом
-    // рендере, и поток пересоздавался бы вместе с ним — прогресс мигал бы.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
-
-  return job;
-}
 
 export function WorklistPage({
   slug,
@@ -140,16 +111,22 @@ export function WorklistPage({
   const setFilterFor = (key: string, next: ColumnFilter | null) =>
     update(writeFilter(key, next));
 
+  // Отбор в ключе запроса: «Все строки» — это другой ответ, а не другой
+  // отбор по тому же. Оба остаются в кэше, и переключение туда-обратно уже
+  // ничего не стоит.
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: [slug, "worklist"],
-    queryFn: () => worklists.worklist(slug),
+    queryKey: [slug, "worklist", scope],
+    queryFn: () => worklists.worklist(slug, scope),
+    // Пока едет полный список, показываем отобранный: иначе на месте таблицы
+    // на секунду появляется пустой экран, и это читается как поломка.
+    placeholderData: (previous) => previous,
   });
 
   const refresh = () => {
     client.invalidateQueries({ queryKey: [slug] });
   };
 
-  const job = useJobStream(jobId, refresh);
+  const job = useJobStream<Job>(jobId, refresh);
   const running = job?.status === "queued" || job?.status === "running";
 
   const sync = useMutation({
@@ -162,9 +139,25 @@ export function WorklistPage({
     onSuccess: (started) => setJobId(started.job_id),
   });
 
+  const build = useMutation({
+    mutationFn: () => worklists.build(slug),
+    onSuccess: (started) => setJobId(started.job_id),
+  });
+
   const stop = useMutation({
     mutationFn: () => worklists.cancel(jobId ?? ""),
   });
+
+  // Книга собралась — скачиваем сразу, не заставляя нажимать второй раз.
+  // Для человека это одно действие: он нажал «Скачать Excel» и получил файл,
+  // просто ожидание стало видимым вместо замершего браузера.
+  const taken = useRef<string | null>(null);
+  useEffect(() => {
+    if (!job || job.kind !== "export" || job.status !== "succeeded") return;
+    if (taken.current === job.id) return;
+    taken.current = job.id;
+    window.location.href = worklists.exportUrl(slug);
+  }, [job, slug]);
 
   // Что показывать, решает сервер. Кнопки приходят списком: у тендерного
   // отбора нет ни обновления, ни пересчёта — папки разбирают на машине
@@ -179,17 +172,18 @@ export function WorklistPage({
   // итог снизу. Посчитай его в трёх местах — и однажды они разойдутся.
   const inScope = useMemo(() => {
     const needle = filter.trim().toLowerCase();
+    // Отбор по области делает сервер: он и присылает только нужное. Здесь
+    // остался поиск по строке.
     return (data?.rows ?? []).filter(
       (row) =>
-        (scope === "all" || row.focus) &&
-        (!needle ||
-          // По коду: его называют вслух и присылают в переписке, целиком
-          // («TN-00042») или одними цифрами («42»).
-          row.code.toLowerCase().includes(needle) ||
-          row.code.replace(/^\D+0*/, "") === needle ||
-          row.cells.some((cell) => cell.text.toLowerCase().includes(needle))),
+        !needle ||
+        // По коду: его называют вслух и присылают в переписке, целиком
+        // («TN-00042») или одними цифрами («42»).
+        row.code.toLowerCase().includes(needle) ||
+        row.code.replace(/^\D+0*/, "") === needle ||
+        row.cells.some((cell) => cell.text.toLowerCase().includes(needle)),
     );
-  }, [data?.rows, filter, scope]);
+  }, [data?.rows, filter]);
 
   // Порядок отбора: поиск и область, потом цвет, потом колонки. Каждый
   // счётчик считается по всему, кроме себя самого, — иначе выбранное значение
@@ -282,11 +276,21 @@ export function WorklistPage({
                 <Button>Скачать Excel</Button>
               </a>
             )}
+            {can("build") && (
+              <Button
+                onClick={() => build.mutate()}
+                disabled={running || build.isPending}
+              >
+                {running && job?.kind === "export"
+                  ? "Собираем книгу…"
+                  : "Скачать Excel"}
+              </Button>
+            )}
           </div>
         }
       />
 
-      <div className="space-y-4 px-8 py-6">
+      <Page>
         {job && running && (
           <Card className="px-5 py-3.5">
             <div className="flex items-center justify-between gap-4">
@@ -336,11 +340,12 @@ export function WorklistPage({
           <Tiles
             tiles={summarise({
               rows: visible,
-              total: data.rows.length,
+              total: data.rows_total,
               columns: data.columns,
               unit,
               goodLabel:
                 data.legend.find((item) => item.tone === "good")?.title ?? "",
+              urgentHours: data.urgent_hours,
             })}
           />
         )}
@@ -371,11 +376,11 @@ export function WorklistPage({
           }
           action={
             <div className="flex items-center gap-2">
-              <input
+              <Search
                 value={filter}
-                onChange={(event) => setFilter(event.target.value)}
-                placeholder="Найти по коду, названию или заказчику…"
-                className="w-64 rounded-[8px] border border-baseline bg-surface px-3 py-1.5 text-sm text-ink placeholder:text-ink-muted"
+                onChange={setFilter}
+                placeholder="Код, название, заказчик"
+                className="w-64"
               />
               <Switch<Scope>
                 value={scope}
@@ -481,7 +486,7 @@ export function WorklistPage({
             )
           )}
         </Card>
-      </div>
+      </Page>
 
       {openId && (
         <DetailPanel
@@ -493,38 +498,6 @@ export function WorklistPage({
         />
       )}
     </>
-  );
-}
-
-/** Переключатель из двух-трёх положений. Выбранное отмечено не только цветом:
- *  `aria-pressed` читается озвучкой, а фон подкреплён жирностью. */
-function Switch<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (next: T) => void;
-  options: { value: T; title: string }[];
-}) {
-  return (
-    <div className="flex rounded-[8px] border border-baseline p-0.5">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          onClick={() => onChange(option.value)}
-          aria-pressed={value === option.value}
-          className={cx(
-            "rounded-[6px] px-2.5 py-1 text-xs transition",
-            value === option.value
-              ? "bg-series-1/10 font-semibold text-series-1"
-              : "font-medium text-ink-secondary hover:text-ink",
-          )}
-        >
-          {option.title}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -576,10 +549,13 @@ function Legend({
             aria-pressed={active}
             title={`${item.title} — ${item.hint}. Щёлкните, чтобы оставить только такие`}
             className={cx(
-              "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition",
+              // Множественный выбор, поэтому не вкладки: те переключают, а
+              // здесь состояния складываются. Но радиус, высота и размер
+              // текста те же — иначе экран выглядит чужим среди остальных.
+              "inline-flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-sm transition",
               active
-                ? "border-series-1 bg-series-1/10 font-semibold text-series-1"
-                : "border-hairline font-medium text-ink-secondary hover:border-baseline hover:text-ink",
+                ? "bg-series-1/10 font-medium text-series-1"
+                : "text-ink-secondary hover:bg-plane",
             )}
           >
             <span
@@ -719,6 +695,14 @@ function Finished({ job, unit }: { job: Job; unit: string }) {
     preorders?: number;
     market_searched?: number;
     market_priced?: number;
+    file?: string;
+    codes?: number;
+    found?: number;
+    added?: number;
+    updated?: number;
+    failed?: string[];
+    broken?: number;
+    interrupted?: string;
   };
   const errors = result.errors ?? [];
   const bySource = Object.entries(result.by_source ?? {});
@@ -740,6 +724,37 @@ function Finished({ job, unit }: { job: Job; unit: string }) {
           ? `разобрано новых: ${result.analyzed_new}`
           : "новых закупов нет",
       );
+  } else if (job.kind === "harvest") {
+    // Обход портала считает не записи, а новизну: «получено 184» ничего не
+    // говорит человеку, который нажал кнопку ради одной свежей закупки.
+    parts.push(
+      result.added
+        ? `новых лотов: ${result.added}`
+        : "новых лотов нет — всё уже в списке",
+    );
+    if (result.updated) parts.push(`обновлено: ${result.updated}`);
+    // Часть кодов молчит — сказать об этом обязательно: список выглядит
+    // полным, а по упавшему коду закупки просто не приехали.
+    if (result.failed?.length)
+      parts.push(
+        `не ответили коды: ${result.failed.join(", ")} — по ним лоты не обновились`,
+      );
+    // Портал отдаёт ошибку на отдельные карточки. Обход их пропускает, и
+    // сказать об этом надо: такой лот встанет в список без дополнительной
+    // характеристики, а выглядеть будет так, будто заказчик её не написал.
+    if (result.broken)
+      parts.push(
+        `портал не отдал ${result.broken} ${plural(result.broken, "запись", "записи", "записей")} — эти лоты без подробностей`,
+      );
+    // Обрыв не проваливает прогон: собранное до него уже в базе. Но и молчать
+    // нельзя — список неполон, и повтор его дочитает.
+    if (result.interrupted) parts.push(`обход прерван: ${result.interrupted}`);
+  } else if (job.kind === "export") {
+    parts.push(
+      result.file
+        ? `книга собрана: ${result.file}`
+        : "книга собрана — скачивание началось",
+    );
   } else {
     const counted = result.bargains ?? result.preorders ?? 0;
     parts.push(`пересчитано ${counted} ${unit}`);

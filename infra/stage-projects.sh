@@ -39,10 +39,12 @@ from_env() {
 TENDER_DIR="${TENDER_DIR:-$(from_env TENDER_DIR)}"
 SKSTORE_DIR="${SKSTORE_DIR:-$(from_env SKSTORE_DIR)}"
 OMARKET_DIR="${OMARKET_DIR:-$(from_env OMARKET_DIR)}"
+GOSZAKUP_DIR="${GOSZAKUP_DIR:-$(from_env GOSZAKUP_DIR)}"
 
 TENDER_DIR="${TENDER_DIR:-../tender-analyze}"
 SKSTORE_DIR="${SKSTORE_DIR:-../skstore}"
 OMARKET_DIR="${OMARKET_DIR:-../../github/omarket}"
+GOSZAKUP_DIR="${GOSZAKUP_DIR:-../goszakup}"
 
 # Относительный путь считается от каталога платформы, а не от того, откуда
 # запустили: Compose считает его так же, и разойтись они не должны.
@@ -50,6 +52,7 @@ absolute() { case "$1" in /*) printf %s "$1" ;; *) printf %s "$here/$1" ;; esac;
 TENDER_DIR="$(absolute "$TENDER_DIR")"
 SKSTORE_DIR="$(absolute "$SKSTORE_DIR")"
 OMARKET_DIR="$(absolute "$OMARKET_DIR")"
+GOSZAKUP_DIR="$(absolute "$GOSZAKUP_DIR")"
 
 target="$here/.docker/projects"
 
@@ -117,6 +120,7 @@ echo "Готовлю исходники проектов:"
 copy tender-analyze "$TENDER_DIR" TENDER_DIR
 copy skstore "$SKSTORE_DIR" SKSTORE_DIR
 copy omarket "$OMARKET_DIR" OMARKET_DIR
+copy goszakup "$GOSZAKUP_DIR" GOSZAKUP_DIR
 
 # Файлы, которые Compose подключает томом поштучно. Проверяются здесь, потому
 # что Docker на месте несуществующего пути молча создаёт каталог — и падение

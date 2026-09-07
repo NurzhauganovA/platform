@@ -18,6 +18,7 @@ from typing import Any, ClassVar
 from arq import create_pool
 from arq.connections import RedisSettings
 from redis import Redis
+from sqlalchemy import select
 
 from platform_api.config import Settings, get_settings
 from platform_api.db.session import create_db_engine, create_session_factory
@@ -77,6 +78,7 @@ async def startup(ctx: dict[str, Any]) -> None:
 
     ctx["engine"] = engine
     ctx["redis"] = redis
+    ctx["sessions"] = session_factory
     from platform_api.modules.tender.workspace import CaseWorkspace
 
     ctx["runner"] = JobRunner(
@@ -106,10 +108,103 @@ async def shutdown(ctx: dict[str, Any]) -> None:
     logger.info("Исполнитель остановлен")
 
 
+def scheduled_run(slug: str, kind: str) -> Any:
+    """Обёртка расписания вокруг обычной задачи.
+
+    Задача заводится в базе так же, как заведённая кнопкой, и с тем же
+    учётом прогресса и стоимости. Отличие одно: автора нет — `created_by_id`
+    пуст, и в списке видно, что прогон был по расписанию, а не чей-то.
+    """
+
+    async def run(ctx: dict[str, Any]) -> None:
+        await asyncio.to_thread(_run_scheduled, ctx, slug, kind)
+
+    # ARQ различает задачи расписания по имени функции. Без переименования
+    # все три обёртки зовутся `run`, и остаётся одна — молча.
+    run.__name__ = f"scheduled_{slug}_{kind}"
+    return run
+
+
+def _run_scheduled(ctx: dict[str, Any], slug: str, kind: str) -> None:
+    from platform_api.db.models import Job, JobStatus, Organization
+    from platform_api.jobs import JobService
+
+    runner: JobRunner = ctx["runner"]
+    db = ctx["sessions"]()
+    try:
+        organizations = list(db.execute(select(Organization.id)).scalars())
+        service = JobService(db, ctx["redis"])
+        started: list[uuid.UUID] = []
+        for organization_id in organizations:
+            # Предыдущий прогон ещё идёт — второй не заводим. Выгрузка бывает
+            # длиннее часа, и без этой проверки к утру в очереди стоит десяток
+            # одинаковых, а раздел всё это время пересобирается.
+            busy = db.execute(
+                select(Job.id)
+                .where(Job.organization_id == organization_id)
+                .where(Job.module == slug, Job.kind == kind)
+                .where(Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)))
+                .limit(1)
+            ).first()
+            if busy is not None:
+                logger.info("Прогон по расписанию пропущен", module=slug, kind=kind)
+                continue
+            job = service.create(
+                organization_id=organization_id,
+                created_by_id=None,
+                module=slug,
+                kind=kind,
+                params={},
+            )
+            started.append(job.id)
+        db.commit()
+    finally:
+        db.close()
+
+    for job_id in started:
+        runner.run(job_id)
+
+
+def collect_schedule() -> list[Any]:
+    """Расписание, объявленное модулями.
+
+    Собирается здесь, а не перечисляется: вписанный сюда список означал бы,
+    что следующая площадка обновляется руками, пока кто-нибудь не вспомнит про
+    этот файл. Ровно так два раздела и простояли пустыми три недели.
+    """
+    from arq import cron
+
+    registry = ModuleRegistry(discover_modules())
+    planned: list[Any] = []
+    for module in registry.all():
+        for spec in module.jobs:
+            if not spec.every_hours:
+                continue
+            planned.append(
+                cron(
+                    scheduled_run(module.slug, spec.kind),
+                    hour=set(range(0, 24, spec.every_hours)),
+                    minute={spec.at_minute},
+                    name=f"{module.slug}:{spec.kind}",
+                    # Не при запуске: перезапуск исполнителя не повод гонять
+                    # выгрузку заново, а перезапускают его на каждой выкатке.
+                    run_at_startup=False,
+                )
+            )
+    return planned
+
+
 class WorkerSettings:
     """Настройки ARQ."""
 
     functions: ClassVar[list[Any]] = [run_job]
+
+    cron_jobs: ClassVar[list[Any]] = []
+    """Расписание. Заполняется при запуске, а не здесь.
+
+    Здесь нельзя: сборка расписания поднимает модули, а модули импортируют
+    постановку задачи из этого же файла. На объявлении класса он ещё не
+    доимпортирован, и получается круг."""
     on_startup = startup
     on_shutdown = shutdown
     queue_name = QUEUE_NAME
@@ -140,6 +235,11 @@ class WorkerSettings:
 def main() -> None:
     from arq import run_worker
 
+    WorkerSettings.cron_jobs = collect_schedule()
+    logger.info(
+        "Расписание собрано",
+        jobs=[job.name for job in WorkerSettings.cron_jobs],
+    )
     run_worker(WorkerSettings)  # type: ignore[arg-type]
 
 

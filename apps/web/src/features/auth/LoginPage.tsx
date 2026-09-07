@@ -24,7 +24,11 @@ export function LoginPage() {
     mutationFn: () => auth.login(email, password),
     onSuccess: (me) => {
       client.setQueryData(["me"], me);
-      navigate("/tender/cases", { replace: true });
+      // На корень, а не на угаданный раздел. Прежний адрес вёл на
+      // `/tender/cases` — маршрута с таким именем давно нет, и человек
+      // попадал на запасной `/skstore/bargains`, который юристу и технологу
+      // закрыт. Куда идти, решает корень: он знает роль и меню.
+      navigate("/", { replace: true });
     },
   });
 
@@ -42,7 +46,7 @@ export function LoginPage() {
           <div className="text-xl font-semibold tracking-tight text-ink">
             Fintend
           </div>
-          <p className="mt-1 text-sm text-ink-muted">Тендерный отдел</p>
+          <p className="mt-1 text-sm text-ink-muted">Закупки и тендеры</p>
         </div>
 
         <Card className="px-6 py-6">

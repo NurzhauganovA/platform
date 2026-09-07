@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from platform_api.auth.dependencies import READS, names
 from platform_api.modules import ModuleSpec, NavItem
 from platform_api.modules.skstore import health
 from platform_api.modules.skstore.jobs import jobs
@@ -28,8 +29,20 @@ module = ModuleSpec(
     description="Закупы Самрук-Қазына: себестоимость, маржа и что брать сегодня",
     router=router,
     nav=(
-        NavItem(title="Закупы", path="/skstore/bargains", icon="table"),
-        NavItem(title="Аналитика", path="/skstore/analytics", icon="chart"),
+        NavItem(
+            title="Закупы SKStore",
+            path="/skstore/bargains",
+            icon="table",
+            roles=names(*READS),
+            group="Площадки",
+        ),
+        NavItem(
+            title="Аналитика закупов",
+            path="/skstore/analytics",
+            icon="chart",
+            roles=names(*READS),
+            group="Площадки",
+        ),
     ),
     jobs=jobs,
     health=health.check,

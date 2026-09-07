@@ -346,8 +346,21 @@ def test_oba_razdela_est_v_menyu(client: TestClient, db: DbSession) -> None:
 
     assert modules["skstore"]["nav"][0]["path"] == "/skstore/bargains"
     assert modules["omarket"]["nav"][0]["path"] == "/omarket/preorders"
-    # Сверху то, с чем работают каждый день.
-    assert list(modules) == ["skstore", "omarket", "tender"]
+    assert modules["goszakup"]["nav"][0]["path"] == "/goszakup/lots"
+    # По наличию, а не по месту в списке: порядок пунктов внутри модуля —
+    # это порядок дня, и он меняется. Проверять индекс значит ронять тест на
+    # каждой перестановке меню, ничего не проверив по существу.
+    работа = {item["path"] for item in modules["work"]["nav"]}
+    assert "/work/lots" in работа
+    # Раздел задаёт сам пункт: меню группируется по делу, а не по модулю.
+    assert {item["group"] for item in modules["work"]["nav"]} == {
+        "Мой стол",
+        "Работа",
+    }
+    # Порядок разделов — порядок дня. Сверху взятые в работу лоты: с них
+    # начинают, потому что там то, чего от нас ждут к сроку. Площадки ниже —
+    # они показывают, что появилось, а тендерная папка приходит по почте.
+    assert list(modules) == ["work", "skstore", "omarket", "tender", "goszakup"]
 
 
 def test_v_menyu_net_punktov_kotorye_nikuda_ne_vedut(client: TestClient, db: DbSession) -> None:
@@ -659,3 +672,301 @@ def test_fail_snabzhenie_ne_vidit_chuzhih_razdelov(client: TestClient, db: DbSes
 
     # Остался общий стол двух отделов — и только он.
     assert [item["path"] for item in tender["nav"]] == ["/tender/works"]
+
+
+# --- госзакупки ------------------------------------------------------------
+
+
+def test_fail_spisok_kodov_pravit_tolko_administrator(
+    app_client: TestClient, db: DbSession
+) -> None:
+    """Список кодов ЕНС ТРУ меняет только администратор.
+
+    Список задаёт, что вообще попадёт в отбор: код, добавленный по ошибке, —
+    это сотни чужих лотов и запросы к государственному порталу за ними.
+    Решение о номенклатуре принимает тот, кто за неё отвечает.
+    """
+    sign_in(db, app_client, Role.ANALYST)
+
+    добавить = app_client.post("/api/goszakup/codes", json={"code": "262013.000.000099"})
+    assert добавить.status_code == 403
+    assert app_client.delete("/api/goszakup/codes/262013.000.000011").status_code == 403
+
+
+def test_fail_kod_s_opechatkoy_otklonyayetsya(app_client: TestClient, db: DbSession) -> None:
+    """Код с опечаткой отклоняется при вводе, а не сутки спустя.
+
+    На портале он не найдёт ничего, и выяснилось бы это пустой выгрузкой на
+    следующий день — когда уже неясно, кода нет или закупок по нему.
+    """
+    sign_in(db, app_client, Role.ADMIN)
+
+    ответ = app_client.post("/api/goszakup/codes", json={"code": "26201.100.00000"})
+    assert ответ.status_code == 400
+    assert "ЕНС ТРУ" in ответ.json()["detail"]
+
+
+def test_fail_v_razbore_vidny_sosednie_loty_obyavleniya() -> None:
+    """В разборе видно всё объявление, а не только нашу позицию.
+
+    Под наши коды ЕНС ТРУ из объявления подходит одна позиция из четырёх, а
+    торги идут по объявлению целиком: соседние лоты — это и конкуренты за
+    внимание заказчика, и повод взять закупку целиком, если остальное мы тоже
+    возим. Показав только своё, мы прячем половину предмета решения.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from platform_api.modules.goszakup import detail
+
+    наш = SimpleNamespace(
+        announce_id=17547275,
+        purchase_number="17547275-1",
+        lot_number="87470604-ОИ2",
+        name="Компрессор",
+        customer="Филиал Жетісу",
+        method="Из одного источника",
+        status="Опубликован",
+        end_date=None,
+        published_at=None,
+        applications=None,
+        enstru_code="262013.000.000011",
+        enstru_name="Компрессор",
+        brief="кондиционера",
+        extra="Компрессор кондиционера Mitsubishi",
+        count=Decimal(1),
+        unit="Штука",
+        unit_price=Decimal(85000),
+        amount=Decimal(85000),
+        prepayment_percent=None,
+        kato="",
+        delivery_term="",
+        incoterms="",
+        spec_name="",
+        spec_url="",
+        spec_text="",
+        url="",
+    )
+
+    def сосед(number: str, name: str) -> Any:
+        return detail._Neighbour(
+            number=number,
+            name=name,
+            extra="",
+            unit="Штука",
+            count=Decimal(1),
+            amount=Decimal(1000),
+            status="Опубликован",
+            ours=True,
+        )
+
+    соседи = (сосед("87470604-ОИ2", "Компрессор"), сосед("87468559-ОИ2", "Фильтр"))
+    with patch.object(detail, "_announce_neighbours", return_value=(соседи, "")):
+        разбор = detail.build(наш)
+
+    таблица = next(s.table for s in разбор.sections if s.table is not None)
+    assert [row[1] for row in таблица.rows] == ["87470604-ОИ2", "87468559-ОИ2"]
+    # Наш отмечен: иначе в таблице из четырёх строк его не найти.
+    assert [row[0] for row in таблица.rows] == ["▸", ""]
+
+
+def test_fail_nedostupnyy_portal_ne_lomayet_razbor() -> None:
+    """Портал не отвечает — разбор всё равно открывается.
+
+    Своя часть в нём есть: лот лежит в базе. Пустой экран из-за чужого сервера
+    хуже неполного, а «не дозвонились» человек понимает и ждёт.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from platform_api.modules.goszakup import detail
+
+    пустой = SimpleNamespace(
+        announce_id=1,
+        purchase_number="1-1",
+        lot_number="",
+        name="Ноутбук",
+        customer="",
+        method="",
+        status="",
+        end_date=None,
+        published_at=None,
+        applications=None,
+        enstru_code="",
+        enstru_name="",
+        brief="",
+        extra="",
+        count=None,
+        unit="",
+        unit_price=None,
+        amount=None,
+        prepayment_percent=None,
+        kato="",
+        delivery_term="",
+        incoterms="",
+        spec_name="",
+        spec_url="",
+        spec_text="",
+        url="",
+    )
+    with patch.object(
+        detail, "_announce_neighbours", return_value=((), "Портал сейчас не отвечает")
+    ):
+        разбор = detail.build(пустой)
+
+    assert разбор.title == "Ноутбук"
+    раздел = next(s for s in разбор.sections if s.title == "Лоты объявления")
+    assert "не отвечает" in раздел.empty and раздел.table is None
+
+
+# --- обсуждение ------------------------------------------------------------
+
+
+def test_fail_chuzhuyu_repliku_ne_popravit(app_client: TestClient, db: DbSession) -> None:
+    """Чужую реплику не правит никто, включая администратора.
+
+    Убрать чужое администратор может, переписать — нет: убранное видно по
+    отсутствию, переписанное не видно никак, а спор о том, кто что сказал,
+    обсуждение и должно разрешать.
+    """
+    from platform_api.modules import discussion
+
+    org = sign_in(db, app_client, Role.ANALYST)
+    чужая = discussion.add(
+        db, org.id, None, module="goszakup", row_id="17547275-1", body="Брать не стоит"
+    )
+    db.commit()
+
+    ответ = app_client.patch(
+        f"/api/discussion/messages/{чужая.id}", json={"body": "Наоборот, берём"}
+    )
+    assert ответ.status_code == 403
+    assert "свои" in ответ.json()["detail"]
+
+
+def test_fail_svoyu_repliku_pravit_i_vidno_chto_pravili(
+    app_client: TestClient, db: DbSession
+) -> None:
+    """Свою реплику править можно, и это видно.
+
+    Молча изменённый текст в общей ветке — тот же спор о сказанном, ради
+    которого ветку и заводили.
+    """
+    sign_in(db, app_client, Role.ANALYST)
+    написано = app_client.post("/api/discussion/goszakup/17547275-1", json={"body": "Берём"}).json()
+
+    поправлено = app_client.patch(
+        f"/api/discussion/messages/{написано['id']}", json={"body": "Берём, но по цене ниже"}
+    )
+    assert поправлено.status_code == 200
+    assert поправлено.json()["body"] == "Берём, но по цене ниже"
+    assert поправлено.json()["edited_at"]
+
+
+def test_fail_schyotchik_obsuzhdeniya_odnim_zaprosom(app_client: TestClient, db: DbSession) -> None:
+    """Счётчики по всем строкам разом, а не по строке.
+
+    Строк сотни, а веток десятки: обращение на каждую строку было бы сотнями
+    запросов ради нескольких десятков записей.
+    """
+    from platform_api.modules import discussion
+
+    org = sign_in(db, app_client, Role.ANALYST)
+    discussion.add(db, org.id, None, module="goszakup", row_id="A-1", body="первое")
+    discussion.add(db, org.id, None, module="goszakup", row_id="A-1", body="второе")
+    discussion.add(db, org.id, None, module="goszakup", row_id="B-1", body="одно")
+
+    итоги = discussion.summaries(db, org.id, "goszakup", ["A-1", "B-1", "C-1"])
+
+    assert итоги["A-1"].count == 2 and итоги["B-1"].count == 1
+    assert "C-1" not in итоги
+    # В подсказку идёт последняя реплика, а не первая.
+    assert итоги["A-1"].last == "второе"
+
+
+def test_skachivanie_knigi_nichego_ne_sobiraet(
+    db: DbSession, app_client: TestClient, offline_marketplace: None, monkeypatch: Any
+) -> None:
+    """Скачивание читает готовый файл, а не собирает его на месте.
+
+    Сборка книги skstore занимает процессор целиком, а процесс API один: под
+    нагрузкой замер дал 156 секунд, за которые переставала отвечать даже
+    проверка готовности. Браузер к тому моменту запрос бросал, а сервер его всё
+    равно досчитывал.
+    """
+    from platform_api.modules.skstore import core as skstore_core
+
+    def refuse() -> Any:
+        raise AssertionError("Скачивание не должно собирать книгу")
+
+    monkeypatch.setattr(skstore_core, "export_workbook", refuse)
+    monkeypatch.setattr(skstore_core, "latest_workbook", lambda: None)
+    sign_in(db, app_client, Role.ANALYST)
+
+    answer = app_client.get("/api/skstore/export")
+
+    assert answer.status_code == 404
+    assert "Собрать книгу" in answer.json()["detail"]
+
+
+def test_kniga_sobiraetsya_zadachey(
+    db: DbSession, app_client: TestClient, offline_marketplace: None
+) -> None:
+    """Кнопка ставит сборку в очередь, а не ждёт её в запросе."""
+    sign_in(db, app_client, Role.ANALYST)
+
+    started = app_client.post("/api/skstore/export")
+
+    assert started.status_code == 202
+    assert started.json()["job_id"]
+
+    listed = app_client.get("/api/skstore/worklist").json()
+    assert "build" in listed["actions"]
+    assert "export" not in listed["actions"]
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_spisok_ne_shlet_istekshie_bez_prosby(
+    db: DbSession, app_client: TestClient, offline_marketplace: None, module: str
+) -> None:
+    """По умолчанию уезжает только отобранное, а не весь список.
+
+    У skstore это 1,9 МБ, из которых в отборе примерно шестая часть; остальное
+    — строки с истёкшим приёмом. Браузер их всё равно выбрасывал, но мегабайт
+    шёл по сети на каждое открытие раздела и на каждый переход в аналитику.
+    """
+    sign_in(db, app_client, Role.ANALYST)
+
+    narrow = app_client.get(f"/api/{module}/worklist").json()
+    wide = app_client.get(f"/api/{module}/worklist?scope=all").json()
+
+    assert all(row["focus"] for row in narrow["rows"]), "Приехало то, чего не просили"
+    assert len(narrow["rows"]) <= len(wide["rows"])
+    # Число до отбора приходит отдельно: по длине `rows` его больше не узнать,
+    # а плитка «Показано 28 из 184» считает именно по нему.
+    assert narrow["rows_total"] == len(wide["rows"])
+    assert wide["rows_total"] == len(wide["rows"])
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_gotovnost_otvechaet_bystro(
+    db: DbSession, app_client: TestClient, offline_marketplace: None, module: str
+) -> None:
+    """Сводка готовности укладывается в срок проверки контейнера.
+
+    Считалась она перебором: ради одного числа база отдавала тысячу с лишним
+    строк объектами, и ответ шёл девять секунд при таймауте проверки в пять.
+    Контейнер помечался больным, хотя работал, — а по здоровью выстроен
+    `depends_on`, и зависимые службы такой API не дождались бы.
+
+    Порог здесь с большим запасом: тест меряет не быстродействие машины, а то,
+    что подсчёт остался запросом, а не вернулся в перебор.
+    """
+    import time
+
+    start = time.monotonic()
+    answer = app_client.get(f"/api/{module}/health")
+    spent = time.monotonic() - start
+
+    assert answer.status_code == 200
+    assert spent < 2.0, f"Готовность {module} собиралась {spent:.1f} с"

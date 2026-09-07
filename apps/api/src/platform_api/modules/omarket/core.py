@@ -366,13 +366,21 @@ def _verdicts(rows: Sequence[FocusRow]) -> dict[str, int]:
 
 
 def _count_preorders() -> int | None:
-    """Сколько актуальных предзаказов в базе. `None` — базы ещё нет."""
-    from omarket.domain.enums import PreorderStatus
+    """Сколько актуальных предзаказов в базе. `None` — базы ещё нет.
+
+    Запросом, а не перебором: раньше здесь поднимались объектами все
+    предзаказы и считались в питоне — ради одного числа на страницу
+    готовности. Та же беда была у skstore и там стоила девяти секунд.
+    """
+    from sqlalchemy import text
 
     container = _container()
     try:
-        with container.unit_of_work() as uow:
-            return sum(1 for _ in uow.preorders.iter_by_status(PreorderStatus.ACTUAL))
+        with container.engine.connect() as connection:
+            found = connection.execute(
+                text("select count(*) from preorder where status = 'actual'")
+            ).scalar_one()
+        return int(found)
     except Exception:
         return None
     finally:
