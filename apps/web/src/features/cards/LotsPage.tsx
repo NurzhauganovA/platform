@@ -166,9 +166,7 @@ export function LotsPage() {
           <div className="min-w-0">
             <p className="text-sm font-medium text-ink">Закупку пропустили?</p>
             <p className="mt-0.5 max-w-lg text-xs text-ink-muted">
-              Обход идёт по списку кодов ЕНС ТРУ, а код закупке ставит заказчик.
-              Введите номер — заберём с портала строго по нему и возьмём в
-              работу.
+              Введите код номер - заберём с портала строго по нему и возьмём в работу
             </p>
           </div>
           <FetchByNumber />

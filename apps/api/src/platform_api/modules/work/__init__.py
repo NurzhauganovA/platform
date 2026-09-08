@@ -17,12 +17,14 @@
 from platform_api.auth.dependencies import CRM, names
 from platform_api.modules import ModuleSpec, NavItem
 from platform_api.modules.cards_router import router
+from platform_api.modules.work.jobs import jobs
 
 module = ModuleSpec(
     slug="work",
     title="Работа",
     description="Лоты в работе: от объявления до оплаты",
     router=router,
+    jobs=jobs,
     nav=(
         # Порядок групп — порядок дня. Сначала свой стол: с него начинают,
         # там то, чего ждут от тебя. Потом лоты целиком и то, что делают
@@ -70,6 +72,18 @@ module = ModuleSpec(
             # Подают менеджеры. Остальным этот календарь показывает чужую
             # работу по минутам и ничего им не даёт.
             roles=("admin", "manager"),
+        ),
+        NavItem(
+            title="Журнал действий",
+            path="/work/audit",
+            icon="list",
+            group="Работа",
+            # Только администратору. Журнал отвечает на вопрос «кто это
+            # сделал», и человек, о котором его спрашивают, не должен видеть,
+            # что именно о нём записано: иначе первым делом он посмотрит,
+            # попал ли туда. Права проверяются на эндпоинте — пункт меню это
+            # удобство, а не защита.
+            roles=("admin",),
         ),
         NavItem(
             title="Согласование",

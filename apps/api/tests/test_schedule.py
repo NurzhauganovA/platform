@@ -27,7 +27,9 @@ def test_schedule_is_declared_by_modules() -> None:
     planned = collect_schedule()
     names = {job.name for job in planned}
 
-    assert names == {"skstore:sync", "omarket:sync", "goszakup:harvest"}
+    # Вывоз журнала здесь наравне с выгрузками площадок: он тоже объявлен
+    # модулем, а не вписан в исполнителя.
+    assert names == {"skstore:sync", "omarket:sync", "goszakup:harvest", "work:audit"}
 
 
 def test_paid_jobs_have_no_schedule() -> None:

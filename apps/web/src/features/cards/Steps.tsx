@@ -1,475 +1,422 @@
 /**
- * Шаги лота в правом столбце: обсуждение, разбор, подача, технолог, сборщик.
+ * Правая колонка карточки: ход лота рельсой.
  *
- * Раньше здесь стояла одна сводка «Задачи» с числами по трём отделам. На
- * вопрос «сколько висит» она отвечала, а на «успеваем ли» — нет: у каждого
- * шага свой срок, и общий на всех срок приёма заявок их не различает. Окно
- * обсуждения закрывается через два рабочих дня после публикации, когда лот
- * ещё числится на разборе, — и человек, глядя на «осталось 6 дней», узнавал о
- * закрытом окне постфактум.
+ * Рельсой, а не стопкой карточек. Шагов у лота семь, и семь одинаковых рамок
+ * подряд — список, по которому не видно хода: где были, где стоим, куда
+ * дальше. Линия с отметками отвечает на это одним взглядом, а колонка
+ * становится короче на треть: отделы свёрнуты, пока их не открыли.
  *
- * Поэтому шаг, а не отдел: у шага есть свой срок, своё состояние, свой
- * ответственный и свои задачи. Блоки идут по ходу работы — обсуждение до
- * разбора, разбор до подачи: столбец читают сверху вниз, и порядок блоков это
- * и есть порядок работы.
+ * Порядок узлов — порядок работы: обсуждение пишется до разбора, разбор до
+ * подачи, юрист и снабжение работают между ними. Столбец читают сверху вниз,
+ * и порядок узлов это и есть порядок дела.
  *
- * Задачи считаются здесь же, из того же ответа, что и раньше: «1/2» — сделано
- * из заведённых. Открытых мало, и отдельный запрос на счётчик ради каждого
- * блока был бы пятью запросами на одно открытие карточки.
+ * Задача открывается на месте панели, а не окном. Окно закрывает собой лот,
+ * ради которого задачу и читают: в ней написано «проверить пункты 4.1–4.6», а
+ * пункты — на экране слева.
+ *
+ * Задачи берутся одним запросом на все узлы. Запрос на отдел — это шесть
+ * обращений на открытие карточки ради шести чисел.
  */
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { auth } from "@/api/tender";
 import {
   cardsApi,
   FLOW,
-  type ApprovalKind,
   type Card,
   type Department,
   type Job,
   type Person,
 } from "@/api/cards";
 import { ApiError } from "@/api/client";
-import { Button, Card as Panel, cx } from "@/ui";
-import { Window } from "./Queue";
+import { Card as Panel, cx } from "@/ui";
+import { NewTask } from "./NewTask";
+import { Node, TaskCard, TaskLine } from "./StepRail";
+import type { Mark } from "./StepRail";
+import { Avatar, Chip, Clock, heat, shortName, stamp } from "./kit";
 
-/** Каким по счёту шагом идёт разбор. По нему видно, пройден он или нет. */
+/** Каким по счёту идёт разбор. По нему видно, пройден он или нет. */
 const ANALYSIS_STEP = FLOW.findIndex((step) => step.key === "analysis") + 1;
 
-/** Каким по счёту идёт подача. Раньше него подавать нечего. */
-const READY_STEP = FLOW.findIndex((step) => step.key === "ready") + 1;
+/**
+ * Узлы между разбором и подачей: имя и чей он. Порядок — порядок работы.
+ *
+ * Перечислены все отделы, а не три ходовых. Задача попадает в отдел и без
+ * выбора человека — по статусу лота (`DEPARTMENT_OF` на сервере), — и отдел
+ * без узла в рельсе превращал такую задачу в невидимую: свод сверху считал
+ * «5 открыто», а по узлам их набиралось два. Числу, которое не сходится с тем,
+ * что под ним, перестают верить целиком.
+ */
+const DESKS: { desk: Department; title: string }[] = [
+  { desk: "legal", title: "Юрист" },
+  { desk: "supply", title: "Снабжение" },
+  { desk: "technologist", title: "Технолог" },
+  { desk: "assembler", title: "Сборщик" },
+  { desk: "approval", title: "Согласование" },
+];
 
-export function Steps({
-  card,
-  people,
-  onDone,
-}: {
-  card: Card;
-  people: Person[];
-  onDone: (fresh: Card) => void;
-}) {
-  const [open, setOpen] = useState(false);
+export function Steps({ card, people }: { card: Card; people: Person[] }) {
+  const cache = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const [openTask, setOpenTask] = useState<string | null>(null);
+  const [openNodes, setOpenNodes] = useState<Record<string, boolean>>({});
+  const [trouble, setTrouble] = useState("");
 
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: auth.me });
+
+  // Все состояния разом: узел показывает «1 из 2» и кто закрыл, а по одним
+  // открытым ни того, ни другого не собрать.
   const { data } = useQuery({
-    queryKey: ["card-tasks", card.id],
-    queryFn: () => cardsApi.tasks({ card_id: card.id }),
+    queryKey: ["card-tasks", card.id, "all"],
+    queryFn: () => cardsApi.tasks({ card_id: card.id, state: "all" }),
     staleTime: 15_000,
   });
   const tasks = data ?? [];
 
+  const refresh = () => {
+    void cache.invalidateQueries({ queryKey: ["card-tasks", card.id] });
+    void cache.invalidateQueries({ queryKey: ["card-tasks", "open"] });
+  };
+
+  const take = useMutation({
+    mutationFn: (id: string) => cardsApi.takeTask(id),
+    onSuccess: () => {
+      setTrouble("");
+      refresh();
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  const release = useMutation({
+    mutationFn: (id: string) => cardsApi.releaseTask(id),
+    onSuccess: () => {
+      setTrouble("");
+      refresh();
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  const finish = useMutation({
+    mutationFn: (input: { id: string; result: string }) =>
+      cardsApi.closeTask(input.id, "done", input.result),
+    onSuccess: () => {
+      setTrouble("");
+      setOpenTask(null);
+      refresh();
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  const chosen = tasks.find((task) => task.id === openTask);
+  if (chosen) {
+    return (
+      <div className="space-y-2">
+        <TaskCard
+          task={chosen}
+          me={me?.id ?? ""}
+          deskName={chosen.department_name}
+          busy={take.isPending || finish.isPending || release.isPending}
+          onBack={() => setOpenTask(null)}
+          onTake={() => take.mutate(chosen.id)}
+          onRelease={() => release.mutate(chosen.id)}
+          onClose={(result) => finish.mutate({ id: chosen.id, result })}
+        />
+        {trouble && <p className="text-sm text-critical">{trouble}</p>}
+      </div>
+    );
+  }
+
+  const live = tasks.filter((task) => task.state === "open");
+  const closed = tasks.filter((task) => task.state === "done");
+  const toggle = (key: string) =>
+    setOpenNodes((was) => ({ ...was, [key]: !was[key] }));
+
+  const mayAdd = card.can.includes("task");
+  const talk = card.discussion;
+  const analysisDone = card.step > ANALYSIS_STEP;
+  const signed = card.approvals.filter(
+    (one) => one.state === "approved",
+  ).length;
+
   return (
     <>
-      <Discussion card={card} tasks={tasks} onOpen={() => setOpen(true)} />
-      <Analysis
-        card={card}
-        tasks={tasks}
-        me={me?.id ?? ""}
-        onDone={onDone}
-        onOpen={() => setOpen(true)}
-      />
-      <Submission card={card} tasks={tasks} onOpen={() => setOpen(true)} />
-      <Signature
-        card={card}
-        tasks={tasks}
-        kind="technologist"
-        desk="technologist"
-        title="Технолог"
-        onOpen={() => setOpen(true)}
-      />
-      <Signature
-        card={card}
-        tasks={tasks}
-        kind="assembler"
-        desk="assembler"
-        title="Сборщик"
-        onOpen={() => setOpen(true)}
-      />
+      <div className="space-y-2">
+        {/* Свод и кнопка одной строкой. Кнопка узкая и не переносится: в
+            колонке шириной в триста точек обычная разъезжается на две строки и
+            уводит свод наверх. */}
+        <div className="flex items-center justify-between gap-2 px-1">
+          <span className="min-w-0 truncate text-[12.5px] text-ink-secondary tabular-nums">
+            Задачи: <b className="font-semibold text-ink">{live.length}</b>{" "}
+            открыто · {closed.length} закрыто
+          </span>
+          {mayAdd && (
+          <button
+            type="button"
+            onClick={() => setAdding(true)}
+            className={cx(
+              "h-7 shrink-0 rounded-[7px] border border-baseline bg-surface px-2.5",
+              "text-[12.5px] font-medium whitespace-nowrap text-ink transition hover:bg-plane",
+              "focus-visible:outline focus-visible:outline-2",
+              "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
+            )}
+          >
+            Новая задача
+          </button>
+          )}
+        </div>
 
-      {open && (
-        <Window card={card} people={people} onClose={() => setOpen(false)} />
+        <Panel className="px-0 py-0.5">
+          {/* Обсуждение: срок свой, два рабочих дня со дня публикации. */}
+          <Rung
+            first
+            title="Обсуждение"
+            desk="discussion"
+            tasks={tasks}
+            open={openNodes.discussion}
+            onToggle={() => toggle("discussion")}
+            onOpenTask={setOpenTask}
+            mark={
+              !talk
+                ? "idle"
+                : talk.stage === "sent"
+                  ? "done"
+                  : talk.overdue || talk.burning
+                    ? "hot"
+                    : "active"
+            }
+            right={
+              talk ? (
+                talk.stage === "sent" ? (
+                  <Chip tone="ok">Отправлено</Chip>
+                ) : talk.deadline ? (
+                  <Clock due={talk.deadline} />
+                ) : null
+              ) : (
+                <span className="text-[11.5px] text-ink-muted">
+                  не заводили
+                </span>
+              )
+            }
+            meta={
+              talk ? (
+                <Link
+                  to={`/goszakup/remarks/${talk.id}`}
+                  className="text-series-1 hover:underline"
+                >
+                  {talk.stage_name} →
+                </Link>
+              ) : null
+            }
+          />
+
+          {/* Разбор: своего срока нет, идёт по сроку подачи. */}
+          <Rung
+            title="Разбор"
+            desk="analysis"
+            tasks={tasks}
+            open={openNodes.analysis}
+            onToggle={() => toggle("analysis")}
+            onOpenTask={setOpenTask}
+            mark={analysisDone ? "done" : card.burning ? "hot" : "active"}
+            right={card.deadline ? <Clock due={card.deadline} /> : null}
+            meta={
+              card.owner ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Avatar name={card.owner} />
+                  Ведёт {shortName(card.owner)}
+                </span>
+              ) : (
+                <span className="text-ink-muted">ничей</span>
+              )
+            }
+          />
+
+          {DESKS.map(({ desk, title }) => (
+            <Rung
+              key={desk}
+              title={title}
+              desk={desk}
+              tasks={tasks}
+              open={openNodes[desk]}
+              onToggle={() => toggle(desk)}
+              onOpenTask={setOpenTask}
+            />
+          ))}
+
+          {/* Подача: свои задачи и пять подписей чёрточками. Число рядом —
+              цвет сам по себе не говорит, сколько собрано. */}
+          <Rung
+            last
+            title="Подача"
+            desk="submission"
+            tasks={tasks}
+            open={openNodes.submission}
+            onToggle={() => toggle("submission")}
+            onOpenTask={setOpenTask}
+            // Собранные подписи важнее сроков задач: без них статус недоступен,
+            // и узел «сделан» именно по ним.
+            mark={card.approved ? "done" : undefined}
+            right={
+              card.approve_by ? (
+                <span className="text-[11.5px] whitespace-nowrap text-ink-muted tabular-nums">
+                  подписи до {stamp(card.approve_by)}
+                </span>
+              ) : undefined
+            }
+            meta={
+              <span className="flex items-center gap-2">
+                <span className="inline-flex gap-[3px]">
+                  {card.approvals.map((one) => (
+                    <i
+                      key={one.kind}
+                      title={`${one.name}: ${one.state === "approved" ? "согласовал" : one.state === "rejected" ? "отклонил" : "ждём"}`}
+                      className={cx(
+                        "block h-[4px] w-[14px] rounded-sm",
+                        one.state === "approved"
+                          ? "bg-good"
+                          : one.state === "rejected"
+                            ? "bg-critical"
+                            : "bg-baseline",
+                      )}
+                    />
+                  ))}
+                </span>
+                <span className="tabular-nums">
+                  {signed} из {card.approvals.length || 5}
+                </span>
+              </span>
+            }
+          />
+        </Panel>
+
+        {trouble && <p className="px-1 text-sm text-critical">{trouble}</p>}
+      </div>
+
+      {adding && (
+        <NewTask
+          card={card}
+          people={people}
+          onClose={() => setAdding(false)}
+        />
       )}
     </>
   );
 }
 
 /**
- * Обсуждение: срок окна и где замечание.
+ * Узел отдела: свод по его задачам.
  *
- * Срок расчётный, и это сказано словом. Портал в открытой части оба своих
- * поля обсуждения отдаёт пустыми, а два рабочих дня со дня публикации — норма
- * закона, а не наше правило; но праздники в расчёт не входят, и человек,
- * который об этом не знает, планировал бы отправку на выходной.
+ * Ближайший срок из открытых — тот, что горит первым. Остальные видно в
+ * развёрнутом списке; выносить наверх все значило бы столбец из десяти чисел,
+ * по которому не понять, за что браться.
  */
-function Discussion({
-  card,
-  tasks,
-  onOpen,
-}: {
-  card: Card;
-  tasks: Job[];
-  onOpen: () => void;
-}) {
-  const talk = card.discussion;
-
-  return (
-    <Step
-      title="Обсуждение"
-      state={talk ? talk.stage_name : "не заводили"}
-      dim={!talk}
-      when={talk?.deadline ?? ""}
-      whenNote="срок расчётный"
-      left={talk?.left ?? ""}
-      burning={talk?.burning ?? false}
-      overdue={talk?.overdue ?? false}
-      tasks={count(tasks, "discussion")}
-      onTasks={onOpen}
-    >
-      {talk ? (
-        <Link
-          to={`/goszakup/remarks/${talk.id}`}
-          className="text-sm text-series-1 hover:underline"
-        >
-          Открыть обсуждение →
-        </Link>
-      ) : (
-        <p className="text-xs text-ink-muted">
-          Заводится кнопкой «Обсуждение» в разборе лота.
-        </p>
-      )}
-    </Step>
-  );
-}
-
-/**
- * Разбор: кто взял лот и что с ним.
- *
- * «Беру на себя» одним нажатием. Список сотрудников для этого же есть ниже, но
- * им назначают другого, а себя ставят по десять раз на дню: выбирать себя из
- * списка в такой момент — три движения вместо одного.
- *
- * Срок пока от подачи заявки: своего у разбора нет, а пустая строка на месте
- * срока читается как «успеваем», хотя ровно этого мы и не знаем.
- */
-function Analysis({
-  card,
-  tasks,
-  me,
-  onDone,
-  onOpen,
-}: {
-  card: Card;
-  tasks: Job[];
-  /** Кто смотрит. Себе лот не предлагают взять второй раз. */
-  me: string;
-  onDone: (fresh: Card) => void;
-  onOpen: () => void;
-}) {
-  const [trouble, setTrouble] = useState("");
-
-  const take = useMutation({
-    mutationFn: () =>
-      cardsApi.assign(card.id, { owner_id: me, change_owner: true }),
-    onSuccess: onDone,
-    onError: (error) =>
-      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
-  });
-
-  const done = card.step > ANALYSIS_STEP;
-  const state =
-    card.step === 0
-      ? "лот снят"
-      : done
-        ? "Завершён"
-        : card.owner
-          ? "В работе"
-          : "Никто не взял";
-
-  return (
-    <Step
-      title="Разбор"
-      state={state}
-      dim={card.step === 0 || (!done && !card.owner)}
-      good={done}
-      when={card.deadline}
-      whenNote="по сроку подачи"
-      left={card.left}
-      burning={card.burning}
-      overdue={card.overdue}
-      tasks={count(tasks, "analysis")}
-      onTasks={onOpen}
-    >
-      <p className="text-sm text-ink-secondary">
-        {card.owner ? (
-          <>
-            Ведёт <span className="font-medium text-ink">{card.owner}</span>
-          </>
-        ) : (
-          "Разбор ничей"
-        )}
-      </p>
-      {me && me !== card.owner_id && card.can.includes("assign") && (
-        <Button
-          variant="accent"
-          onClick={() => take.mutate()}
-          disabled={take.isPending}
-          title="Поставить себя ответственным за лот"
-        >
-          {take.isPending ? "Берём…" : "Беру на себя"}
-        </Button>
-      )}
-      {trouble && <p className="text-sm text-critical">{trouble}</p>}
-    </Step>
-  );
-}
-
-/** Подача: срок приёма заявок и подписи, без которых подавать нечем. */
-function Submission({
-  card,
-  tasks,
-  onOpen,
-}: {
-  card: Card;
-  tasks: Job[];
-  onOpen: () => void;
-}) {
-  const signed = card.approvals.filter(
-    (sign) => sign.state === "approved",
-  ).length;
-  const state = card.submitted_at
-    ? "Подано"
-    : card.approved
-      ? "Готовы подать"
-      : `Подписи ${signed}/${card.approvals.length || 5}`;
-
-  return (
-    <Step
-      title="Подача"
-      state={state}
-      good={Boolean(card.submitted_at) || card.approved}
-      dim={!card.submitted_at && !card.approved}
-      when={card.deadline}
-      whenNote={card.step >= READY_STEP ? "" : "приём заявок"}
-      left={card.left}
-      burning={card.burning}
-      overdue={card.overdue}
-      tasks={count(tasks, "submission")}
-      onTasks={onOpen}
-    >
-      {/* Согласование собирается раньше подачи: заявку подают руками, и
-          подписи, поставленные за десять минут до срока, означают спешку.
-          Свой срок отдельной строкой — он на два часа раньше срока приёма. */}
-      {!card.approved && card.approve_by && (
-        <p className="flex items-baseline gap-2 text-xs">
-          <span className="text-ink-muted tabular-nums">
-            Подписи до {moment(card.approve_by)}
-          </span>
-          <span
-            className={cx(
-              "whitespace-nowrap",
-              card.approve_overdue
-                ? "text-ink-muted line-through decoration-baseline"
-                : card.approve_burning
-                  ? "font-semibold text-critical"
-                  : "text-ink-muted",
-            )}
-          >
-            {card.approve_overdue ? "срок прошёл" : card.approve_left}
-          </span>
-        </p>
-      )}
-    </Step>
-  );
-}
-
-/** Технолог и сборщик: подпись и своя очередь задач. */
-function Signature({
-  card,
-  tasks,
-  kind,
+function Rung({
+  title,
   desk,
-  title,
-  onOpen,
-}: {
-  card: Card;
-  tasks: Job[];
-  kind: ApprovalKind;
-  desk: Department;
-  title: string;
-  onOpen: () => void;
-}) {
-  const sign = card.approvals.find((item) => item.kind === kind);
-  const state =
-    sign?.state === "approved"
-      ? "Согласовал"
-      : sign?.state === "rejected"
-        ? "Отклонил"
-        : "Ждём подписи";
-
-  return (
-    <Step
-      title={title}
-      state={state}
-      good={sign?.state === "approved"}
-      bad={sign?.state === "rejected"}
-      dim={!sign || sign.state === "waiting"}
-      tasks={count(tasks, desk)}
-      onTasks={onOpen}
-    >
-      {sign?.by && (
-        <p className="text-xs text-ink-muted">
-          {sign.by}
-          {sign.at && ` · ${moment(sign.at)}`}
-        </p>
-      )}
-      {/* Причина отказа рядом с отказом: без неё «отклонил» — это вопрос,
-          на который идут спрашивать в мессенджер. */}
-      {sign?.state === "rejected" && sign.note && (
-        <p className="text-sm text-ink-secondary">{sign.note}</p>
-      )}
-    </Step>
-  );
-}
-
-/**
- * Один блок шага.
- *
- * Состояние словом, а не только цветом: «согласовал» и «отклонил» при
- * дальтонизме одинаково серые, и подпись под лотом на четыре миллиона по
- * цвету различать нельзя.
- */
-function Step({
-  title,
-  state,
-  good,
-  bad,
-  dim,
-  when,
-  whenNote,
-  left,
-  burning,
-  overdue,
   tasks,
-  onTasks,
-  children,
+  open,
+  onToggle,
+  onOpenTask,
+  mark,
+  right,
+  meta,
+  first,
+  last,
 }: {
   title: string;
-  state: string;
-  good?: boolean;
-  bad?: boolean;
-  dim?: boolean;
-  when?: string;
-  whenNote?: string;
-  left?: string;
-  burning?: boolean;
-  overdue?: boolean;
-  tasks: { done: number; total: number };
-  onTasks: () => void;
-  children?: React.ReactNode;
+  desk: Department;
+  tasks: Job[];
+  open?: boolean;
+  onToggle: () => void;
+  onOpenTask: (id: string) => void;
+  /** Отметка задана снаружи — у этапов она про лот, а не про задачи. */
+  mark?: Mark;
+  right?: React.ReactNode;
+  meta?: React.ReactNode;
+  first?: boolean;
+  last?: boolean;
 }) {
-  return (
-    <Panel>
-      <div className="flex items-baseline gap-2 border-b border-hairline px-4 py-2.5">
-        <h2 className="flex-1 text-sm font-semibold text-ink">{title}</h2>
-        <span
-          className={cx(
-            "text-xs whitespace-nowrap",
-            bad
-              ? "font-medium text-critical"
-              : good
-                ? "font-medium text-good"
-                : dim
-                  ? "text-ink-muted"
-                  : "text-ink-secondary",
-          )}
-        >
-          {state}
-        </span>
-      </div>
-
-      <div className="space-y-2 px-4 py-2.5">
-        {when && (
-          <p className="flex items-baseline gap-2">
-            <span className="text-sm text-ink tabular-nums">
-              до {moment(when)}
-            </span>
-            <span
-              className={cx(
-                "text-xs whitespace-nowrap",
-                overdue
-                  ? "text-ink-muted line-through decoration-baseline"
-                  : burning
-                    ? "font-semibold text-critical"
-                    : "text-ink-muted",
-              )}
-            >
-              {overdue ? "срок прошёл" : left || ""}
-            </span>
-          </p>
-        )}
-        {when && whenNote && (
-          <p className="-mt-1.5 text-[11px] text-ink-muted">{whenNote}</p>
-        )}
-
-        {children}
-
-        {/* Задачи строкой, а не блоком: «1/2» отвечает на весь вопрос, а
-            что именно за задачи — в окне, куда ведёт то же нажатие. */}
-        <button
-          type="button"
-          onClick={onTasks}
-          title="Открыть задачи по лоту"
-          className={cx(
-            "-mx-1 flex w-[calc(100%+0.5rem)] items-baseline gap-2 rounded-[6px] px-1 py-0.5",
-            "text-left transition hover:bg-plane",
-            "focus-visible:outline focus-visible:outline-2",
-            "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
-          )}
-        >
-          <span className="flex-1 text-xs text-ink-muted">Задачи</span>
-          <span
-            className={cx(
-              "text-xs tabular-nums",
-              tasks.total === 0
-                ? "text-ink-muted"
-                : tasks.done === tasks.total
-                  ? "text-good"
-                  : "font-semibold text-ink",
-            )}
-          >
-            {tasks.total === 0 ? "нет" : `${tasks.done}/${tasks.total}`}
-          </span>
-        </button>
-      </div>
-    </Panel>
-  );
-}
-
-/** Сделано из заведённых по этому отделу. Отменённые не в счёт: их не делали. */
-function count(
-  tasks: Job[],
-  desk: Department,
-): { done: number; total: number } {
+  // Отменённые не в счёт: их не делали, и «1 из 2» с отменённой во второй
+  // означало бы, что половина работы не сделана, хотя работа была одна.
   const mine = tasks.filter(
     (task) => task.department === desk && task.state !== "cancelled",
   );
-  return {
-    done: mine.filter((task) => task.state === "done").length,
-    total: mine.length,
-  };
-}
+  const live = mine
+    .filter((task) => task.state === "open")
+    .sort((a, b) => (a.due_at || "9").localeCompare(b.due_at || "9"));
+  const done = mine
+    .filter((task) => task.state === "done")
+    .sort((a, b) => (b.done_at || "").localeCompare(a.done_at || ""));
 
-/** Дата и время коротко: год в правом столбце шириной в триста точек лишний. */
-function moment(iso: string): string {
-  const at = new Date(iso);
-  return Number.isNaN(at.getTime())
-    ? "—"
-    : at.toLocaleString("ru-KZ", {
-        day: "2-digit",
-        month: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
+  const near = live[0];
+  const own: Mark =
+    mark ??
+    (live.length
+      ? heat(near?.due_at) === "hot"
+        ? "hot"
+        : "active"
+      : mine.length
+        ? "done"
+        : "idle");
+
+  return (
+    <Node
+      first={first}
+      last={last}
+      mark={own}
+      title={title}
+      open={open}
+      onToggle={onToggle}
+      right={
+        right ??
+        (near?.due_at ? (
+          <Clock due={near.due_at} />
+        ) : (
+          <span className="text-[11.5px] text-ink-muted">
+            {mine.length ? "все задачи закрыты" : "задач нет"}
+          </span>
+        ))
+      }
+      meta={meta}
+      counts={
+        mine.length > 0 ? (
+          /* Долей, а не двумя числами со словами. «1 открыто · 1 закрыто»
+             человек складывает в уме, чтобы понять, сколько работы всего, —
+             а спрашивает он именно это: «2/3» читается сразу и не требует
+             арифметики. Что означают числа, сказано словами в своде наверху
+             колонки. */
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span title={`${done.length} из ${mine.length} задач закрыто`}>
+              <b className="font-semibold text-ink">{done.length}</b>/
+              {mine.length}
+            </span>
+            {live.some((task) => !task.taken_at) && (
+              <Chip tone="blue">есть свободная</Chip>
+            )}
+          </span>
+        ) : null
+      }
+    >
+      {/* Открытые и закрытые подряд, одним списком. Складка «показать
+          закрытые» прятала половину ответа на вопрос «что тут делали»: узел
+          раскрывают именно ради него, и второе нажатие ради второй половины
+          — это нажатие, которое делают всегда. */}
+      {mine.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1">
+          {[...live, ...done].map((task) => (
+            <TaskLine
+              key={task.id}
+              task={task}
+              onOpen={() => onOpenTask(task.id)}
+            />
+          ))}
+        </div>
+      )}
+    </Node>
+  );
 }

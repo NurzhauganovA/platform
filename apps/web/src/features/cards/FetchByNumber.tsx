@@ -80,7 +80,7 @@ export function FetchByNumber() {
           onClick={() => start.mutate()}
           disabled={!ready}
         >
-          {going || start.isPending ? "Ищем…" : "Найти на портале"}
+          {going || start.isPending ? "Ищем…" : "Найти"}
         </Button>
       </div>
 

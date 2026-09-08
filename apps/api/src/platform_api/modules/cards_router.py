@@ -172,6 +172,10 @@ class TaskOut(BaseModel):
     state: str
     result: str
     created_at: str
+    taken_at: str = ""
+    done_at: str = ""
+    done_by: str = ""
+    author: str = ""
 
 
 class EventOut(BaseModel):
@@ -297,6 +301,19 @@ class CloseIn(BaseModel):
 
 class TakeIn(BaseModel):
     assignee_id: uuid.UUID | None = None
+    """Кому. Пусто — себе.
+
+    Срока здесь нет намеренно: его назначает автор задачи при заведении, и
+    берущий его не двигает — см. `cards.take_task`.
+    """
+
+    release: bool = False
+    """Вернуть задачу в очередь отдела.
+
+    Отдельным признаком, а не пустым `assignee_id`: «не указан» и «указан
+    пустым» в JSON приходят одинаково, и возврат в очередь молча брал задачу на
+    того, кто нажал «Вернуть отделу», — кнопка делала обратное написанному.
+    """
 
 
 class ResultIn(BaseModel):
@@ -419,9 +436,24 @@ def get_tasks(
     mine: Annotated[bool, Query(description="Только мои")] = False,
     unassigned: Annotated[bool, Query(description="Ничьи в очереди отдела")] = False,
     card_id: Annotated[uuid.UUID | None, Query()] = None,
-    task_state: Annotated[TaskState | None, Query(alias="state")] = TaskState.OPEN,
+    task_state: Annotated[
+        str,
+        Query(
+            alias="state",
+            description="open, done, cancelled или all — все состояния сразу",
+        ),
+    ] = "open",
     _guard: Guard = None,
 ) -> list[TaskOut]:
+    """Задачи под отбором.
+
+    `state=all` отдаёт и открытые, и закрытые. Это нужно карточке лота: блок
+    отдела показывает «1 из 2» и кто закрыл, а по одним открытым ни того, ни
+    другого не собрать. Умолчание при этом осталось прежним — открытые: их
+    спрашивают в девяти случаях из десяти, и очередь, которая по умолчанию
+    отдаёт всё закрытое за год, бесполезна.
+    """
+    want = None if task_state == "all" else _task_state(task_state)
     found = cards.tasks(
         db,
         organization_id=identity.organization.id,
@@ -429,9 +461,24 @@ def get_tasks(
         assignee_id=identity.user.id if mine else None,
         unassigned=unassigned,
         card_id=card_id,
-        state=task_state,
+        state=want,
     )
     return [TaskOut(**asdict(item)) for item in found]
+
+
+def _task_state(value: str) -> TaskState:
+    """Состояние из строки. Непонятное — это опечатка в запросе, а не «всё».
+
+    Молчаливое «покажу всё» на опечатке отдало бы закупщику закрытые задачи
+    там, где он просил открытые, и заметил бы он это не сразу.
+    """
+    try:
+        return TaskState(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Неизвестное состояние задачи: {value}",
+        ) from exc
 
 
 @router.get("/{card_id}/files", summary="Файлы лота")
@@ -828,15 +875,21 @@ def post_take(
     body: TakeIn,
     identity: CurrentUser,
     db: Db,
+    request: Request,
     _guard: Guard = None,
 ) -> TaskOut:
-    """Пустой человек возвращает задачу в общую очередь отдела."""
+    """Взять задачу себе, кому-то или вернуть её в очередь отдела.
+
+    Срок не трогаем: его назвал тот, кто задачу завёл, — он знает, к какому
+    часу нужен ответ.
+    """
     _act(
         lambda: cards.take_task(
             db,
             organization_id=identity.organization.id,
             task_id=task_id,
-            user_id=body.assignee_id if body.assignee_id else identity.user.id,
+            user_id=None if body.release else (body.assignee_id or identity.user.id),
+            settings=request.app.state.settings,
         )
     )
     db.commit()

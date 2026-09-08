@@ -111,11 +111,7 @@ export type Card = {
 
 /** Этап обсуждения. Наш ход, а не ответ заказчика. */
 export type DiscussionStage =
-  | "drafting"
-  | "moderation"
-  | "lawyers"
-  | "sent"
-  | "not_needed";
+  "drafting" | "moderation" | "lawyers" | "sent" | "not_needed";
 
 /** Обсуждение по лоту коротко — то, что показывает правый столбец. */
 export type Talk = {
@@ -147,6 +143,14 @@ export type Job = {
   state: TaskState;
   result: string;
   created_at: string;
+  /** Когда взяли. Пусто — задача ещё ничья: срок при этом тот же, его назначил
+   *  автор, — просто делать её пока некому. */
+  taken_at: string;
+  done_at: string;
+  /** Кто закрыл. Не тот же, кто взял: задачу передают и доделывают за коллегу. */
+  done_by: string;
+  /** Кто поставил. Вопрос «а кто это придумал» адресуют не исполнителю. */
+  author: string;
 };
 
 export type Person = { id: string; name: string; role: string };
@@ -285,7 +289,8 @@ export const cardsApi = {
       mine?: boolean;
       unassigned?: boolean;
       card_id?: string;
-      state?: TaskState | "";
+      /** `all` — и открытые, и закрытые. Умолчание — только открытые. */
+      state?: TaskState | "all";
     } = {},
   ) => api.get<Job[]>(`/api/cards/tasks${query(filters)}`),
 
@@ -303,8 +308,18 @@ export const cardsApi = {
   closeTask: (taskId: string, state: TaskState = "done", result = "") =>
     api.post<Job>(`/api/cards/tasks/${taskId}/close`, { state, result }),
 
+  /**
+   * Взять задачу себе. Срока здесь нет: его назначает автор при заведении, и
+   * берущий его не двигает — иначе задача «к 16:00», взятая в 15:50, молча
+   * превращалась в задачу «до 18:50».
+   */
   takeTask: (taskId: string, assignee_id?: string | null) =>
     api.post<Job>(`/api/cards/tasks/${taskId}/take`, { assignee_id }),
+
+  /** Вернуть задачу в очередь отдела. Отдельным признаком, а не пустым
+   *  исполнителем: пустой сервер понимал как «себе». */
+  releaseTask: (taskId: string) =>
+    api.post<Job>(`/api/cards/tasks/${taskId}/take`, { release: true }),
 
   /** Цена, с которой выиграли, или победитель, если выиграли не мы. */
   result: (cardId: string, won_amount: number | null, winner = "") =>

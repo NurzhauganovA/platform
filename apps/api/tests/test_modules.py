@@ -141,6 +141,10 @@ def test_fail_menyu_sovpadaet_s_pravami() -> None:
         "/work/supply": CRM,
         "/work/legal": CRM,
         "/work/approval": CRM,
+        # Журнал действий — только администратору. Он отвечает на вопрос «кто
+        # это сделал», и человек, о котором спрашивают, не должен видеть, что
+        # именно о нём записано.
+        "/work/audit": (Role.ADMIN,),
         "/work/submit": CRM,
     }
     расхождения: list[str] = []

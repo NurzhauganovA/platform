@@ -27,6 +27,7 @@ import { SubmitPage } from "@/features/cards/SubmitPage";
 import { AnalysisDesk, LegalDesk, SupplyDesk } from "@/features/cards/DeskPage";
 import { CodesPage } from "@/features/goszakup/CodesPage";
 import { ProfilePage } from "@/features/profile/ProfilePage";
+import { AuditPage } from "@/features/audit/AuditPage";
 import { GoszakupPage } from "@/features/worklist/GoszakupPage";
 import { RemarkPage } from "@/features/remarks/RemarkPage";
 import { RemarksPage } from "@/features/remarks/RemarksPage";
@@ -98,6 +99,7 @@ function Routing() {
         <Route path="work/supply" element={<SupplyDesk />} />
         <Route path="work/legal" element={<LegalDesk />} />
         <Route path="work/approval" element={<ApprovalPage />} />
+        <Route path="work/audit" element={<AuditPage />} />
         <Route path="work/submit" element={<SubmitPage />} />
         <Route path="goszakup/lots" element={<GoszakupPage />} />
         <Route path="goszakup/codes" element={<CodesPage />} />

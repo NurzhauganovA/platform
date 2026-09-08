@@ -24,6 +24,7 @@ from platform_api.auth.dependencies import CurrentUser, Db
 from platform_api.auth.passwords import WeakPasswordError
 from platform_api.auth.service import (
     AuthError,
+    Identity,
     authenticate,
     open_session,
     resolve_session,
@@ -31,8 +32,7 @@ from platform_api.auth.service import (
     revoke_session,
 )
 from platform_api.config import Settings, get_settings
-from platform_api.db.base import utcnow
-from platform_api.db.models import AuditEntry, Role, Session
+from platform_api.db.models import Role, Session
 from platform_api.errors import SpokenError
 from platform_api.logging import get_logger
 from platform_api.modules import notify
@@ -80,7 +80,6 @@ def login(
             db, payload.email, payload.password, organization_slug=payload.organization
         )
     except AuthError as exc:
-        _audit(db, None, None, "login_failed", str(payload.email), request)
         # Фиксируем до отказа, и это обязательно. Ответ уходит исключением, а
         # оно откатывает транзакцию запроса — вместе со счётчиком неудачных
         # попыток и записью в журнале. То есть защита от подбора существовала
@@ -90,7 +89,7 @@ def login(
         # Задержки и подсказок нет: сообщение одно на все причины отказа.
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
-    _session, token = open_session(
+    session, token = open_session(
         db,
         user,
         organization,
@@ -99,7 +98,12 @@ def login(
         ip_address=_client_ip(request),
     )
     _set_session_cookie(response, token, settings)
-    _audit(db, user.id, organization.id, "login", str(user.email), request)
+    # Кто вошёл — посреднику журнала. У входа нет зависимости `CurrentUser`, и
+    # без этого удачный вход записывался бы действием «без входа»: в журнале
+    # он есть, а чей — не сказано.
+    request.state.identity = Identity(
+        user=user, organization=organization, role=role, session_id=session.id
+    )
     logger.info("Вход выполнен", user_id=str(user.id), organization=organization.slug)
 
     return MeOut(
@@ -132,7 +136,6 @@ def logout(
         session = db.get(Session, identity.session_id)
         if session is not None:
             revoke_session(db, session)
-        _audit(db, identity.user.id, identity.organization.id, "logout", "", request)
 
     response.delete_cookie(
         settings.auth.session_cookie,
@@ -228,7 +231,7 @@ def patch_me(
     и код сброса пароля. Поэтому смена сразу уходит в сервис уведомлений.
     """
     try:
-        user = profile.rename(
+        profile.rename(
             db,
             settings,
             user=identity.user,
@@ -237,7 +240,6 @@ def patch_me(
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    _audit(db, user.id, identity.organization.id, "profile_changed", "", request)
     db.commit()
     return me(identity)
 
@@ -262,7 +264,6 @@ def post_password(
         profile.change_password(db, user=identity.user, current=body.current, fresh=body.fresh)
     except (SpokenError, WeakPasswordError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    _audit(db, identity.user.id, identity.organization.id, "password_changed", "", request)
     db.commit()
     response.delete_cookie(
         settings.auth.session_cookie,
@@ -385,7 +386,6 @@ def logout_everywhere(
     администратором.
     """
     count = revoke_all_sessions(db, identity.user.id)
-    _audit(db, identity.user.id, identity.organization.id, "logout_everywhere", "", request)
     response.delete_cookie(
         settings.auth.session_cookie,
         httponly=True,
@@ -418,23 +418,3 @@ def _client_ip(request: Request) -> str:
     if forwarded and request.app.state.settings.is_prod:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else ""
-
-
-def _audit(
-    db: Db,
-    user_id: uuid.UUID | None,
-    organization_id: uuid.UUID | None,
-    action: str,
-    target: str,
-    request: Request,
-) -> None:
-    db.add(
-        AuditEntry(
-            organization_id=organization_id,
-            user_id=user_id,
-            action=action,
-            target=target[:255],
-            ip_address=_client_ip(request),
-            created_at=utcnow(),
-        )
-    )

@@ -25,7 +25,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session as DbSession
 
 from platform_api.config import Settings
-from platform_api.db.models import Department, LotCard, Task
+from platform_api.db.models import Department, LotCard, Task, User
 from platform_api.logging import get_logger
 from platform_api.modules import notify
 
@@ -119,6 +119,53 @@ def task_added(db: DbSession, settings: Settings, task: Task, card: LotCard) -> 
     )
 
 
+def task_taken(db: DbSession, settings: Settings, task: Task) -> None:
+    """Задачу взяли — говорим отделу, кто и к какому сроку.
+
+    Отделу, а не только взявшему. Остальные перестают на неё смотреть, и это
+    ровно то, ради чего очередь и заводили: без этого двое берутся за одно и
+    узнают об этом на планёрке.
+
+    Новый срок уходит вместе с сообщением, и сервис сам напомнит за час до
+    него. Час, а не шесть: срок здесь три часа от силы, и напоминание за шесть
+    пришло бы раньше самой задачи.
+    """
+    from platform_api.modules.cards import DEPARTMENT_NAMES, people_of
+
+    card = db.get(LotCard, task.card_id)
+    if card is None:
+        return
+
+    people = set(people_of(db, task.organization_id, task.department))
+    if task.assignee_id:
+        people.discard(task.assignee_id)
+    if not people:
+        return
+
+    who = db.get(User, task.assignee_id) if task.assignee_id else None
+    notify.about(
+        settings,
+        event="task.assigned",
+        title="Задачу взяли",
+        body_text=(
+            f"{task.title}\n"
+            f"{card.code} · {card.title}\n"
+            f"Взял: {who.full_name or who.email if who else 'сотрудник'}"
+        ),
+        payload={
+            "title": task.title,
+            "lot": f"{card.code} · {card.title}",
+            "department": DEPARTMENT_NAMES.get(task.department, task.department.value),
+        },
+        users=sorted(people),
+        url=f"/work/lots/{card.id}",
+        deadline=task.due_at.isoformat() if task.due_at else "",
+        group=f"task:{task.id}",
+        remind_before_minutes=[60] if task.due_at else None,
+        idempotency_key=f"task-taken-{task.id}",
+    )
+
+
 def task_closed(settings: Settings, task: Task) -> None:
     """Задача закрыта — гасим напоминания о её сроке.
 
@@ -145,4 +192,4 @@ def _money(value: Decimal | None) -> str:
     return f"{int(value):,}".replace(",", " ")
 
 
-__all__ = ["TAKEN_DESKS", "lot_opened", "task_added", "task_closed"]
+__all__ = ["TAKEN_DESKS", "lot_opened", "task_added", "task_closed", "task_taken"]

@@ -300,15 +300,33 @@ class Job(Base, UUIDPrimaryKey, Timestamps):
 
 
 class AuditEntry(Base, UUIDPrimaryKey):
-    """Кто что сделал.
+    """Кто что сделал. Каждое изменение, без исключений.
 
-    Пишется по действиям, меняющим деньги и доступ: вход, выдача роли, запуск
-    платного разбора, выпуск КП. Не для отчётности — для ответа на вопрос
-    «кто отправил заказчику это предложение», который однажды будет задан.
+    Пишется всё, что меняет данные: POST, PUT, PATCH, DELETE — независимо от
+    того, вспомнил ли автор обработчика про журнал. Выборочная запись держится
+    на памяти того, кто писал обработчик, и первый же новый эндпоинт
+    оказывается вне журнала; замечают это ровно тогда, когда журнал понадобился.
+
+    Не для отчётности — для ответа на вопрос «кто отправил заказчику это
+    предложение» и «кто снял лот с участия», который однажды будет задан. И для
+    ответа с доказательством: время, адрес, роль на тот момент и что именно
+    ушло на сервер.
+
+    Пишется своей транзакцией, отдельной от той, что обслуживает запрос.
+    Действие могло не удаться — откат данных не должен уносить с собой запись о
+    попытке: неудавшаяся попытка выдать себе роль администратора интересна не
+    меньше удавшейся.
+
+    Роль сохраняется на момент действия, а не берётся из членства сегодня. Роли
+    меняют, и «юрист отправил замечание» через полгода превращается в «менеджер
+    отправил замечание» — то есть в неправду.
     """
 
     __tablename__ = "audit_log"
-    __table_args__ = (Index("ix_audit_org_created", "organization_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_audit_org_created", "organization_id", "created_at"),
+        Index("ix_audit_user_created", "user_id", "created_at"),
+    )
 
     organization_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
@@ -318,9 +336,32 @@ class AuditEntry(Base, UUIDPrimaryKey):
     )
 
     action: Mapped[str] = mapped_column(String(64), index=True)
+    """Что сделано, коротким именем: `login`, `card.open`, `task.close`.
+
+    Для действий, записанных посредником, — образец пути обработчика: по нему
+    события одного рода собираются в кучу, а адрес с подставленным ключом —
+    нет. Отбор «покажи все переводы лота» иначе невозможен."""
+
     target: Mapped[str] = mapped_column(String(255), default="")
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    """Что ушло на сервер, без секретов. Пароли, коды и ключи вырезаны по
+    имени поля: журнал читают люди, и его же однажды выгрузят наружу."""
 
+    method: Mapped[str] = mapped_column(String(8), default="")
+    path: Mapped[str] = mapped_column(String(512), default="")
+    """Настоящий адрес запроса, с ключами. По нему находят конкретную запись,
+    когда `action` уже привёл к нужному роду событий."""
+
+    status: Mapped[int] = mapped_column(default=0, server_default="0")
+    """Чем ответил сервер. Отказ пишется наравне с успехом: попытка сделать
+    то, на что нет права, — это то, ради чего журнал и заводят."""
+
+    duration_ms: Mapped[int] = mapped_column(default=0, server_default="0")
+
+    role: Mapped[str] = mapped_column(String(32), default="")
+    """Роль на момент действия, а не сегодняшняя."""
+
+    user_agent: Mapped[str] = mapped_column(String(512), default="")
     ip_address: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(index=True)
 
@@ -1062,6 +1103,18 @@ class Task(Base, UUIDPrimaryKey, Timestamps):
     """Пусто — задача отдела, а не человека. Такая висит в общей очереди, и
     берут её оттуда: ничья срочная задача и есть то, что теряется."""
 
+    taken_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    """Когда задачу взяли на себя. Пусто — она ещё ничья.
+
+    По ней читается срок. Пока задача не взята, `due_at` означает «взять до»:
+    час на то, чтобы кто-то из отдела её подобрал. Взяли — и тот же `due_at`
+    означает уже «сделать до», по времени, которое человек сам назвал.
+
+    Два поля вместо одного разошлись бы: горит срок один, а какой именно —
+    вопрос, на который в очереди отвечать некогда. Здесь он один, а чем он
+    является, говорит эта отметка.
+    """
+
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -1071,6 +1124,13 @@ class Task(Base, UUIDPrimaryKey, Timestamps):
         Enum(TaskState, native_enum=False, length=12), default=TaskState.OPEN, index=True
     )
     done_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    done_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    """Кто закрыл. Не тот же, кто взял: задачу передают, доделывают за коллегу,
+    закрывает её иногда руководитель. «Закрыл Иванов» и «взял Иванов» — разные
+    ответы на вопрос, кому за это платить."""
     result: Mapped[str] = mapped_column(Text, default="")
     """Чем кончилось. Закрытая задача без единого слова о результате через
     месяц неотличима от брошенной."""

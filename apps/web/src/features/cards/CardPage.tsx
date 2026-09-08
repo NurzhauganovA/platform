@@ -19,7 +19,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { cardsApi, type Card } from "@/api/cards";
-import { Card as Panel, EmptyState, Page, Spinner, Tabs } from "@/ui";
+import { Card as Panel, EmptyState, Spinner, Tabs } from "@/ui";
 import { Discussion } from "./Discussion";
 import { ChatDock } from "./ChatDock";
 import { Files } from "./Files";
@@ -83,55 +83,54 @@ export function CardPage() {
 
   return (
     <>
-      {/* Шапка своя, а не общая `PageHeader`: у лота в заголовке три разных
-          вещи — код, название и откуда он.
+      {/* Экран в высоту окна, а не в поток страницы. Колонки прокручиваются
+          порознь: слева таблица разбора на десять предметов, справа рельса
+          шагов, и общая прокрутка уводила рельсу за верхний край ровно тогда,
+          когда по таблице и надо свериться с задачей. */}
+      <div className="flex h-screen flex-col overflow-hidden bg-plane">
+        {/* Шапка своя, а не общая `PageHeader`: у лота в заголовке три разных
+            вещи — код, название и откуда он.
 
-          В одну строку и в одну строку названия. У лотов портала в названии
-          лежит техническая спецификация целиком: развёрнутая, она занимает
-          треть экрана, а читают её во вкладке «Разбор», где для неё место и
-          есть. Здесь достаточно узнать лот. */}
-      <header className="flex items-center gap-4 border-b border-hairline bg-surface px-8 py-2.5">
-        <h1 className="flex min-w-0 items-baseline gap-2 text-[15px] font-semibold tracking-tight text-ink">
-          <span className="shrink-0 font-mono">{data.code}</span>
-          <span aria-hidden className="shrink-0 text-ink-muted">
-            ·
+            В одну строку и в одну строку названия. У лотов портала в названии
+            лежит техническая спецификация целиком: развёрнутая, она занимает
+            треть экрана, а читают её во вкладке «Разбор», где для неё место и
+            есть. Здесь достаточно узнать лот. */}
+        <header className="flex shrink-0 items-center gap-3 border-b border-hairline bg-surface px-[18px] py-[11px]">
+          <span className="shrink-0 font-mono text-[12.5px] tracking-[0.02em] text-ink-muted">
+            {data.code}
           </span>
-          <span className="truncate" title={data.title}>
+          <h1
+            className="min-w-0 truncate text-[15px] font-semibold tracking-[-0.015em] text-ink"
+            title={data.title}
+          >
             {data.title}
+          </h1>
+          <span className="ml-auto flex shrink-0 items-center gap-[7px]">
+            <LotFacts card={data} />
+            <PortalLink card={data} />
+            <Link
+              to="/work/lots"
+              className="flex h-7 items-center rounded-[7px] border border-hairline bg-surface px-[11px] text-[12.5px] font-medium text-ink transition hover:bg-plane"
+            >
+              ← Ко всем лотам
+            </Link>
           </span>
-        </h1>
+        </header>
 
-        {/* Заказчик, площадка и номера отсюда убраны. Всё это есть в
-            «Данных закупки» — а в шапке они занимали половину строки, и
-            название лота, ради которого шапку и читают, ужималось до
-            многоточия. */}
-        <span className="ml-auto flex shrink-0 items-center gap-2">
-          <LotFacts card={data} />
-          <PortalLink card={data} />
-        </span>
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_352px] max-[1040px]:grid-cols-1">
+          {/* Левая колонка со своей прокруткой; полоса подписей прилипает к её
+              низу, а не к низу окна. */}
+          <div className="flex min-w-0 flex-col overflow-auto">
+            {/* Во всю ширину колонки, без своего потолка. Потолок в 1120
+                точек оставлял справа полосу пустого фона до самой панели: на
+                широком экране разбор упирался в невидимый край, а рядом
+                пустовало место, которого таблице как раз не хватало. */}
+            <div className="w-full flex-1 px-[18px] pt-[14px]">
+              <Summary card={data} onDone={refresh} />
 
-        <Link
-          to="/work/lots"
-          className="shrink-0 rounded-[8px] border border-baseline px-2.5 py-1 text-xs text-ink transition hover:bg-plane"
-        >
-          ← Ко всем лотам
-        </Link>
-      </header>
-
-      {/* Шире обычной страницы: в карточке рядом стоят таблица разбора и
-          правый столбец, и на восьми отступах по краям таблица начинала
-          прокручиваться вбок уже на четырёх столбцах. */}
-      <Page className="space-y-3 px-4">
-        {/* Ширина правого столбца задаётся его содержимым, а не числом:
-            свёрнутый он ужимается до полоски, и освободившееся место уходит
-            вкладкам само. Второе число в сетке пришлось бы держать в двух
-            местах — здесь и в самой колонке. */}
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
-          <div className="min-w-0 space-y-3">
-            <Summary card={data} onDone={refresh} />
-
-            <Panel className="overflow-hidden">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-hairline px-5">
+              {/* Вкладки строкой над содержимым, а не внутри его рамки:
+                  так видно, что переключается весь блок, а не часть. */}
+              <div className="mt-3 mb-2.5 flex items-center gap-0.5">
                 <Tabs
                   tabs={TABS}
                   value={tab}
@@ -141,31 +140,33 @@ export function CardPage() {
                 {/* Подпись у вкладки, а не общая: «Разбор» и «Обсуждение»
                     легко перепутать — первое про площадку, второе про
                     заказчика. */}
-                <p className="ml-auto py-2 text-xs text-ink-muted">
+                <span className="ml-auto truncate pl-4 text-xs text-ink-muted">
                   {ABOUT[tab]}
-                </p>
+                </span>
               </div>
 
-              <div className="px-5 py-4">
-                {tab === "source" && <SpecSheet card={data} />}
-                {tab === "discussion" && <Discussion card={data} />}
-                {tab === "files" && <Files card={data} />}
-                {tab === "history" && <History card={data} />}
-              </div>
-            </Panel>
+              {/* Рамку рисует сама вкладка, а не общая обёртка. У «Кто
+                  работал» блоков три — числа, этапы и лента, — и общая рамка
+                  вокруг них давала рамку в рамке: две линии в трёх точках от
+                  друг друга читаются как сбой отрисовки. */}
+              {tab === "source" && <SpecSheet card={data} />}
+              {tab === "discussion" && <Discussion card={data} />}
+              {tab === "files" && <Files card={data} />}
+              {tab === "history" && <History card={data} />}
 
-            {/* Согласование внизу, а не над вкладками. Подписывают его
-                ежедневно, но карточку открывают ради другого: разобрать
-                закупку и написать заказчику. Полоса подписей над содержимым
-                отодвигала работу на пол-экрана вниз ради шага, который делают
-                в конце. Кому надо подписать — тот видит кнопку в «Что дальше»
-                справа, она никуда не уехала. */}
+              <div className="h-4" />
+            </div>
+
             <Approval card={data} onDone={refresh} />
           </div>
 
-          <Rail card={data} people={people ?? []} onDone={refresh} />
+          {/* Правая колонка своим фоном и своей прокруткой — как отдельная
+              поверхность: она про ход лота, а не про то, что открыто слева. */}
+          <aside className="overflow-auto border-l border-hairline bg-plane/60 p-3 max-[1040px]:border-t max-[1040px]:border-l-0">
+            <Rail card={data} people={people ?? []} onDone={refresh} />
+          </aside>
         </div>
-      </Page>
+      </div>
 
       {/* Поверх страницы, а не в сетке: переписку ведут, не уходя с той
           вкладки, о которой пишут. */}

@@ -244,15 +244,29 @@ def test_logout_without_session_is_not_an_error(app_client: TestClient) -> None:
 
 
 def test_failed_login_is_recorded(app_client: TestClient, db: DbSession) -> None:
-    """Серию промахов нужно видеть в журнале — по ней замечают подбор."""
+    """Серию промахов нужно видеть в журнале — по ней замечают подбор.
+
+    Пишет посредник, а не сам обработчик. Отказ приходит исключением, и запись
+    из обработчика откатилась бы вместе с транзакцией: в журнале не осталось бы
+    ровно того, ради чего его читают.
+    """
     from platform_api.db.models import AuditEntry
 
     app_client.post(
         "/api/auth/login", json={"email": "чужой@example.kz", "password": "какой-то пароль"}
     )
 
-    entries = db.scalars(select(AuditEntry).where(AuditEntry.action == "login_failed")).all()
-    assert entries
+    entries = list(
+        db.scalars(
+            select(AuditEntry).where(
+                AuditEntry.action == "POST /api/auth/login", AuditEntry.status == 401
+            )
+        )
+    )
+    assert entries, "Неудачный вход в журнал не попал"
+    # Пароль в журнал не идёт: его читают люди, и его же однажды выгрузят.
+    assert entries[-1].payload.get("password") == "<скрыто>"
+    assert entries[-1].payload.get("email") == "чужой@example.kz"
 
 
 def test_brute_force_is_counted_over_http(app_client: TestClient, db: DbSession) -> None:

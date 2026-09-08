@@ -122,6 +122,29 @@ class WriterSettings(BaseModel):
     вызов держит место в очереди, а замечание пишется под срок."""
 
 
+class AuditSettings(BaseModel):
+    """Журнал действий: куда его вывозить и сколько держать в базе.
+
+    Вывоз нужен не вместо таблицы, а рядом с ней. Таблица живёт в томе Docker,
+    а том сносится одной командой — `make clean`, переезд, чистка места. Файл
+    на диске машины переживает и это, и переполнение виртуального диска, из-за
+    которого база однажды не смогла писать вовсе.
+
+    Каталог подключается томом с машины, а не лежит внутри контейнера: иначе он
+    исчезнет вместе с ним и защищать будет нечего.
+    """
+
+    root: Path = Path("audit")
+    """Куда складывать суточные выгрузки. Внутри контейнера — `/app/audit`."""
+
+    keep_days: int = Field(default=400, ge=30)
+    """Сколько держать в базе. Больше года: вопрос «кто это отправил» приходит
+    вместе с претензией заказчика, а претензии приходят через полгода.
+
+    Из базы, не из файлов. Файлы не чистятся вовсе — они и есть то, что должно
+    пережить всё остальное."""
+
+
 class NotifySettings(BaseModel):
     """Связь с сервисом уведомлений.
 
@@ -173,6 +196,7 @@ class Settings(BaseSettings):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     writer: WriterSettings = Field(default_factory=WriterSettings)
     notify: NotifySettings = Field(default_factory=NotifySettings)
+    audit: AuditSettings = Field(default_factory=AuditSettings)
 
     environment: Literal["dev", "prod"] = "dev"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"

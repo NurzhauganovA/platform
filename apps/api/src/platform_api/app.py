@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from redis import Redis
 
+from platform_api.audit import AuditMiddleware
 from platform_api.auth.dependencies import CurrentUser
 from platform_api.auth.router import router as auth_router
 from platform_api.config import Settings, get_settings
@@ -24,6 +25,7 @@ from platform_api.db.session import create_db_engine, create_session_factory
 from platform_api.jobs.router import router as jobs_router
 from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
+from platform_api.modules.audit_router import router as audit_router
 from platform_api.modules.discussion_router import router as discussion_router
 from platform_api.modules.remarks_router import router as remarks_router
 from platform_api.modules.tender.workspace import CaseWorkspace
@@ -126,6 +128,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
 
+    # Журнал действий — самым внешним посредником, то есть первым на вход и
+    # последним на выход. Так он видит и то, что отклонили права, и то, что
+    # упало обработкой: именно эти записи и нужны, когда журнал открывают.
+    app.add_middleware(AuditMiddleware)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins),
@@ -190,6 +197,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(jobs_router)
     api.include_router(discussion_router)
     api.include_router(remarks_router)
+    api.include_router(audit_router)
     for module in registry.all():
         api.include_router(module.router)
 

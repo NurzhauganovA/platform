@@ -175,6 +175,19 @@ DISCUSSION_STAGE_NAMES: dict[DiscussionStage, str] = {
 модуля в кольцо ради словаря на пять строк. Тест на совпадение есть."""
 
 
+DEFAULT_WORK = timedelta(hours=1)
+"""Сколько даётся на задачу, если срок не назвали.
+
+Час — не срок отклика, а срок работы: столько занимает большинство задач
+целиком. Раньше сроков было два — «взять до» у ничьей задачи и «сделать до» у
+взятой, — и второй назначал себе исполнитель в момент взятия. Это давало
+задаче, заведённой под конец приёма, срок позже самого приёма: человек берёт в
+16:50 «на три часа», а заявку подают в 18:00.
+
+Теперь срок один и ставит его тот, кто задачу завёл: он знает, к какому часу
+нужен ответ. Взятие срок не двигает.
+"""
+
 DEPARTMENT_ROLES: dict[Department, tuple[Role, ...]] = {
     Department.DISCUSSION: (Role.ADMIN, Role.MANAGER, Role.LAWYER),
     Department.ANALYSIS: (Role.ADMIN, Role.MANAGER, Role.ANALYST),
@@ -310,6 +323,20 @@ class Job:
     state: str
     result: str
     created_at: str
+
+    taken_at: str = ""
+    """Когда взяли. Пусто — ещё ничья, и срок означает «взять до», а не
+    «сделать до». Экрану это нужно, чтобы не писать «просрочена» там, где
+    просрочен отклик, а не работа."""
+
+    done_at: str = ""
+    done_by: str = ""
+    """Кто закрыл. Не тот же, кто взял: задачу передают и доделывают за
+    коллегу."""
+
+    author: str = ""
+    """Кто поставил. Вопрос «а кто это придумал» задают ровно тогда, когда
+    задача выглядит лишней, — и адресовать его нужно не исполнителю."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -734,6 +761,14 @@ def add_task(
     if not clean:
         raise SpokenError("У задачи должно быть название")
 
+    # Задача с исполнителем считается взятой сразу: её завели конкретному
+    # человеку, и подбирать её некому.
+    #
+    # Срок ставит автор. Не назвал — час: у задачи без срока нет и очереди, она
+    # не горит и не всплывает никогда.
+    taken = utcnow() if assignee_id else None
+    when = due_at if due_at is not None else utcnow() + DEFAULT_WORK
+
     task = Task(
         organization_id=organization_id,
         card_id=card.id,
@@ -741,8 +776,9 @@ def add_task(
         title=clean[:2000],
         body=body.strip(),
         assignee_id=assignee_id,
+        taken_at=taken,
         created_by_id=created_by,
-        due_at=due_at or card.deadline,
+        due_at=when,
     )
     db.add(task)
     trace(
@@ -755,6 +791,64 @@ def add_task(
     )
     db.flush()
     _task_added(db, settings, task, card)
+    return task
+
+
+def take_task(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    task_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    settings: Settings | None = None,
+) -> Task:
+    """Берёт задачу себе. Пустой человек — вернуть в очередь отдела.
+
+    Одно действие и без вопросов. Раньше берущий называл, за сколько сделает, и
+    этим переписывал срок: задача, заведённая «к 16:00», после взятия в 15:50
+    становилась задачей «до 18:50». К какому часу нужен ответ, знает тот, кто
+    задачу завёл; берущий знает только, свободен ли он сейчас.
+
+    Поэтому `due_at` здесь не трогается вовсе — ни при взятии, ни при возврате.
+    Возврат снимает исполнителя, срок остаётся прежним: он был про работу, а не
+    про то, кто её делает.
+
+    Чужую взятую не перехватить. Двое, делающие одно и то же и не знающие об
+    этом, — худший исход из возможных.
+    """
+    task = db.get(Task, task_id)
+    if task is None or task.organization_id != organization_id:
+        raise SpokenError("Задача не найдена")
+
+    if user_id is None:
+        task.assignee_id = None
+        task.taken_at = None
+        trace(
+            db,
+            card_id=task.card_id,
+            kind="task_taken",
+            title=f"Вернул в очередь отдела задачу «{task.title}»",
+            actor_id=None,
+        )
+        db.flush()
+        return task
+
+    if task.state is not TaskState.OPEN:
+        raise SpokenError("Задача закрыта — брать нечего")
+    if task.assignee_id is not None and task.assignee_id != user_id:
+        raise SpokenError("Задачу уже взял другой сотрудник")
+
+    task.assignee_id = user_id
+    task.taken_at = utcnow()
+    trace(
+        db,
+        card_id=task.card_id,
+        kind="task_taken",
+        title=f"Взял задачу «{task.title}»",
+        actor_id=user_id,
+    )
+    db.flush()
+    _task_taken(db, settings, task)
     return task
 
 
@@ -791,6 +885,9 @@ def close_task(
 
     task.state = state
     task.done_at = utcnow() if state is not TaskState.OPEN else None
+    # Кто закрыл, а не кто взял: задачу передают и доделывают за коллегу, а на
+    # вопрос «кому платить премию» отвечает второе имя, не первое.
+    task.done_by_id = user_id if state is not TaskState.OPEN else None
     if result.strip():
         task.result = result.strip()[:4000]
     trace(
@@ -946,33 +1043,6 @@ def _stages(rows: Sequence[tuple[LotEvent, str | None]]) -> list[Stage]:
             )
         )
     return made
-
-
-def take_task(
-    db: DbSession,
-    *,
-    organization_id: uuid.UUID,
-    task_id: uuid.UUID,
-    user_id: uuid.UUID | None,
-) -> Task:
-    """Берёт задачу себе. Пустой человек — возвращает в общую очередь."""
-    task = db.get(Task, task_id)
-    if task is None or task.organization_id != organization_id:
-        raise SpokenError("Задача не найдена")
-    task.assignee_id = user_id
-    trace(
-        db,
-        card_id=task.card_id,
-        kind="task_taken",
-        title=(
-            f"Взял задачу «{task.title}»"
-            if user_id is not None
-            else f"Вернул в очередь отдела задачу «{task.title}»"
-        ),
-        actor_id=user_id,
-    )
-    db.flush()
-    return task
 
 
 @dataclass(frozen=True, slots=True)
@@ -1188,6 +1258,10 @@ def _job(
         state=row.state.value,
         result=row.result,
         created_at=row.created_at.isoformat(),
+        taken_at=row.taken_at.isoformat() if row.taken_at else "",
+        done_at=row.done_at.isoformat() if row.done_at else "",
+        done_by=known.get(row.done_by_id, "") if row.done_by_id else "",
+        author=known.get(row.created_by_id, "") if row.created_by_id else "",
     )
 
 
@@ -1302,6 +1376,23 @@ def _task_added(db: DbSession, settings: Settings | None, task: Task, card: LotC
     # Ловим всё: рассылка не должна ронять работу.
     except Exception as exc:
         logger.warning("Не позвали на задачу", task=str(task.id), error=str(exc))
+
+
+def _task_taken(db: DbSession, settings: Settings | None, task: Task) -> None:
+    """Сообщает отделу, что задачу взяли и к какому сроку.
+
+    Отделу, а не только взявшему: остальные перестают на неё смотреть, и это
+    ровно то, ради чего очередь и заводили.
+    """
+    if settings is None:
+        return
+    from platform_api.modules import alerts
+
+    try:
+        alerts.task_taken(db, settings, task)
+    # Ловим всё: рассылка не должна ронять работу.
+    except Exception as exc:
+        logger.warning("Не сообщили о взятии задачи", task=str(task.id), error=str(exc))
 
 
 def _ordered(approvals: Sequence[Approval]) -> list[Approval]:
@@ -1474,7 +1565,7 @@ def people(db: DbSession, rows: Sequence[LotCard] | Sequence[Task]) -> dict[uuid
     """
     wanted: set[uuid.UUID] = set()
     for row in rows:
-        for field in ("manager_id", "owner_id", "assignee_id"):
+        for field in ("manager_id", "owner_id", "assignee_id", "done_by_id", "created_by_id"):
             value = getattr(row, field, None)
             if value:
                 wanted.add(value)

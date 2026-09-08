@@ -64,10 +64,14 @@ export function DeskPage({
     queryFn: () => cardsApi.tasks({ department, unassigned: true }),
     refetchInterval: 60_000,
   });
+  // Читается сразу, а не по открытии вкладки. Числа стоят на самих вкладках,
+  // и отложенный запрос показывал ноль у «Закрытых» до тех пор, пока по ней не
+  // щёлкнут: человек видел пустой стол и уходил, не узнав, что за день закрыл
+  // четыре задачи.
   const { data: closed } = useQuery({
     queryKey: ["desk-tasks", department, "closed"],
     queryFn: () => cardsApi.tasks({ department, mine: true, state: "done" }),
-    enabled: tab === "closed",
+    refetchInterval: 60_000,
   });
   const refresh = () =>
     void cache.invalidateQueries({ queryKey: ["desk-tasks", department] });

@@ -56,6 +56,10 @@ def get_current_identity(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Требуется вход",
         )
+    # Кто пришёл — посреднику журнала. Он работает вокруг обработчика и своей
+    # сессии к базе не имеет; вторая проверка куки ради имени в журнале была бы
+    # вторым чтением сессии на каждый запрос.
+    request.state.identity = identity
     return identity
 
 

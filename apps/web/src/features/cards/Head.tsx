@@ -19,7 +19,7 @@ import {
 } from "@/api/cards";
 import { ApiError } from "@/api/client";
 import { Button, Input, cx } from "@/ui";
-import { TZ } from "@/features/worklist/format";
+import { stamp } from "./kit";
 import { StatusModal } from "./StatusModal";
 
 /**
@@ -72,29 +72,34 @@ export function Summary({
   };
 
   return (
-    <section className="rounded-[10px] border border-hairline bg-surface px-5 py-2.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Deadline card={card} />
-
+    <section className="rounded-[10px] border border-hairline bg-surface px-[15px] py-3">
+      {/* Порядок как в макете: где лот, сколько осталось, куда ведёт полоса,
+          чем это менять. Отсчёт крупным числом и без заливки — цифры и есть
+          главное на этой строке, а плашка вокруг них спорит со статусом
+          слева. */}
+      <div className="flex flex-wrap items-center gap-4">
         <span
           className={cx(
-            "inline-flex items-center gap-2 rounded-full px-3 py-1",
+            "inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[7px] px-2.5",
+            "text-[12.5px] font-medium",
             OFF_TRACK.includes(card.status)
               ? "bg-plane text-ink-secondary"
-              : "bg-series-1/10 text-ink",
+              : "bg-plane text-ink",
           )}
         >
-          {/* Значок рядом со словом, а не вместо: цвет сам по себе не
-              отличает «идёт» от «сошёл с дистанции». */}
-          <span aria-hidden className="text-xs">
-            {OFF_TRACK.includes(card.status) ? "■" : "●"}
-          </span>
-          <span className="text-sm font-semibold">{card.status_name}</span>
+          {/* Точка рядом со словом, а не вместо: цвет сам по себе не отличает
+              «идёт» от «сошёл с дистанции». */}
+          <span
+            aria-hidden
+            className={cx(
+              "h-[7px] w-[7px] rounded-full",
+              OFF_TRACK.includes(card.status) ? "bg-ink-muted" : "bg-ink",
+            )}
+          />
+          {card.status_name}
         </span>
 
-        <span className="min-w-0 flex-1 truncate text-xs text-ink-muted">
-          {hint(card)}
-        </span>
+        <Deadline card={card} />
 
         <Button
           variant="secondary"
@@ -182,37 +187,68 @@ function Deadline({ card }: { card: Card }) {
   const left = Math.max(0, end - now);
   const step = urgency(left);
 
+  // Доля пройденного от взятия в работу до окончания приёма. Полоса отвечает
+  // на «сколько уже съели», чего одни цифры не говорят: «осталось 4 часа» у
+  // недельного приёма и у суточного — разное положение дел.
+  const started = card.started_at ? new Date(card.started_at).getTime() : 0;
+  const span = started && end > started ? end - started : 0;
+  const gone = span
+    ? Math.min(100, Math.max(2, ((now - started) / span) * 100))
+    : 0;
+
   return (
-    <span
-      className={cx(
-        "inline-flex items-baseline gap-2.5 rounded-[10px] px-3 py-1.5",
-        step.box,
-      )}
-      title="До конца приёма заявок"
-    >
-      <span
-        className={cx(
-          "leading-none font-bold tabular-nums",
-          step.loud ? "text-2xl" : "text-lg font-semibold",
-        )}
-      >
-        {left === 0 ? "ПРИЁМ ЗАКРЫТ" : spell(left)}
-      </span>
-      {step.word && (
-        <span className="text-xs font-semibold whitespace-nowrap uppercase">
-          {step.word}
+    <>
+      {/* Подпись над числом: «15:57:42» само по себе не говорит, до чего это.
+          До конца приёма, а не до подписей — их срок строкой правее. */}
+      <span className="w-[190px] shrink-0">
+        <span className="block text-[11.5px] text-ink-muted">
+          До конца приёма заявок
         </span>
-      )}
-      <span
-        className={cx(
-          "text-xs whitespace-nowrap",
-          step.loud ? "opacity-80" : "text-ink-muted",
-        )}
-      >
-        {when(card.deadline)}
+        <span
+          className={cx(
+            "mt-1 block text-[27px] leading-none font-semibold tracking-[-0.03em] tabular-nums",
+            step.text,
+          )}
+        >
+          {left === 0 ? "приём закрыт" : clock(left)}
+        </span>
       </span>
-    </span>
+
+      {/* Обе даты одной строкой и полоса под ними. Подписи собирают на два часа
+          раньше приёма, и держать это число в другом месте экрана значит
+          заставить человека складывать в уме на срочной работе. */}
+      <span className="min-w-[120px] flex-1">
+        <span className="block truncate text-[11.5px] text-ink-muted tabular-nums">
+          приём до {stamp(card.deadline)}
+          {card.approve_by && ` · подписи до ${stamp(card.approve_by)}`}
+        </span>
+        <span
+          aria-hidden
+          className="mt-2 block h-[3px] w-full overflow-hidden rounded-sm bg-hairline"
+        >
+          {span > 0 && (
+            <span
+              className={cx("block h-full rounded-sm", step.bar)}
+              style={{ width: `${gone}%` }}
+            />
+          )}
+        </span>
+      </span>
+    </>
   );
+}
+
+/**
+ * Остаток часами, минутами и секундами.
+ *
+ * Секунды нужны: в последний час на них и смотрят. Часы не переводятся в дни —
+ * «48:12:33» читается как «двое суток» без деления в уме, а «2 дн. 0 ч.»
+ * заставляет вспоминать, сколько там осталось часов.
+ */
+function clock(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
 }
 
 const HOUR = 60 * 60 * 1000;
@@ -228,68 +264,14 @@ const HOUR = 60 * 60 * 1000;
  * должна быть видна боковым зрением, потому что смотрят в этот момент не на
  * неё, а на спецификацию.
  */
-function urgency(left: number): { box: string; word: string; loud: boolean } {
-  // Слова рядом нет: «ПРИЁМ ЗАКРЫТ» крупным и «срок вышел» мелким — одно и
-  // то же дважды, а место в шапке занимают оба.
-  if (left === 0)
-    return { box: "bg-critical text-white", word: "", loud: true };
-  if (left < HOUR)
-    return { box: "bg-critical text-white", word: "меньше часа", loud: true };
-  if (left < 3 * HOUR)
-    return {
-      box: "bg-critical text-white",
-      word: "меньше 3 часов",
-      loud: true,
-    };
-  if (left < 6 * HOUR)
-    return {
-      box: "border border-critical/50 bg-critical/10 text-critical",
-      word: "меньше 6 часов",
-      loud: false,
-    };
-  if (left < 12 * HOUR)
-    return {
-      box: "border border-serious/60 bg-serious/15 text-ink",
-      word: "меньше 12 часов",
-      loud: false,
-    };
-  if (left < 24 * HOUR)
-    return {
-      box: "border border-warning/60 bg-warning/15 text-ink",
-      word: "меньше суток",
-      loud: false,
-    };
-  return { box: "text-ink", word: "", loud: false };
-}
-
-/**
- * Остаток словами: «2 дн. 04:17:09».
- *
- * Секунды показываются всегда, а не только в последний час: полоса цифр,
- * которая меняется на глазах, сама говорит, что счёт идёт. Застывшие «2 ч.
- * 17 мин.» от неё неотличимы, пока не посмотришь дважды.
- */
-function spell(ms: number): string {
-  const all = Math.floor(ms / 1000);
-  const days = Math.floor(all / 86_400);
-  const hours = Math.floor((all % 86_400) / 3600);
-  const minutes = Math.floor((all % 3600) / 60);
-  const seconds = all % 60;
-  const clock = [hours, minutes, seconds]
-    .map((part) => String(part).padStart(2, "0"))
-    .join(":");
-  return days > 0 ? `${days} дн. ${clock}` : clock;
-}
-
-/** Что сейчас происходит, словом. Одно название состояния этого не объясняет. */
-function hint(card: Card): string {
-  if (card.status === "approval") return "собираем пять подписей";
-  if (card.status === "discussion") return "пишем замечание к спецификации";
-  if (card.status === "analysis") return "считаем себестоимость и решаем";
-  if (card.status === "ready") return "подписи собраны, можно подавать";
-  if (card.status === "awaiting") return "заявка подана, ждём результат";
-  if (card.status === "skipped") return card.skip_reason || "решили пропустить";
-  return "";
+function urgency(left: number): { text: string; bar: string } {
+  if (left === 0) return { text: "text-critical", bar: "bg-critical" };
+  if (left < HOUR) return { text: "text-critical", bar: "bg-critical" };
+  if (left < 3 * HOUR) return { text: "text-critical", bar: "bg-critical" };
+  if (left < 6 * HOUR) return { text: "text-critical", bar: "bg-critical" };
+  if (left < 12 * HOUR) return { text: "text-serious", bar: "bg-serious" };
+  if (left < 24 * HOUR) return { text: "text-warning", bar: "bg-warning" };
+  return { text: "text-ink", bar: "bg-ink" };
 }
 
 /**
@@ -302,6 +284,53 @@ function hint(card: Card): string {
  * Порядок всегда один: менеджер, снабжение, юрист, технолог, сборщик.
  * Перестановка заставляет читать полосу заново каждый раз.
  */
+function Slot({ sign }: { sign: Sign }) {
+  const ok = sign.state === "approved";
+  const no = sign.state === "rejected";
+
+  return (
+    <li>
+      <span
+        title={
+          ok
+            ? `${sign.name}: согласовал ${sign.by}${sign.at ? `, ${stamp(sign.at)}` : ""}`
+            : no
+              ? `${sign.name}: отклонил ${sign.by}${sign.note ? ` — ${sign.note}` : ""}`
+              : `${sign.name}: подписи нет`
+        }
+        className={cx(
+          "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px]",
+          ok
+            ? "border-good/40 bg-good/10 text-good"
+            : no
+              ? "border-critical/40 bg-critical/10 text-critical"
+              : "border-hairline bg-surface text-ink-secondary",
+        )}
+      >
+        {ok && (
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 12 12"
+            fill="none"
+            aria-hidden
+          >
+            <path
+              d="M2.6 6.3 4.8 8.5 9.4 3.7"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+        {no && <span aria-hidden>✕</span>}
+        {sign.name}
+      </span>
+    </li>
+  );
+}
+
 export function Approval({
   card,
   onDone,
@@ -341,18 +370,40 @@ export function Approval({
   });
 
   return (
-    <section className="overflow-hidden rounded-[10px] border border-hairline bg-surface">
-      <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-hairline px-5 py-2.5">
-        <h2 className="text-sm font-semibold text-ink">Согласование</h2>
-        <p className="text-sm text-ink-muted">
-          {signed} из {card.approvals.length}
-          {!card.approved && " · без пяти «Готов к участию» недоступен"}
-        </p>
+    /* Полосой во всю ширину колонки и с прилипанием к её низу, а не карточкой
+       в потоке. Подписывают в конце работы, но искать подписи прокруткой на
+       третьем экране — то, из-за чего согласование и собиралось по полдня:
+       человек не находил, где это делается, и спрашивал в переписке. */
+    <section
+      className={cx(
+        "sticky bottom-0 z-[5] mt-auto shrink-0 border-t border-hairline bg-surface",
+        "shadow-[0_-6px_18px_rgba(14,22,32,.05)]",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-x-[14px] gap-y-2 px-[18px] py-[11px]">
+        <span className="shrink-0">
+          <span className="block text-[13.5px] font-semibold tracking-[-0.01em] text-ink">
+            Готов к участию
+          </span>
+          <span className="block text-[11.5px] text-ink-muted tabular-nums">
+            {signed} из {card.approvals.length} подписей
+            {!card.approved && " · без пяти статус недоступен"}
+          </span>
+        </span>
+
+        {/* Пять плашек вместо пяти колонок таблицы. Колонки занимали полосу в
+            полтора сантиметра ради пяти слов, а вопрос к ним один: чьей
+            подписи ещё нет. */}
+        <ul className="flex flex-wrap gap-1.5">
+          {card.approvals.map((sign) => (
+            <Slot key={sign.kind} sign={sign} />
+          ))}
+        </ul>
 
         {mine && !refusing && (
-          <span className="ml-auto flex items-center gap-2">
+          <span className="ml-auto flex shrink-0 items-center gap-2">
             <Button
-              variant="ghost"
+              variant="secondary"
               onClick={() => setRefusing(mine.kind)}
               disabled={put.isPending}
             >
@@ -370,21 +421,11 @@ export function Approval({
           </span>
         )}
         {!mine && mySigned && (
-          <p className="ml-auto text-sm text-ink-muted">
+          <span className="ml-auto shrink-0 text-[12.5px] text-ink-muted">
             вы {mySigned.state === "approved" ? "подписали" : "отклонили"}{" "}
-            {when(mySigned.at)}
-          </p>
+            {stamp(mySigned.at)}
+          </span>
         )}
-      </header>
-
-      <div className="grid grid-cols-5">
-        {card.approvals.map((sign, index) => (
-          <Column
-            key={sign.kind}
-            sign={sign}
-            last={index === card.approvals.length - 1}
-          />
-        ))}
       </div>
 
       {/* Отказ разворачивается сам: причина нужна тому, кто пришёл чинить, а
@@ -396,7 +437,7 @@ export function Approval({
         >
           <span className="font-medium text-critical">
             Отказ {sign.by}
-            {sign.at && `, ${when(sign.at)}`}:
+            {sign.at && `, ${stamp(sign.at)}`}:
           </span>{" "}
           {sign.note}
         </p>
@@ -439,47 +480,4 @@ export function Approval({
       )}
     </section>
   );
-}
-
-function Column({ sign, last }: { sign: Sign; last: boolean }) {
-  const word =
-    sign.state === "approved"
-      ? "согласовал"
-      : sign.state === "rejected"
-        ? "отклонил"
-        : "ждём";
-  const look =
-    sign.state === "approved"
-      ? "text-good"
-      : sign.state === "rejected"
-        ? "text-critical"
-        : "text-ink-muted";
-
-  return (
-    <div
-      className={cx("min-w-0 px-5 py-3", !last && "border-r border-hairline")}
-    >
-      <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
-        {sign.name}
-      </p>
-      <p className={cx("mt-1 text-sm", look)}>{word}</p>
-      <p className="mt-0.5 truncate text-xs text-ink-muted">
-        {sign.by ? `${sign.by} · ${when(sign.at)}` : "подписи нет"}
-      </p>
-    </div>
-  );
-}
-
-/** «02.09 09:14» — короче полной даты, а год у лота один. */
-function when(at: string): string {
-  if (!at) return "";
-  return new Date(at).toLocaleString("ru", {
-    // Пояс раздела, а не браузера: сотрудник в командировке смотрит на тот же
-    // срок, что и коллеги в офисе, и «до 14:00» должно значить одно и то же.
-    timeZone: TZ,
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

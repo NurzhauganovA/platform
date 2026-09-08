@@ -1,14 +1,22 @@
 /**
- * Файлы и переписка по лоту.
+ * Файлы лота.
  *
- * Рядом, а не двумя блоками в разных концах страницы: обсуждают обычно то,
- * что только что приложили, и половина реплик — это «смотри счёт выше».
+ * Документы заказчика и наши — рядом, но раздельно. Раздельно по существу:
+ * наши кладут руками и пересборка списка их не трогает, документы заказчика
+ * приходят с портала и меняются вместе с закупкой. А искать их человек
+ * приходит в одно место — «где спецификация» это вопрос про файл, а не про
+ * то, кто его положил.
  *
- * Наши файлы и документы закупки лежат раздельно, но на одном экране.
- * Раздельно по существу: наши кладут руками и пересборка списка их не
- * трогает, документы заказчика приходят с портала и меняются вместе с
- * закупкой. А искать их человек приходит в одно место — «где спецификация»
- * это вопрос про файл, а не про то, кто его положил.
+ * Строкой с квадратом расширения, а не именем в столбик. Имена у файлов
+ * портала машинные — `techspec_17569342_43124315.pdf`, — и по такому списку
+ * глаз ищет не название, а тип: спецификация это или счёт поставщика.
+ *
+ * Откуда файл, сказано плашкой, а не порядком строк. Порядок сбивается первым
+ * же приложенным вручную документом, а вопрос «это заказчик прислал или мы
+ * положили» решает, можно ли на файл ссылаться в замечании.
+ *
+ * Рядом переписка коллег: обсуждают обычно то, что только что приложили, и
+ * половина реплик — это «смотри счёт выше».
  */
 
 import { useRef, useState } from "react";
@@ -20,7 +28,8 @@ import {
   type Message,
   type WorklistSlug,
 } from "@/api/worklist";
-import { Button, Spinner, bytes, cx } from "@/ui";
+import { Button, Card as Panel, Spinner, bytes, cx } from "@/ui";
+import { BarHead, BarTitle, Chip, stamp } from "./kit";
 
 export function Files({ card }: { card: Card }) {
   const cache = useQueryClient();
@@ -43,10 +52,10 @@ export function Files({ card }: { card: Card }) {
   });
 
   return (
-    <section className="rounded-[10px] border border-hairline bg-surface">
-      <header className="flex items-center justify-between gap-4 border-b border-hairline px-4 py-2.5">
-        <h2 className="text-sm font-semibold text-ink">Файлы</h2>
-        <div className="flex items-center gap-2">
+    <Panel className="overflow-hidden">
+      <BarHead>
+        <BarTitle>Файлы</BarTitle>
+        <span className="ml-auto flex items-center gap-2.5">
           {add.isPending && <Spinner label="Грузим…" />}
           <Button
             variant="secondary"
@@ -55,8 +64,8 @@ export function Files({ card }: { card: Card }) {
           >
             Приложить
           </Button>
-        </div>
-      </header>
+        </span>
+      </BarHead>
 
       <input
         ref={picker}
@@ -72,7 +81,7 @@ export function Files({ card }: { card: Card }) {
       />
 
       {add.error && (
-        <p className="border-b border-hairline px-4 py-2.5 text-sm text-critical">
+        <p className="border-b border-hairline/70 px-[15px] py-2.5 text-[12.5px] text-critical">
           {add.error instanceof Error ? add.error.message : "Не загрузилось"}
         </p>
       )}
@@ -80,16 +89,16 @@ export function Files({ card }: { card: Card }) {
       <Portal card={card} />
 
       {isLoading ? (
-        <div className="px-4 py-4">
+        <div className="px-[15px] py-3">
           <Spinner label="Читаем файлы…" />
         </div>
       ) : !data?.length ? (
-        <p className="px-4 py-6 text-center text-sm text-ink-muted">
-          Ничего не приложено. Сюда кладут переписку, счета поставщиков и снимки
-          экрана — документы заказчика приходят с портала сами.
+        <p className="px-[15px] py-[26px] text-center text-[12.5px] text-ink-muted">
+          Своих файлов пока нет. Сюда кладут переписку, счета поставщиков и
+          снимки экрана — документы заказчика приходят с портала сами.
         </p>
       ) : (
-        <ul className="divide-y divide-hairline">
+        <ul>
           {data.map((item) => (
             <Row
               key={item.id}
@@ -101,7 +110,41 @@ export function Files({ card }: { card: Card }) {
           ))}
         </ul>
       )}
-    </section>
+    </Panel>
+  );
+}
+
+/**
+ * Квадрат с расширением вместо значка.
+ *
+ * Расширение написано словом: значок «документ» одинаков у спецификации и у
+ * счёта, а разница между `pdf` и `xlsx` решает, откроется ли файл на планшете
+ * снабженца в машине.
+ *
+ * Цвет — подсказка второго порядка, поэтому три роли и никакой пятой:
+ * спецификации приходят в PDF, счета в таблицах, письма в документах.
+ */
+function Kind({ name }: { name: string }) {
+  const tail = (name.split(".").pop() ?? "").toLowerCase();
+  const tone = ["pdf"].includes(tail)
+    ? "bg-critical/10 text-critical"
+    : ["xls", "xlsx", "csv"].includes(tail)
+      ? "bg-good/10 text-good"
+      : ["doc", "docx", "rtf", "txt"].includes(tail)
+        ? "bg-series-1/10 text-series-1"
+        : "bg-plane text-ink-muted";
+
+  return (
+    <span
+      aria-hidden
+      className={cx(
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px]",
+        "text-[9.5px] font-bold tracking-wide uppercase",
+        tone,
+      )}
+    >
+      {tail.slice(0, 4) || "файл"}
+    </span>
   );
 }
 
@@ -130,32 +173,35 @@ function Portal({ card }: { card: Card }) {
   if (!spec) return null;
 
   return (
-    <div className="border-b border-hairline bg-plane/40 px-4 py-2.5">
-      <p className="text-xs tracking-wide text-ink-muted uppercase">
-        Документы закупки
-      </p>
-      {spec.url ? (
-        <a
-          href={spec.url}
-          className="mt-1 block truncate text-sm text-ink hover:underline"
-          title={spec.name}
-        >
-          {spec.name}
-        </a>
-      ) : (
-        <p className="mt-1 truncate text-sm text-ink" title={spec.name}>
+    <div className="flex items-center gap-[11px] border-b border-hairline/70 px-[15px] py-[11px]">
+      <Kind name={spec.name} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-medium text-ink" title={spec.name}>
           {spec.name}
         </p>
+        {/* Прочитан файл или нет — разные ответы на «почему разбор пустой».
+            Нечитаемый файл выглядел как отсутствующий, и человек шёл жать
+            «Разобрать» по второму разу. */}
+        <p className="truncate text-[11.5px] text-ink-muted">
+          пришёл с портала ·{" "}
+          {spec.chars > 0
+            ? "по нему собран разбор"
+            : "текст прочитать не удалось — разбор моделью не соберётся"}
+        </p>
+      </div>
+      <Chip title="Документ заказчика: приходит выгрузкой и меняется вместе с закупкой">
+        с портала
+      </Chip>
+      {spec.url && (
+        <a
+          href={spec.url}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 text-[12.5px] font-medium text-series-1 hover:underline"
+        >
+          Скачать
+        </a>
       )}
-      {/* Прочитан файл или нет — разные ответы на «почему разбор пустой».
-          Нечитаемый файл выглядел как отсутствующий, и человек шёл жать
-          «Разобрать» по второму разу. */}
-      <p className="text-xs text-ink-muted">
-        с портала ·{" "}
-        {spec.chars > 0
-          ? "по нему собирается разбор во вкладке «Разбор»"
-          : "текст из него прочитать не удалось — разбор моделью не соберётся"}
-      </p>
     </div>
   );
 }
@@ -172,26 +218,35 @@ function Row({
   onDrop: () => void;
 }) {
   return (
-    <li className="flex items-center gap-3 px-4 py-2.5">
-      <a
-        href={cardsApi.fileUrl(card.id, file.sha256)}
-        className="min-w-0 flex-1 truncate text-sm text-ink hover:underline"
-        title={file.name}
-      >
-        {file.name}
-      </a>
-      <span className="text-xs tabular-nums whitespace-nowrap text-ink-muted">
-        {bytes(file.size_bytes)}
-      </span>
-      {file.added_by && (
-        <span className="truncate text-xs text-ink-muted">{file.added_by}</span>
-      )}
+    <li className="flex items-center gap-[11px] border-b border-hairline/70 px-[15px] py-[11px] last:border-b-0">
+      <Kind name={file.name} />
+      <div className="min-w-0 flex-1">
+        <a
+          href={cardsApi.fileUrl(card.id, file.sha256)}
+          className="block truncate text-[13px] font-medium text-ink hover:underline"
+          title={file.name}
+        >
+          {file.name}
+        </a>
+        <p className="truncate text-[11.5px] text-ink-muted tabular-nums">
+          {[
+            bytes(file.size_bytes),
+            file.added_by && `приложил ${file.added_by}`,
+            file.added_at && stamp(file.added_at),
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+      </div>
       <button
         type="button"
         disabled={busy}
         onClick={onDrop}
-        title="Убрать с лота. Из хранилища файл не удаляется"
-        className="rounded-[6px] px-2 py-0.5 text-xs text-ink-muted transition hover:bg-plane hover:text-ink disabled:opacity-45"
+        title="Убрать с лота. Из хранилища файл не удаляется: тот же файл может быть приложен к соседнему лоту"
+        className={cx(
+          "shrink-0 rounded-[6px] px-2 py-0.5 text-[11.5px] text-ink-muted transition",
+          "hover:bg-plane hover:text-ink disabled:opacity-45",
+        )}
       >
         Убрать
       </button>
