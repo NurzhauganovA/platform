@@ -47,17 +47,21 @@ def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
     платформы, а этот файл видит только базу площадки. Пустой код означает,
     что карточку по этой строке завести нечем.
 
-    `facts` — всё, что лежит в своей базе: сроки, что покупают, спецификация и
-    лоты объявления. Отличие от полного разбора одно, и оно про портал: там
-    соседние лоты дочитываются с него, и это до минуты ожидания. Здесь не
-    дочитываются, о чём сказано под таблицей.
+    **Портал здесь не спрашивается вовсе.** Раньше полный разбор дочитывал с
+    него соседние лоты объявления, и это стоило до минуты ожидания на каждое
+    нажатие: замер дал 49 секунд против 0,1 у того же разбора без портала.
+    Всё, что показывает панель, лежит в нашей базе — за тем её и наполняют.
+
+    Чужие лоты объявления — те, что не подошли под наши коды ЕНС ТРУ, — теперь
+    догружаются отдельным запросом (`/item/{id}/neighbours`) и не задерживают
+    показ. Раздел при этом не пустой: свои лоты объявления мы знаем сами, по
+    `announce_id`, а о том, что список неполон, сказано под таблицей.
+
+    `facts` оставляет только сведения: сроки и что покупают, без кнопок
+    заведения карточки и обсуждения. Разница между режимами теперь в этом, а
+    не в скорости — быстры оба.
     """
     if facts:
-        # Соседние лоты — из своей базы, портал не спрашиваем. В объявлении их
-        # бывает четыре, и знать об этом надо: торги идут по объявлению
-        # целиком. Но связь между лотами известна нам самим, по `announce_id`,
-        # а поход на портал за чужими — это та самая минута, ради ухода от
-        # которой режим и заведён. Что список неполон, сказано под таблицей.
         return DetailOut(
             id=core.row_id(lot),
             title=lot.name or lot.purchase_number,
@@ -74,8 +78,6 @@ def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
             ],
         )
 
-    neighbours, trouble = _announce_neighbours(lot)
-
     return DetailOut(
         id=core.row_id(lot),
         title=lot.name or lot.purchase_number,
@@ -90,9 +92,24 @@ def build(lot: Any, *, code: str = "", facts: bool = False) -> DetailOut:
             _about(lot),
             _what(lot),
             _spec(lot),
-            _neighbours(lot, neighbours, trouble),
+            _neighbours(lot, _from_base(lot.announce_id), "", asked_portal=False),
         ],
     )
+
+
+def neighbours(lot: Any) -> DetailSection:
+    """Лоты объявления вместе с чужими — с походом на портал.
+
+    Отдельным вызовом, а не частью разбора: портал отвечает до минуты, а
+    открытая панель ждать не может. Чужие позиции объявления — это конкуренты
+    за внимание заказчика и повод взять закупку целиком, но узнать о них можно
+    и через десять секунд после того, как открылась карточка.
+
+    Не ответил — возвращаем своё, как в разборе: раздел не пуст, а неполон, и
+    об этом говорит подпись под таблицей.
+    """
+    found, trouble = _announce_neighbours(lot)
+    return _neighbours(lot, found, trouble)
 
 
 def _spec_file(lot: Any) -> SpecFile | None:
@@ -451,6 +468,15 @@ def _from_base(announce_id: int) -> tuple[_Neighbour, ...]:
     )
 
 
+PANEL_TIMEOUT = 6.0
+"""Сколько панель ждёт портал за чужими лотами объявления.
+
+Шесть секунд, а не тридцать: за ответом сидит человек, и раздел, который не
+пришёл, он дочитает на самом портале по ссылке рядом. Обход ждёт дольше —
+он идёт в фоне и его никто не держит.
+"""
+
+
 def _from_portal(announce_id: int) -> tuple[tuple[_Neighbour, ...], str]:
     """Читает лоты объявления с портала. Возвращает их и причину неудачи.
 
@@ -461,8 +487,14 @@ def _from_portal(announce_id: int) -> tuple[tuple[_Neighbour, ...], str]:
     from goszakup.infrastructure.http import PortalClient
     from goszakup.infrastructure.portal import api
 
+    # Свой срок ожидания, короче обходного. Обход может ждать портал полминуты
+    # и повторять — он идёт в фоне; здесь за ответом сидит человек с открытой
+    # панелью, и ждать столько же значит не показать ему ничего.
+    patience = core.core_settings().http.model_copy(
+        update={"timeout_seconds": PANEL_TIMEOUT, "max_retries": 0}
+    )
     try:
-        with PortalClient(core.core_settings().http) as client:
+        with PortalClient(patience) as client:
             raw = api.parse_announce_lots(
                 client.get_json(api.ANNOUNCE_LOTS_URL.format(announce_id=announce_id))
             )

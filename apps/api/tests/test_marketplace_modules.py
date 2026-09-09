@@ -762,19 +762,91 @@ def test_fail_v_razbore_vidny_sosednie_loty_obyavleniya() -> None:
 
     соседи = (сосед("87470604-ОИ2", "Компрессор"), сосед("87468559-ОИ2", "Фильтр"))
     with patch.object(detail, "_announce_neighbours", return_value=(соседи, "")):
-        разбор = detail.build(наш)
+        раздел = detail.neighbours(наш)
 
-    таблица = next(s.table for s in разбор.sections if s.table is not None)
-    assert [row[1] for row in таблица.rows] == ["87470604-ОИ2", "87468559-ОИ2"]
+    assert раздел.table is not None
+    assert [row[1] for row in раздел.table.rows] == ["87470604-ОИ2", "87468559-ОИ2"]
     # Наш отмечен: иначе в таблице из четырёх строк его не найти.
-    assert [row[0] for row in таблица.rows] == ["▸", ""]
+    assert [row[0] for row in раздел.table.rows] == ["▸", ""]
+
+
+def test_fail_razbor_ne_zhdyot_portal() -> None:
+    """Открытие панели не должно ходить на портал.
+
+    Замер до правки: 49 секунд на разбор лота против 0,1 у того же разбора без
+    портала — всё, что панель показывает, лежит в нашей базе. Ждал человек, а
+    отвечал чужой сервер, и в день, когда портал отдаёт 504, панель не
+    открывалась вовсе.
+
+    Чужие лоты объявления приходят отдельным запросом; здесь проверяется, что
+    разбор к порталу не обращается совсем.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from platform_api.modules.goszakup import detail
+
+    лот = SimpleNamespace(
+        announce_id=17547275,
+        purchase_number="17547275-1",
+        lot_number="87470604-ОИ2",
+        name="Компрессор",
+        customer="Филиал Жетісу",
+        method="Из одного источника",
+        status="Опубликован",
+        end_date=None,
+        published_at=None,
+        applications=None,
+        enstru_code="262013.000.000011",
+        enstru_name="Компрессор",
+        brief="",
+        extra="",
+        count=Decimal(1),
+        unit="Штука",
+        unit_price=Decimal(85000),
+        amount=Decimal(85000),
+        prepayment_percent=None,
+        kato="",
+        delivery_term="",
+        incoterms="",
+        spec_name="",
+        spec_url="",
+        spec_text="",
+        url="",
+    )
+    свои = (
+        detail._Neighbour(
+            number="87470604-ОИ2",
+            name="Компрессор",
+            extra="",
+            unit="Штука",
+            count=Decimal(1),
+            amount=Decimal(85000),
+            status="Опубликован",
+            ours=True,
+        ),
+    )
+
+    def не_звать(_announce_id: int) -> tuple[tuple[Any, ...], str]:
+        raise AssertionError("Разбор пошёл на портал — панель снова будет ждать минуту")
+
+    with (
+        patch.object(detail, "_from_base", return_value=свои),
+        patch.object(detail, "_from_portal", side_effect=не_звать),
+    ):
+        разбор = detail.build(лот, code="GZ000001")
+
+    раздел = next(s for s in разбор.sections if s.key == "announce_lots")
+    assert раздел.table is not None
+    assert [row[1] for row in раздел.table.rows] == ["87470604-ОИ2"]
 
 
 def test_fail_nedostupnyy_portal_ne_lomayet_razbor() -> None:
-    """Портал не отвечает — разбор всё равно открывается.
+    """Портал не отвечает — раздел говорит об этом словами, а не пустотой.
 
-    Своя часть в нём есть: лот лежит в базе. Пустой экран из-за чужого сервера
-    хуже неполного, а «не дозвонились» человек понимает и ждёт.
+    Панель при этом уже открыта: она собирается из нашей базы и портала не
+    ждёт. «Не дозвонились» человек понимает и идёт по ссылке на портал сам;
+    пустой раздел он прочитал бы как «в объявлении один лот».
     """
     from types import SimpleNamespace
     from unittest.mock import patch
@@ -812,10 +884,8 @@ def test_fail_nedostupnyy_portal_ne_lomayet_razbor() -> None:
     with patch.object(
         detail, "_announce_neighbours", return_value=((), "Портал сейчас не отвечает")
     ):
-        разбор = detail.build(пустой)
+        раздел = detail.neighbours(пустой)
 
-    assert разбор.title == "Ноутбук"
-    раздел = next(s for s in разбор.sections if s.title == "Лоты объявления")
     assert "не отвечает" in раздел.empty and раздел.table is None
 
 

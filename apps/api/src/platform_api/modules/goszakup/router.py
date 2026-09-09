@@ -17,6 +17,7 @@ from platform_api.db.models import Role
 from platform_api.errors import unavailable
 from platform_api.jobs.service import JobService
 from platform_api.jobs.worker import enqueue_sync
+from platform_api.logging import get_logger
 from platform_api.modules import codes, discussion
 from platform_api.modules.goszakup import core, purge, start
 from platform_api.modules.goszakup.columns import (
@@ -40,6 +41,7 @@ from platform_api.modules.goszakup.schemas import (
 from platform_api.modules.schemas import (
     ColumnOut,
     DetailOut,
+    DetailSection,
     LegendItem,
     RowLotOut,
     RowOut,
@@ -49,6 +51,8 @@ from platform_api.modules.schemas import (
     in_scope,
 )
 from platform_api.modules.table import build_table
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/goszakup", tags=["Госзакупки"])
 
@@ -241,6 +245,71 @@ def get_item(
         # открыта на портале любому участнику, а своей себестоимости по
         # госзакупкам мы пока не считаем. Появится — появится и разделение.
         return lot_detail.build(found, code=code, facts=facts)
+
+
+NEIGHBOURS_TTL = 3600
+"""Сколько держать ответ портала про лоты объявления.
+
+Час: состав объявления не меняется вовсе — лоты в нём заданы при публикации, —
+а вот наши коды и суммы меняются выгрузкой, и они берутся из своей базы каждый
+раз. Кэш нужен затем, что панель открывают по нескольку раз на лот, а портал
+на каждое открытие отвечает секундами.
+"""
+
+
+@router.get("/item/{item_id}/neighbours", summary="Чужие лоты объявления")
+def get_neighbours(
+    item_id: str,
+    identity: CurrentUser,
+    request: Request,
+    _guard: Annotated[None, requires_read] = None,
+) -> DetailSection:
+    """Лоты объявления вместе с чужими — те, что не подошли под наши коды.
+
+    Отдельным запросом, а не частью разбора. Разбор раньше ждал портал, и
+    замер показал 49 секунд на открытие панели против 0,1 без него: всё
+    остальное лежит в нашей базе. Теперь панель открывается сразу, а этот
+    раздел приходит следом и никого не держит.
+
+    Ответ кладётся в Redis на час: панель открывают по нескольку раз на лот, а
+    состав объявления задан при его публикации и не меняется.
+    """
+    from goszakup.infrastructure.db.models import LotRecord
+    from sqlalchemy import select
+
+    from platform_api.modules.goszakup import detail as lot_detail
+
+    with core.session() as portal:
+        found = (
+            portal.execute(select(LotRecord).where(LotRecord.lot_number == item_id))
+            .scalars()
+            .first()
+            or portal.execute(select(LotRecord).where(LotRecord.purchase_number == item_id))
+            .scalars()
+            .first()
+        )
+        if found is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Такого лота в базе нет"
+            )
+
+        redis = request.app.state.redis
+        key = f"goszakup:announce:{found.announce_id}"
+        try:
+            cached = redis.get(key)
+        except Exception:
+            # Redis лежит — не повод не отвечать: сходим на портал сами.
+            cached = None
+        if cached:
+            return DetailSection.model_validate_json(cached)
+
+        section = lot_detail.neighbours(found)
+
+    try:
+        redis.set(key, section.model_dump_json(), ex=NEIGHBOURS_TTL)
+    except Exception as exc:
+        logger.warning("goszakup.neighbours.cache.failed", error=str(exc))
+    return section
 
 
 @router.post("/sync", summary="Обновить лоты с портала", status_code=status.HTTP_202_ACCEPTED)

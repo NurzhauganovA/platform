@@ -89,6 +89,20 @@ export function DetailPanel({
     placeholderData: (previous) => previous,
   });
 
+  // Чужие лоты объявления. Отдельным запросом и только у площадок, которые
+  // это умеют: за ними идут на портал, а он отвечает секундами — панель
+  // ждать не должна. Пока не пришли, на месте раздела стоят наши лоты
+  // объявления с подписью, что список неполон.
+  const { data: neighbours } = useQuery({
+    queryKey: [slug, "neighbours", id],
+    queryFn: () => worklists.neighbours(slug, id),
+    enabled: !facts && slug === "goszakup" && Boolean(data),
+    staleTime: 10 * 60 * 1000,
+    // Портал лежит — раздел останется своим, и это не повод показывать
+    // человеку ошибку: он про неё ничего сделать не может.
+    retry: false,
+  });
+
   const client = useQueryClient();
   // Лот меняет и разбор, и отметки в таблице: после переключения перечитываем
   // весь раздел, а не одну карточку.
@@ -217,7 +231,7 @@ export function DetailPanel({
                   onDone={refresh}
                 />
               )}
-              {shown(data.sections, facts).map((section) => (
+              {merged(shown(data.sections, facts), neighbours).map((section) => (
                 <SectionBlock
                   key={section.title}
                   section={hide(section)}
@@ -945,6 +959,22 @@ const FACTS_KEEP = new Set(["announce_lots", "tech_spec"]);
  * портал. Площадка, которая про режим не знает, ответит разбором целиком —
  * вот его и режем.
  */
+/**
+ * Ставит догруженный раздел на место своего.
+ *
+ * По ключу, а не по заголовку и не по месту: заголовок правят, а порядок
+ * разделов у площадок разный. Не пришёл — остаётся то, что показали сразу.
+ */
+function merged(
+  sections: DetailSection[],
+  fresh: DetailSection | undefined,
+): DetailSection[] {
+  if (!fresh) return sections;
+  return sections.map((section) =>
+    section.key && section.key === fresh.key ? fresh : section,
+  );
+}
+
 function shown(sections: DetailSection[], facts: boolean): DetailSection[] {
   if (!facts) return sections;
   const at = sections.findIndex((section) => section.title === FACTS_LAST);
