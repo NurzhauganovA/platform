@@ -201,7 +201,10 @@ def test_fail_v_kartochke_stoit_ta_model_chto_otvetila() -> None:
     настройки = Settings(environment="dev")
     звонки: list[str] = []
 
-    def занята_первая(prompt: str, model: str, _: Settings) -> str:
+    def занята_первая(prompt: str, model: str, _: Settings, **__: object) -> tuple[str, bool]:
+        """Подмена похода к модели. Ответ парой: текст и признак обрыва по
+        объёму — обрезанный ответ приходит непустым, и по одному тексту его не
+        отличить."""
         звонки.append(model)
         if model == настройки.writer.model:
             raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")
@@ -210,7 +213,7 @@ def test_fail_v_kartochke_stoit_ta_model_chto_otvetila() -> None:
             "осуществления государственных закупок. Требование ограничивает круг "
             "участников и не даёт предложить равноценное оборудование. "
             "Просим внести изменения в техническую спецификацию либо отменить закупку."
-        )
+        ), False
 
     писатель = writer.__dict__
     прежний = писатель["_ask"]

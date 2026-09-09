@@ -190,15 +190,25 @@ def build(
     from platform_api.modules import writer
 
     answer = writer.ask(
-        sheeting.prompt(title=card.title, spec=spec_text), settings, about=card.code
+        sheeting.prompt(title=card.title, spec=spec_text),
+        settings,
+        about=card.code,
+        # Объём ответа — от длины спецификации: требования переносятся
+        # дословно, и на четырнадцати страницах общий потолок замечания рвал
+        # таблицу посередине.
+        max_tokens=sheeting.budget(spec_text, ceiling=settings.writer.sheet_tokens),
+        json_only=True,
     )
     if not answer.text:
         sheet.trouble = answer.trouble
         db.flush()
         return _out(sheet)
 
-    shaped = sheeting.shape(answer.text)
-    if shaped.trouble:
+    shaped = sheeting.shape(answer.text, cut=answer.cut)
+    # Обрыв по объёму — не пустая таблица: целые строки из недописанного ответа
+    # сохраняются, а человеку говорится, что хвоста не хватает. Так у него
+    # остаётся сделанная работа и знание, чего в ней нет.
+    if shaped.trouble and not shaped.rows:
         sheet.trouble = shaped.trouble
         db.flush()
         return _out(sheet)
@@ -224,7 +234,7 @@ def build(
     ]
     sheet.source_name = spec_name
     sheet.model = answer.model
-    sheet.trouble = ""
+    sheet.trouble = shaped.trouble
     sheet.built_at = utcnow()
     sheet.built_by_id = user_id
     db.flush()

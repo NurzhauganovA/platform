@@ -44,14 +44,38 @@ class Answer:
     model: str = ""
     trouble: str = ""
 
+    cut: bool = False
+    """Ответ упёрся в потолок объёма и оборван на полуслове.
 
-def ask(prompt: str, settings: Settings, *, about: str = "") -> Answer:
+    Отдельным признаком, а не пустым текстом: обрезанный ответ приходит
+    непустым, и без этого признака разбор падал на «модель ответила не
+    таблицей» — сообщение, по которому чинят не то. Причина же одна и
+    понятная: спецификация длиннее, чем отведённый объём.
+    """
+
+
+def ask(
+    prompt: str,
+    settings: Settings,
+    *,
+    about: str = "",
+    max_tokens: int | None = None,
+    json_only: bool = False,
+) -> Answer:
     """Спрашивает модель, перебирая запасные по порядку.
 
     Общий вход для всего, что платформа спрашивает у Gemini: и замечание
     заказчику, и разбор спецификации таблицей. Второй такой перебор разошёлся
     бы с первым на первой же правке — а правки здесь про деньги и про сроки:
     у предварительных моделей квота кончается посреди дня.
+
+    `max_tokens` — свой потолок объёма на этот вопрос. У замечания и у разбора
+    спецификации он разный: замечание это страница текста, а разбор переносит
+    требования дословно и растёт вместе с исходником.
+
+    `json_only` — просить у модели сразу JSON. Просьба «ответь только JSON»
+    словами выполняется через раз: то обёртка ```json, то строка «Вот таблица»
+    перед ней. Заданный формат ответа снимает и то и другое.
 
     Не бросает исключение. Отказ модели — обстоятельство, а не поломка
     платформы: причина возвращается словами, и человек делает то же самое
@@ -60,7 +84,7 @@ def ask(prompt: str, settings: Settings, *, about: str = "") -> Answer:
     trouble = ""
     for model in _models(settings):
         try:
-            raw = _ask(prompt, model, settings)
+            raw, cut = _ask(prompt, model, settings, max_tokens=max_tokens, json_only=json_only)
         except Exception as exc:
             trouble = _spoken(exc)
             logger.warning("model.failed", about=about, model=model, error=str(exc))
@@ -68,7 +92,9 @@ def ask(prompt: str, settings: Settings, *, about: str = "") -> Answer:
                 break
             continue
         if raw.strip():
-            return Answer(text=raw, model=model)
+            if cut:
+                logger.warning("model.cut", about=about, model=model, chars=len(raw))
+            return Answer(text=raw, model=model, cut=cut)
         trouble = "Модель вернула пустой ответ"
     return Answer(trouble=trouble or "Модель не ответила")
 
@@ -98,7 +124,15 @@ def _models(settings: Settings) -> tuple[str, ...]:
     return (settings.writer.model, *settings.writer.model_backups)
 
 
-def _ask(prompt: str, model: str, settings: Settings) -> str:
+def _ask(
+    prompt: str,
+    model: str,
+    settings: Settings,
+    *,
+    max_tokens: int | None = None,
+    json_only: bool = False,
+) -> tuple[str, bool]:
+    """Один поход к модели. Возвращает ответ и признак «оборван по объёму»."""
     from google.genai import types
 
     client = _client(settings)
@@ -106,14 +140,28 @@ def _ask(prompt: str, model: str, settings: Settings) -> str:
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
-            max_output_tokens=settings.writer.max_tokens,
+            max_output_tokens=max_tokens or settings.writer.max_tokens,
             thinking_config=_thinking(model, settings.writer.thinking_level, types),
+            **({"response_mime_type": "application/json"} if json_only else {}),
         ),
     )
     text = getattr(response, "text", None)
     if not text:
         raise RuntimeError(_why_empty(response))
-    return str(text)
+    return str(text), _hit_ceiling(response)
+
+
+def _hit_ceiling(response: Any) -> bool:
+    """Упёрся ли ответ в потолок объёма.
+
+    Смотрим, даже когда текст пришёл: Gemini отдаёт написанное до обрыва, и
+    внешне такой ответ неотличим от целого — пока не начнёшь его разбирать.
+    """
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return False
+    reason = getattr(candidates[0], "finish_reason", None)
+    return (getattr(reason, "name", None) or str(reason or "")) == "MAX_TOKENS"
 
 
 def _thinking(model: str, level: str, types: Any) -> Any:
