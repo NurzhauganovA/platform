@@ -357,6 +357,14 @@ class Talk:
     burning: bool
     overdue: bool
 
+    writing: str = ""
+    """Как идёт написание моделью: `queued`, `running`, `ready`, `failed`.
+
+    В карточке, а не только в разделе обсуждений. Написание запускается само
+    при взятии лота в работу, и человек, открывший карточку через минуту,
+    должен видеть, что работа идёт, — иначе пустое обсуждение выглядит
+    незаведённым, и он нажимает «написать» второй раз."""
+
 
 @dataclass(frozen=True, slots=True)
 class Card:
@@ -1344,6 +1352,7 @@ def _talk(row: Discussion | None, now: datetime) -> Talk | None:
         left=left,
         burning=burning,
         overdue=overdue,
+        writing=row.writing.value if row.writing else "",
     )
 
 

@@ -354,7 +354,7 @@ def build_sheet(ctx: JobContext, *, card_id: str = "", **_: Any) -> dict[str, An
     if card is None:
         raise RuntimeError("Лот не найден — возможно, его удалили, пока задача ждала очереди")
 
-    spec_text, spec_name = _spec_of(card.row_id)
+    spec_text, spec_name = spec_of(card.row_id)
     ctx.advance(0, total=1, note="Модель раскладывает требования по предметам")
     table = sheets.build(
         ctx.db,
@@ -375,7 +375,7 @@ def build_sheet(ctx: JobContext, *, card_id: str = "", **_: Any) -> dict[str, An
     }
 
 
-def _spec_of(lot_number: str) -> tuple[str, str]:
+def spec_of(lot_number: str) -> tuple[str, str]:
     """Текст спецификации лота и имя её файла."""
     from goszakup.infrastructure.db.models import LotRecord
     from sqlalchemy import select

@@ -243,10 +243,117 @@ def _needs_writing(db: DbSession, organization_id: uuid.UUID, remark: Discussion
     return running is None
 
 
+def on_take(
+    db: DbSession,
+    *,
+    card: Any,
+    user_id: uuid.UUID | None,
+    settings: Settings,
+    redis: Any,
+) -> tuple[uuid.UUID, ...]:
+    """Заводит обсуждение и разбор сразу, как лот взяли в работу.
+
+    Ради того, чтобы не нажимать две кнопки на каждый лот. Взятых за утро
+    бывает десяток, оба прогона идут минутами, и человек, нажимающий их руками,
+    либо ждёт у экрана, либо забывает половину: лот лежит в работе без разбора,
+    а замечание не написано, хотя срок на него — два рабочих дня.
+
+    Обе задачи ставятся в очередь, а не выполняются здесь: нажатие должно
+    вернуть карточку сразу, а прогоны идут своим чередом и переживают уход со
+    страницы. Пока они идут, карточка это показывает — по ним и видно, что
+    работа началась.
+
+    Повторный заход ничего не запускает второй раз. Кнопку нажимают дважды, а
+    карточку открывают с двух машин; каждая задача стоит денег, и оплаченного
+    дважды в списке прогонов потом не объяснить.
+    """
+    started: list[uuid.UUID] = []
+
+    made = ensure(
+        db,
+        organization_id=card.organization_id,
+        user_id=user_id,
+        lot_number=card.row_id,
+        settings=settings,
+        redis=redis,
+    )
+    if made.job_id is not None:
+        started.append(made.job_id)
+
+    sheet_job = _sheet_job(db, card=card, user_id=user_id, redis=redis)
+    if sheet_job is not None:
+        started.append(sheet_job)
+
+    logger.info("goszakup.take.autostart", lot=card.row_id, jobs=len(started))
+    return tuple(started)
+
+
+def _sheet_job(
+    db: DbSession,
+    *,
+    card: Any,
+    user_id: uuid.UUID | None,
+    redis: Any,
+) -> uuid.UUID | None:
+    """Ставит разбор спецификации, если его есть из чего собирать и он не идёт.
+
+    Спецификации у большинства лотов портала нет вовсе: файл отдаётся только по
+    токену кабинета, а он выдаётся после входа по ЭЦП. Задача на пустом тексте
+    честно напишет «раскладывать нечего» — но напишет это в списке прогонов,
+    рядом с настоящей работой, и через неделю по нему нельзя будет понять, что
+    из этого было делом.
+    """
+    from platform_api.db.models import SpecSheet
+    from platform_api.modules.goszakup.jobs import spec_of
+
+    # Лениво: `jobs` импортирует этот файл сам — обработчик кнопки и обработчик
+    # задачи заводят обсуждение одинаково, — и на верхнем уровне это круг.
+    if not spec_of(card.row_id)[0].strip():
+        return None
+
+    already = db.execute(
+        select(SpecSheet).where(SpecSheet.module == card.module, SpecSheet.row_id == card.row_id)
+    ).scalar_one_or_none()
+    if already is not None and already.rows:
+        return None
+    if _running_sheet(db, card) is not None:
+        return None
+
+    job = JobService(db, redis).create(
+        organization_id=card.organization_id,
+        created_by_id=user_id,
+        module="goszakup",
+        kind="sheet",
+        params={"card_id": str(card.id)},
+        total=1,
+    )
+    db.flush()
+    return job.id
+
+
+def _running_sheet(db: DbSession, card: Any) -> Job | None:
+    """Разбор этого лота, который уже стоит в очереди или идёт."""
+    return (
+        db.execute(
+            select(Job)
+            .where(
+                Job.organization_id == card.organization_id,
+                Job.module == "goszakup",
+                Job.kind == "sheet",
+                Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+                Job.params["card_id"].astext == str(card.id),
+            )
+            .order_by(Job.created_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+
+
 def launch(settings: Settings, job_id: uuid.UUID | None) -> None:
     """Отдаёт задачу очереди. Уже после `commit`: до него её никто не найдёт."""
     if job_id is not None:
         enqueue_sync(settings, job_id)
 
 
-__all__ = ["LotMissingError", "Started", "ensure", "launch", "stop_writing"]
+__all__ = ["LotMissingError", "Started", "ensure", "launch", "on_take", "stop_writing"]

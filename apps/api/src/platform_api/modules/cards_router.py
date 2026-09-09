@@ -30,6 +30,8 @@ from platform_api.db.models import (
     ApprovalKind,
     ApprovalState,
     Department,
+    Job,
+    JobStatus,
     LotCard,
     LotStatus,
     Participation,
@@ -41,7 +43,7 @@ from platform_api.errors import SpokenError
 from platform_api.jobs.service import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.logging import get_logger
-from platform_api.modules import cards, sheets
+from platform_api.modules import ModuleRegistry, cards, sheets
 from platform_api.modules.goszakup import start
 from platform_api.modules.schemas import StartedJobOut
 
@@ -95,6 +97,8 @@ class TalkOut(BaseModel):
     left: str
     burning: bool
     overdue: bool
+    writing: str = ""
+    """Как идёт написание моделью: `queued`, `running`, `ready`, `failed`."""
 
 
 class CardOut(BaseModel):
@@ -382,6 +386,11 @@ def post_card(
 
     Повторное нажатие возвращает ту же карточку: кнопку нажимают дважды, а
     вторая карточка означала бы два ответственных и два набора подписей.
+
+    Следом площадка запускает своё: у госзакупок это обсуждение и разбор
+    спецификации. Что именно — решает модуль (`ModuleSpec.on_take`), а не этот
+    обработчик: «взять в работу» у площадок значит разное, и знание об этом
+    живёт рядом с самой площадкой.
     """
     card = cards.open_card(
         db,
@@ -402,7 +411,46 @@ def post_card(
         settings=request.app.state.settings,
     )
     db.commit()
+    _autostart(db, card, identity=identity, request=request)
     return _card_out(_one(db, identity, card.id))
+
+
+def _autostart(db: Db, card: LotCard, *, identity: CurrentUser, request: Request) -> None:
+    """Запускает то, что площадка делает сама при взятии лота в работу.
+
+    Задачи ставятся в очередь **после** фиксации: исполнитель забирает их
+    мгновенно и не нашёл бы ни задачу, ни обсуждение, если транзакция ещё
+    открыта.
+
+    Ошибка здесь не отменяет взятия. Лот взят — это главное; не запустившийся
+    разбор человек запустит кнопкой, а откат карточки из-за недоступной модели
+    оставил бы его вовсе ни с чем.
+    """
+    registry: ModuleRegistry = request.app.state.modules
+    settings: Settings = request.app.state.settings
+    try:
+        module = registry.get(card.module)
+    except KeyError:
+        return
+    if module.on_take is None:
+        return
+
+    try:
+        jobs = module.on_take(
+            db,
+            card=card,
+            user_id=identity.user.id,
+            settings=settings,
+            redis=request.app.state.redis,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("cards.autostart.failed", code=card.code, error=str(exc))
+        return
+
+    for job_id in jobs:
+        enqueue_sync(settings, job_id)
 
 
 @router.get("/people", summary="Кому можно поручить")
@@ -929,6 +977,15 @@ class SheetOut(BaseModel):
     trouble: str = ""
     built_at: str = ""
 
+    job_id: str = ""
+    """Разбор, который идёт прямо сейчас. Пусто — не идёт.
+
+    Отдаётся сервером, а не помнится браузером. Разбор запускается сам при
+    взятии лота в работу, а карточку открывают позже и с другой машины: без
+    этого поля человек видел бы пустую таблицу без объяснений, а прогон в это
+    время шёл. Своё нажатие браузер помнит и сам, но полагаться на его память
+    — значит показывать ход работы только тому, кто её начал."""
+
 
 @router.get("/{card_id}/sheet", summary="Разбор спецификации таблицей")
 def get_sheet(card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None) -> SheetOut:
@@ -938,7 +995,26 @@ def get_sheet(card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard =
     Иначе открытая страница списывала бы со счёта, а F5 нажимают часто.
     """
     card = _card_row(db, identity, card_id)
-    return _sheet_out(sheets.load(db, card))
+    return _sheet_out(sheets.load(db, card), running=_running_sheet(db, card))
+
+
+def _running_sheet(db: Db, card: LotCard) -> uuid.UUID | None:
+    """Разбор этого лота, стоящий в очереди или идущий прямо сейчас."""
+    return (
+        db.execute(
+            select(Job.id)
+            .where(
+                Job.organization_id == card.organization_id,
+                Job.module == card.module,
+                Job.kind == "sheet",
+                Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
+                Job.params["card_id"].astext == str(card.id),
+            )
+            .order_by(Job.created_at.desc())
+        )
+        .scalars()
+        .first()
+    )
 
 
 @router.put("/{card_id}/sheet", summary="Сохранить правки таблицы")
@@ -1011,8 +1087,9 @@ def _card_row(db: Db, identity: CurrentUser, card_id: uuid.UUID) -> LotCard:
     return found
 
 
-def _sheet_out(table: sheets.Table) -> SheetOut:
+def _sheet_out(table: sheets.Table, *, running: uuid.UUID | None = None) -> SheetOut:
     return SheetOut(
+        job_id=str(running) if running else "",
         columns=[
             ColumnIn(key=c.key, title=c.title, width=c.width, filled_by=c.filled_by)
             for c in table.columns

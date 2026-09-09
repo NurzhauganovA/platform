@@ -138,6 +138,8 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
 
   const mayAdd = card.can.includes("task");
   const talk = card.discussion;
+  const writing =
+    talk?.writing === "queued" || talk?.writing === "running";
   const analysisDone = card.step > ANALYSIS_STEP;
   const signed = card.approvals.filter(
     (one) => one.state === "approved",
@@ -181,7 +183,9 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
             onToggle={() => toggle("discussion")}
             onOpenTask={setOpenTask}
             mark={
-              !talk
+              writing
+                ? "active"
+                : !talk
                 ? "idle"
                 : talk.stage === "sent"
                   ? "done"
@@ -190,7 +194,13 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
                     : "active"
             }
             right={
-              talk ? (
+              // Пока модель пишет, срок неважен: вопрос к узлу в этот момент
+              // один — идёт ли работа. Обсуждение заводится и пишется само,
+              // когда лот берут в работу, и без этой пометки пустой текст
+              // выглядит как незаведённое обсуждение.
+              writing ? (
+                <Chip tone="blue">модель пишет</Chip>
+              ) : talk ? (
                 talk.stage === "sent" ? (
                   <Chip tone="ok">Отправлено</Chip>
                 ) : talk.deadline ? (

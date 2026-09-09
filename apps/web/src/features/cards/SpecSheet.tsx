@@ -87,15 +87,21 @@ export function SpecSheet({ card }: { card: Card }) {
   });
   const spec = facts?.spec ?? null;
 
+  // Прогон, начатый не в этой вкладке: разбор запускается сам при взятии лота
+  // в работу, а карточку открывают позже и с другой машины. Без этого человек
+  // видел бы пустую таблицу, пока модель над ней работает, — и нажал бы
+  // «Разобрать» второй раз, оплатив ту же спецификацию дважды.
+  const running = jobId ?? data?.job_id ?? null;
+
   // Ход разбора живьём. Модель читает три тысячи знаков и раскладывает их по
   // предметам — это минута с лишним, и всё это время кнопка без ответа
   // выглядит как непрожатая: человек жмёт второй раз и платит дважды.
-  const run = useJobStream(jobId, () => {
+  const run = useJobStream(running, () => {
     dirty.current = false;
     void cache.invalidateQueries({ queryKey: ["card", card.id, "sheet"] });
   });
   const building =
-    run === null ? jobId !== null : ["queued", "running"].includes(run.status);
+    run === null ? running !== null : ["queued", "running"].includes(run.status);
 
   // Пришедшее с сервера становится черновиком только пока человек не правил:
   // иначе фоновое обновление стёрло бы наполовину набранную ячейку.
@@ -123,8 +129,13 @@ export function SpecSheet({ card }: { card: Card }) {
   // человеку нужно, чтобы отпустилась кнопка: без неё оборванный прогон
   // держит разбор запертым, и на экране колесо крутится до конца дня.
   const stop = useMutation({
-    mutationFn: () => jobsApi.cancel(jobId ?? ""),
-    onSuccess: () => setJobId(null),
+    mutationFn: () => jobsApi.cancel(running ?? ""),
+    onSuccess: () => {
+      setJobId(null);
+      // И перечитываем таблицу: пока прогон не снят в базе, сервер продолжает
+      // называть его идущим, и кнопка отпустится только после обновления.
+      void cache.invalidateQueries({ queryKey: ["card", card.id, "sheet"] });
+    },
     onError: (error) =>
       setTrouble(error instanceof ApiError ? error.message : "Не остановилось"),
   });
@@ -193,7 +204,7 @@ export function SpecSheet({ card }: { card: Card }) {
               <button
                 type="button"
                 onClick={() => stop.mutate()}
-                disabled={!jobId || stop.isPending}
+                disabled={!running || stop.isPending}
                 title="Снять разбор: прогон отменяется, кнопка отпускается"
                 className={cx(
                   "rounded-[6px] px-1.5 py-0.5 text-[11.5px] text-ink-muted transition",

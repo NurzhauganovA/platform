@@ -39,6 +39,14 @@ export function CardPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["card", id],
     queryFn: () => cardsApi.one(id),
+    // Пока модель пишет замечание, карточка обновляется сама. Написание
+    // запускается при взятии лота в работу, идёт минуту с лишним, и человек,
+    // открывший карточку в этот момент, иначе смотрел бы на «модель пишет» до
+    // тех пор, пока не нажмёт F5.
+    refetchInterval: (query) => {
+      const writing = query.state.data?.discussion?.writing;
+      return writing === "queued" || writing === "running" ? 10_000 : false;
+    },
   });
   const { data: people } = useQuery({
     queryKey: ["people"],

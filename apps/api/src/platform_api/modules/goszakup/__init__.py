@@ -15,7 +15,7 @@ from __future__ import annotations
 from platform_api.auth.dependencies import READS, REMARKS, names
 from platform_api.db.models import Role
 from platform_api.modules import ModuleSpec, NavItem
-from platform_api.modules.goszakup import health
+from platform_api.modules.goszakup import health, start
 from platform_api.modules.goszakup.jobs import jobs
 from platform_api.modules.goszakup.router import router
 
@@ -60,6 +60,10 @@ module = ModuleSpec(
         ),
     ),
     jobs=jobs,
+    # Взяли лот в работу — сами заводим обсуждение и разбор спецификации.
+    # Оба прогона идут минутами, и нажимать их руками на каждый лот означает
+    # либо ждать у экрана, либо забыть половину.
+    on_take=start.on_take,
     health=health.check,
 )
 
