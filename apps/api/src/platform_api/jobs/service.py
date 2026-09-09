@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from redis import Redis
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session as DbSession
 
 from platform_api.db.base import utcnow
@@ -108,7 +108,33 @@ class JobService:
         logger.info("Задача поставлена", job_id=str(job.id), module=module, kind=kind)
         return job
 
+    def claim(self, job_id: uuid.UUID) -> bool:
+        """Берёт задачу в работу. Ложь — её уже взял кто-то другой.
+
+        Одним запросом с условием, а не чтением и записью следом. Очередь
+        доставляет задачу дважды чаще, чем кажется: перезапуск исполнителя,
+        подбор потерянных, две задачи одновременно в одном процессе. Между
+        «прочитал, что в очереди» и «записал, что идёт» помещается второй
+        такой же — и один разбор оплачивается дважды.
+        """
+        claimed = self._db.execute(
+            update(Job)
+            .where(Job.id == job_id, Job.status == JobStatus.QUEUED)
+            .values(status=JobStatus.RUNNING, started_at=utcnow())
+            .returning(Job.id)
+        ).scalar_one_or_none()
+        self._db.commit()
+        if claimed is None:
+            return False
+        job = self._db.get(Job, job_id)
+        if job is not None:
+            self._db.refresh(job)
+            self._publish(job)
+        return True
+
     def start(self, job_id: uuid.UUID) -> None:
+        """Отмечает начало работы. Проверку «а не взяли ли уже» делает
+        `claim`: этот вызов оставлен для прогонов, которые её не нуждаются."""
         job = self._require(job_id)
         job.status = JobStatus.RUNNING
         job.started_at = utcnow()
@@ -224,6 +250,29 @@ def list_jobs(
     if module:
         query = query.where(Job.module == module)
     return list(db.scalars(query.order_by(Job.created_at.desc()).limit(limit)))
+
+
+def lost_queued_jobs(db: DbSession, older_than: datetime) -> list[Job]:
+    """Задачи, которые стоят в очереди базы, но до исполнителя не дошли.
+
+    Очередь у нас в двух местах: строка в базе — учёт, запись в Redis —
+    доставка. Между ними есть щель. Redis перезапустили вместе с выкладкой,
+    постановка в очередь не дошла из-за сетевого сбоя, исполнителя убили между
+    приёмом и началом — во всех случаях строка остаётся в «очереди» навсегда, а
+    на экране висит «Ставим в очередь…», и человек ждёт разбора, которого никто
+    не делает.
+
+    Повторная постановка безопасна: исполнитель берёт задачу условным запросом
+    и вторую доставку просто пропускает.
+    """
+    return list(
+        db.scalars(
+            select(Job).where(
+                Job.status == JobStatus.QUEUED,
+                Job.created_at < older_than.astimezone(UTC),
+            )
+        )
+    )
 
 
 def stale_running_jobs(db: DbSession, older_than: datetime) -> list[Job]:

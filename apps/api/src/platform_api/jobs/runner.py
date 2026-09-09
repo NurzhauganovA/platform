@@ -24,7 +24,7 @@ from platform_api.db.base import utcnow
 from platform_api.db.models import Job, JobStatus
 from platform_api.errors import job_failure
 from platform_api.jobs.contract import CancelledError, JobSpec
-from platform_api.jobs.service import JobService, stale_running_jobs
+from platform_api.jobs.service import JobService, lost_queued_jobs, stale_running_jobs
 from platform_api.logging import get_logger
 from platform_api.storage import FileStorage
 
@@ -105,6 +105,14 @@ class JobRunner:
                 service.fail(job_id, f"Обработчик {job.module}/{job.kind} не подключён")
                 return
 
+            # Берём задачу условным запросом: доставка бывает двойной —
+            # подбор потерянных, перезапуск исполнителя, две задачи разом в
+            # одном процессе, — а один разбор должен быть оплачен один раз.
+            if not service.claim(job_id):
+                logger.info("Задачу уже взяли — пропускаем", job_id=str(job_id))
+                return
+            session.refresh(job)
+
             context = RunContext(
                 job_id=job.id,
                 organization_id=job.organization_id,
@@ -115,7 +123,6 @@ class JobRunner:
                 service=service,
             )
 
-            service.start(job_id)
             try:
                 result = spec.handler(context, **dict(job.params))
             except CancelledError:
@@ -227,3 +234,43 @@ __all__ = [
     "collect_handlers",
     "recover_stale_jobs",
 ]
+
+
+def requeue_lost_jobs(
+    session_factory: sessionmaker[DbSession],
+    settings: Any,
+    *,
+    older_than_minutes: int = 0,
+) -> int:
+    """Отдаёт очереди задачи, которые до неё не дошли.
+
+    Очередь живёт в двух местах: строка в базе — учёт, запись в Redis —
+    доставка, — и между ними есть щель. Redis перезапустили выкладкой, сеть
+    моргнула на постановке, исполнителя убили между приёмом и стартом: строка
+    остаётся в «очереди», а работать по ней некому. На экране это «Ставим в
+    очередь…» без конца, и человек ждёт разбор, которого никто не делает.
+
+    Повторная постановка безопасна: исполнитель берёт задачу условным запросом
+    (`JobService.claim`) и вторую доставку пропускает.
+
+    Возвращает, сколько отдал заново.
+    """
+    from platform_api.jobs.worker import enqueue_sync
+
+    session = session_factory()
+    try:
+        lost = lost_queued_jobs(session, utcnow() - timedelta(minutes=older_than_minutes))
+        for job in lost:
+            try:
+                enqueue_sync(settings, job.id)
+            except Exception as exc:
+                # Очередь недоступна — вернёмся к этой задаче на следующем
+                # заходе. Ронять подбор из-за одной записи незачем.
+                logger.warning(
+                    "Не удалось вернуть задачу в очередь", job_id=str(job.id), error=str(exc)
+                )
+        if lost:
+            logger.warning("Задачи возвращены в очередь", count=len(lost))
+        return len(lost)
+    finally:
+        session.close()

@@ -155,8 +155,10 @@ def test_fail_obyom_otveta_schitayetsya_ot_specifikacii() -> None:
 
     assert короткая < длинная
     assert длинная <= 32_000
-    # Даже на пустой закупке просим столько, чтобы хватило на несколько строк.
-    assert sheeting.budget("", ceiling=32_000) >= 4_096
+    # Даже на пустой закупке просим столько, чтобы хватило и на обдумывание, и
+    # на несколько строк: обдумывание вычитается из того же потолка, и без
+    # запаса короткая спецификация выходила хуже длинной.
+    assert sheeting.budget("", ceiling=32_000) >= 4_096 + sheeting.THINKING_RESERVE
 
 
 def test_fail_oborvannyy_otvet_sohranyayet_razobrannoye() -> None:

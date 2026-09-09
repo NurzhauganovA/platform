@@ -17,14 +17,28 @@ import { api } from "@/api/client";
 export type JobRun = {
   id: string;
   kind: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  /**
+   * Где задача сейчас.
+   *
+   * `lost` ставит браузер, а не сервер: поток оборвался или такой задачи уже
+   * нет. Отдельным состоянием, потому что оно означает не «идёт» и не
+   * «сделано», а «мы больше не знаем» — и вести себя по нему надо как по
+   * законченной: перечитать результат и убрать полосу.
+   */
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "lost";
   note: string;
   percent: number;
   error: string;
   result?: Record<string, unknown> | null;
 };
 
-const OVER = ["succeeded", "failed", "cancelled"];
+const OVER = ["succeeded", "failed", "cancelled", "lost"];
 
 /**
  * Подписывается на поток задачи и возвращает её состояние.
@@ -66,7 +80,21 @@ export function useJobStream<T extends JobRun = JobRun>(
         }
       }
     };
-    source.onerror = () => source.close();
+    source.onerror = () => {
+      // Поток оборвался или такой задачи уже нет. Молчание здесь читалось
+      // как «идёт»: полоса «Ставим в очередь…» висела до перезагрузки
+      // страницы, хотя разбор давно закончился — а бывало, что и закончился
+      // до того, как её открыли.
+      source.close();
+      setJob((current) => {
+        if (current) return current;
+        if (finished.current === null) {
+          finished.current = "lost";
+          onDone();
+        }
+        return { id: jobId, status: "lost", percent: 0 } as T;
+      });
+    };
     return () => source.close();
     // `onDone` намеренно не в зависимостях: он пересоздаётся на каждом
     // рендере, и поток пересоздавался бы вместе с ним — прогресс мигал бы.

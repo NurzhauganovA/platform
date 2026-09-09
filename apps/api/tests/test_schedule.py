@@ -29,7 +29,17 @@ def test_schedule_is_declared_by_modules() -> None:
 
     # Вывоз журнала здесь наравне с выгрузками площадок: он тоже объявлен
     # модулем, а не вписан в исполнителя.
-    assert names == {"skstore:sync", "omarket:sync", "goszakup:harvest", "work:audit"}
+    #
+    # Подбор потерянных задач — единственное исключение и стоит в каркасе
+    # намеренно: он чинит щель между строкой в базе и записью в очереди, а это
+    # не предметная область ни одной площадки.
+    assert names == {
+        "skstore:sync",
+        "omarket:sync",
+        "goszakup:harvest",
+        "work:audit",
+        "jobs:sweep",
+    }
 
 
 def test_paid_jobs_have_no_schedule() -> None:

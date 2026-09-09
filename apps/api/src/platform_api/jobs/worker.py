@@ -23,7 +23,12 @@ from sqlalchemy import select
 
 from platform_api.config import Settings, get_settings
 from platform_api.db.session import create_db_engine, create_session_factory
-from platform_api.jobs.runner import JobRunner, collect_handlers, recover_stale_jobs
+from platform_api.jobs.runner import (
+    JobRunner,
+    collect_handlers,
+    recover_stale_jobs,
+    requeue_lost_jobs,
+)
 from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
 from platform_api.storage import FileStorage
@@ -32,6 +37,18 @@ logger = get_logger(__name__)
 
 QUEUE_NAME = "fintend:jobs"
 TASK_NAME = "run_job"
+
+CONCURRENCY_CEILING = 8
+"""Больше этого одновременно не запускаем даже на большой машине: упрёмся не
+в процессор, а в частоту обращений к модели."""
+
+
+def _concurrency() -> int:
+    """Сколько задач держать одновременно. Одно ядро — веб-части."""
+    from os import cpu_count
+
+    cores = cpu_count() or 2
+    return max(2, min(CONCURRENCY_CEILING, cores - 1))
 
 
 async def run_job(ctx: dict[str, Any], job_id: str) -> None:
@@ -98,11 +115,19 @@ async def startup(ctx: dict[str, Any]) -> None:
         partial(recover_stale_jobs, session_factory, redis, handlers=handlers)
     )
 
+    # А оставшиеся в «очереди» — отдаются очереди заново. Redis перезапускают
+    # вместе с выкладкой, и всё, что стояло в нём на доставку, пропадает:
+    # строка в базе есть, работать по ней некому, а на экране «Ставим в
+    # очередь…» до конца дня.
+    returned = await asyncio.to_thread(partial(requeue_lost_jobs, session_factory, settings))
+
     logger.info(
         "Исполнитель запущен",
         modules=[module.slug for module in registry.all()],
         handlers=len(collect_handlers(registry)),
         recovered=recovered,
+        returned=returned,
+        concurrency=WorkerSettings.max_jobs,
     )
 
 
@@ -169,6 +194,25 @@ def _run_scheduled(ctx: dict[str, Any], slug: str, kind: str) -> None:
         runner.run(job_id)
 
 
+async def sweep_lost(ctx: dict[str, Any]) -> None:
+    """Каждую минуту возвращает в очередь то, что до неё не дошло.
+
+    Подбора при запуске мало: исполнитель перезапускается раз в выкладку, а
+    щель между «записали в базу» и «положили в Redis» открывается в любой
+    момент — сеть моргнула, Redis перезагрузился, обработчик упал между двумя
+    строками. Задача при этом висит в «очереди» до следующей выкладки, а
+    человек смотрит на «Ставим в очередь…».
+
+    Выдержка в две минуты: только что поставленная задача лежит в Redis и
+    ждёт своей очереди законно — подбирать её незачем.
+    """
+    returned = await asyncio.to_thread(
+        partial(requeue_lost_jobs, ctx["sessions"], get_settings(), older_than_minutes=2)
+    )
+    if returned:
+        logger.info("Потерянные задачи возвращены в очередь", count=returned)
+
+
 def collect_schedule() -> list[Any]:
     """Расписание, объявленное модулями.
 
@@ -179,7 +223,17 @@ def collect_schedule() -> list[Any]:
     from arq import cron
 
     registry = ModuleRegistry(discover_modules())
-    planned: list[Any] = []
+    # Подбор потерянных — первым и каждую минуту. Он не про предметную область,
+    # поэтому и не объявляется модулем: чинить щель между базой и очередью —
+    # забота каркаса.
+    planned: list[Any] = [
+        cron(
+            sweep_lost,
+            minute=set(range(60)),
+            name="jobs:sweep",
+            run_at_startup=False,
+        )
+    ]
     for module in registry.all():
         for spec in module.jobs:
             if not spec.every_hours:
@@ -213,12 +267,22 @@ class WorkerSettings:
     on_shutdown = shutdown
     queue_name = QUEUE_NAME
 
-    max_jobs = 2
-    """Сколько задач одновременно.
+    max_jobs = _concurrency()
+    """Сколько задач одновременно — по числу ядер машины.
 
-    Немного: каждая занимает процессор разбором и упирается в ограничение
-    частоты обращений к модели. Больше — не быстрее, а только дороже по
-    памяти и ближе к отказам по частоте."""
+    Было два на любой машине, и это упиралось в потолок ровно там, где работы
+    много: взяли пять лотов — обсуждение и разбор каждого встают в очередь по
+    двое, и пятый ждёт четверть часа. Работа при этом наполовину не своя:
+    задача ждёт ответа модели, а процессор в это время свободен.
+
+    Считается от ядер, а не задаётся числом: у ноутбука их восемь, у сервера
+    четыре, и одно и то же число означало бы на одном простой, на другом
+    драку за процессор. Одно ядро оставляется веб-части: она отвечает
+    человеку, и её нельзя оставлять без времени.
+
+    Потолок в восемь — не про память, а про модель: она отвечает отказом по
+    частоте, и десять одновременных разборов приходят к нему быстрее, чем
+    заканчиваются."""
 
     job_timeout = 3600
     """Час на задачу. Разбор папки на две тысячи документов идёт долго, и

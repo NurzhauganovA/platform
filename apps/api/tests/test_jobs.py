@@ -284,3 +284,67 @@ def test_fail_oshibki_goszakupa_govoryat_po_chelovecheski() -> None:
     from platform_api.errors import job_failure
 
     assert job_failure(PortalError("Портал не отвечает")) == "Портал не отвечает"
+
+
+# --- потерянные задачи -----------------------------------------------------
+
+
+def test_zadachu_beryot_tolko_odin(service: JobService, db: DbSession) -> None:
+    """Двойная доставка не должна стоить двух прогонов.
+
+    Очередь доставляет задачу дважды чаще, чем кажется: подбор потерянных,
+    перезапуск исполнителя, две задачи разом в одном процессе. Разбор
+    спецификации при этом стоит денег и минуты работы модели.
+    """
+    job = _job(service, _org(db))
+
+    assert service.claim(job.id) is True
+    assert service.claim(job.id) is False
+
+    db.refresh(job)
+    assert job.status is JobStatus.RUNNING
+
+
+def test_poteryannaya_zadacha_nahoditsya(service: JobService, db: DbSession) -> None:
+    """Задача стоит в очереди базы, но до исполнителя не дошла.
+
+    Так бывает после выкладки: Redis перезапускают вместе с ней, и всё, что
+    лежало в нём на доставку, пропадает. Строка остаётся в «очереди», работать
+    по ней некому, а на экране висит «Ставим в очередь…» — человек ждёт
+    разбора, которого никто не делает.
+    """
+    from datetime import timedelta
+
+    from platform_api.db.base import utcnow
+    from platform_api.jobs.service import lost_queued_jobs
+
+    свежая = _job(service, _org(db))
+    потерянная = _job(service, _org(db))
+    потерянная.created_at = utcnow() - timedelta(minutes=10)
+    db.flush()
+
+    найдено = lost_queued_jobs(db, utcnow() - timedelta(minutes=2))
+
+    assert [job.id for job in найдено] == [потерянная.id]
+    # Свежая лежит в очереди законно: её только что поставили, и подбирать её
+    # значит доставить дважды.
+    assert свежая.id not in {job.id for job in найдено}
+
+
+def test_vzyataya_zadacha_ne_schitaetsya_poteryannoy(service: JobService, db: DbSession) -> None:
+    """Идущая задача не подбирается: её уже кто-то делает.
+
+    Иначе подбор каждую минуту складывал бы в очередь копии того, что и так
+    выполняется, — и первая же долгая выгрузка получила бы десяток дублей.
+    """
+    from datetime import timedelta
+
+    from platform_api.db.base import utcnow
+    from platform_api.jobs.service import lost_queued_jobs
+
+    job = _job(service, _org(db))
+    job.created_at = utcnow() - timedelta(minutes=10)
+    db.flush()
+    service.claim(job.id)
+
+    assert lost_queued_jobs(db, utcnow() - timedelta(minutes=2)) == []
