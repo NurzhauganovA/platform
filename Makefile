@@ -64,7 +64,7 @@ ifdef OMARKET_DIR
 export OMARKET_DIR
 endif
 
-.PHONY: help sources build up prod down restart logs ps user shell migrate check prune clean backup restore \
+.PHONY: help sources build up prod down restart logs ps user shell migrate check tidy prune clean backup restore \
 	prod-user stage stage-down stage-logs stage-ps stage-user
 
 help:
@@ -94,17 +94,32 @@ build: sources
 up: sources
 	@test -f .env || { echo "Нет .env — скопируйте .env.example и впишите GEMINI_API_KEY"; exit 1; }
 	@$(COMPOSE) up -d --build
+	@$(MAKE) --no-print-directory tidy
 	@echo
 	@echo "Интерфейс:  http://localhost:8080"
 	@echo "API:        http://localhost:8000/api/docs"
 	@echo
 	@echo "Если входить некем — заведите сотрудника: make user"
 
+# Слои прошлой сборки — сразу после неё, а не когда место кончится.
+#
+# Про то, чем кончается переполнение, написано у `make prune` ниже. Разница в
+# том, что `prune` набирают руками — а набирают его, когда уже встало: у нас
+# так и вышло, база сервиса уведомлений упала посреди записи и сорок часов
+# никого ни о чём не оповещала, причём платформа рядом работала как ни в чём не
+# бывало.
+#
+# Снимаются только безымянные образы: собранное с именем, тома и данные
+# остаются. Поэтому цель и отдельная от `prune`, который сносит всё неиспользуемое.
+tidy:
+	@docker image prune -f >/dev/null 2>&1 || true
+
 # На сервере: 80 порт, журнал строками JSON, перезапуск после перезагрузки.
 # Отличия лежат в `docker-compose.prod.yml` — здесь только их подключение.
 prod: sources
 	@test -f .env || { echo "Нет .env — скопируйте .env.example и впишите ключи"; exit 1; }
 	@$(PROD) up -d --build
+	@$(MAKE) --no-print-directory tidy
 	@echo
 	@echo "Платформа: http://bcorp.kz  (и по адресу самой машины)"
 	@echo "Журнал:    make logs"

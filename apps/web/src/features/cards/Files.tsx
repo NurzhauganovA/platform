@@ -21,7 +21,7 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { cardsApi, type Attachment, type Card } from "@/api/cards";
+import { cardsApi, type Attachment, type Card, type Person } from "@/api/cards";
 import {
   discussionApi,
   worklists,
@@ -30,6 +30,7 @@ import {
 } from "@/api/worklist";
 import { Button, Card as Panel, Spinner, bytes, cx } from "@/ui";
 import { BarHead, BarTitle, Chip, stamp } from "./kit";
+import { Highlighted, MentionBox, collect } from "./Mentions";
 
 export function Files({ card }: { card: Card }) {
   const cache = useQueryClient();
@@ -270,8 +271,20 @@ export function Chat({ card }: { card: Card }) {
     queryFn: () => discussionApi.thread(card.module, card.row_id),
   });
 
+  // Список сотрудников тот же, что у выбора ответственного: ответ уже в кэше
+  // страницы, и второй раз по сети за ним никто не идёт.
+  const { data: people } = useQuery({
+    queryKey: ["people"],
+    queryFn: cardsApi.people,
+    staleTime: 10 * 60 * 1000,
+  });
+  const staff = people ?? [];
+
   const send = useMutation({
-    mutationFn: () => discussionApi.write(card.module, card.row_id, body),
+    // Кого позвали, считается по тексту: имя можно набрать руками или
+    // вставить из соседней реплики, и человека должно позвать во всех случаях.
+    mutationFn: () =>
+      discussionApi.write(card.module, card.row_id, body, collect(body, staff)),
     onSuccess: () => {
       setBody("");
       void cache.invalidateQueries({
@@ -300,7 +313,7 @@ export function Chat({ card }: { card: Card }) {
         // висит поверх, и увести прокрутку наружу значит потерять поле ввода.
         <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 py-3">
           {data.map((item) => (
-            <Reply key={item.id} message={item} />
+            <Reply key={item.id} message={item} people={staff} />
           ))}
         </ul>
       )}
@@ -309,33 +322,20 @@ export function Chat({ card }: { card: Card }) {
           панели: подпись, отступы и края сходились в одну линию, и блок
           выглядел обрезанным по вертикали. */}
       <div className="shrink-0 border-t border-hairline bg-plane/40 px-4 py-3">
-        <textarea
+        <MentionBox
           value={body}
-          onChange={(event) => setBody(event.target.value)}
-          onKeyDown={(event) => {
-            // Отправка по Ctrl+Enter, а не по Enter: реплики бывают в три
-            // строки, и отправленная на первом переносе — это ещё две следом.
-            if (
-              event.key === "Enter" &&
-              (event.metaKey || event.ctrlKey) &&
-              body.trim()
-            ) {
-              send.mutate();
-            }
+          people={staff}
+          onChange={setBody}
+          onSend={() => {
+            if (body.trim()) send.mutate();
           }}
-          rows={3}
-          placeholder="Что важно знать по этому лоту"
-          className={cx(
-            "w-full resize-none rounded-[10px] border border-baseline bg-surface px-3 py-2.5",
-            "text-sm leading-relaxed text-ink placeholder:text-ink-muted",
-            "focus:border-series-1 focus:outline-none",
-          )}
+          placeholder="Что важно знать по этому лоту. @ — позвать коллегу"
         />
         {/* Подпись и кнопка на своей строке, а не сбоку от поля: рядом с
             полем кнопка сжимала его до половины ширины панели. */}
         <div className="mt-2 flex items-center justify-between gap-3">
           <span className="text-[11px] text-ink-muted">
-            Ctrl+Enter - отправить
+            Ctrl+Enter — отправить · @all — позвать всех
           </span>
           <Button
             variant="primary"
@@ -357,7 +357,7 @@ export function Chat({ card }: { card: Card }) {
   );
 }
 
-function Reply({ message }: { message: Message }) {
+function Reply({ message, people }: { message: Message; people: Person[] }) {
   return (
     <li className="rounded-[10px] bg-plane/60 px-3 py-2.5">
       {/* Имя переносится, время — нет: у сотрудников имя с отчеством, и
@@ -378,8 +378,10 @@ function Reply({ message }: { message: Message }) {
           <span className="text-[11px] text-ink-muted">поправлено</span>
         )}
       </div>
+      {/* Позванные подсвечены: реплика, в которой обратились к тебе, должна
+          отличаться от той, где просто написали. */}
       <p className="mt-1 text-sm leading-relaxed break-words whitespace-pre-wrap text-ink-secondary">
-        {message.body}
+        <Highlighted body={message.body} people={people} />
       </p>
     </li>
   );

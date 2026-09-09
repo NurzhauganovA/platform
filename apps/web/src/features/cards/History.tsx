@@ -26,20 +26,7 @@ import {
   type Worker,
 } from "@/api/cards";
 import { Card as Panel, EmptyState, Spinner, cx } from "@/ui";
-import { BarHead, BarTitle, Note, shortName, stamp } from "./kit";
-
-const ROLE_NAMES: Record<string, string> = {
-  admin: "администратор",
-  analyst: "тендерщик",
-  manager: "менеджер",
-  head: "руководитель",
-  commercial: "комдир",
-  buyer: "снабжение",
-  technologist: "технолог",
-  assembler: "сборщик",
-  lawyer: "юрист",
-  viewer: "наблюдатель",
-};
+import { ROLE_NAMES, BarHead, BarTitle, Note, shortName, stamp } from "./kit";
 
 export function History({ card }: { card: Card }) {
   const { data, isLoading } = useQuery({

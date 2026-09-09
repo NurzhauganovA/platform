@@ -22,10 +22,11 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from platform_api.config import Settings
-from platform_api.db.models import Department, LotCard, Task, User
+from platform_api.db.models import Department, LotCard, Membership, Task, User
 from platform_api.logging import get_logger
 from platform_api.modules import notify
 
@@ -166,6 +167,115 @@ def task_taken(db: DbSession, settings: Settings, task: Task) -> None:
     )
 
 
+def mentioned(
+    db: DbSession,
+    settings: Settings,
+    *,
+    organization_id: uuid.UUID,
+    module: str,
+    row_id: str,
+    author: User | None,
+    text: str,
+    mentions: list[str],
+    message_id: uuid.UUID,
+) -> None:
+    """В переписке позвали по имени — говорим тому, кого позвали.
+
+    Ради этого упоминание и заводили: «@Айша, посмотри пункт 4.2» без
+    уведомления — надежда на то, что Айша зайдёт в ветку сама, а заходят в неё
+    тогда, когда о ней напомнили.
+
+    Текст уходит целиком, а не одним «вас упомянули». Половина реплик отвечается
+    одной строкой, и человек, прочитавший вопрос в уведомлении, отвечает на
+    него сразу; уведомление без текста заставляет открыть платформу, чтобы
+    узнать, стоило ли её открывать.
+
+    Ссылка ведёт на карточку лота, если он заведён. Не заведён — ссылки нет: та,
+    что ведёт в пустоту, хуже отсутствующей.
+    """
+    from platform_api.modules.discussion import EVERYONE
+
+    people = _mentioned_people(db, organization_id, mentions, author)
+    if not people:
+        return
+
+    card = _card_of(db, organization_id, module, row_id)
+    who = author.full_name or author.email if author else "Коллега"
+    where = f"{card.code} · {card.title}" if card else row_id
+    everyone = EVERYONE in mentions
+
+    notify.about(
+        settings,
+        event="discussion.mention",
+        title="Вас позвали в переписке" if not everyone else "Позвали всех в переписке",
+        body_text=f"{who} · {where}\n\n{_short(text)}",
+        payload={"author": who, "lot": where, "text": _short(text)},
+        users=sorted(people),
+        url=f"/work/lots/{card.id}" if card else "",
+        group=f"chat:{module}:{row_id}",
+        # Ключ по реплике: одно сообщение зовёт человека один раз, сколько бы
+        # раз обработчик ни повторился.
+        idempotency_key=f"chat-mention-{message_id}",
+    )
+
+
+def _mentioned_people(
+    db: DbSession,
+    organization_id: uuid.UUID,
+    mentions: list[str],
+    author: User | None,
+) -> set[uuid.UUID]:
+    """Кому уходит уведомление. `all` — всем действующим, кроме автора."""
+    from platform_api.modules.discussion import EVERYONE
+
+    people: set[uuid.UUID] = set()
+    for one in mentions:
+        if one == EVERYONE:
+            continue
+        try:
+            people.add(uuid.UUID(one))
+        except ValueError:
+            continue
+
+    if EVERYONE in mentions:
+        # Действующие: уволившийся продолжал бы получать разговоры о наших
+        # закупках, и заметили бы это не скоро.
+        people.update(
+            db.scalars(
+                select(User.id)
+                .join(Membership, Membership.user_id == User.id)
+                .where(
+                    Membership.organization_id == organization_id,
+                    User.is_active.is_(True),
+                )
+            )
+        )
+
+    if author is not None:
+        people.discard(author.id)
+    return people
+
+
+def _card_of(db: DbSession, organization_id: uuid.UUID, module: str, row_id: str) -> LotCard | None:
+    """Карточка лота по строке. Нет — переписка идёт по строке списка."""
+    return db.scalars(
+        select(LotCard)
+        .where(
+            LotCard.organization_id == organization_id,
+            LotCard.module == module,
+            LotCard.row_id == row_id,
+        )
+        .limit(1)
+    ).first()
+
+
+def _short(text: str) -> str:
+    """Реплика в уведомлении. Длинную обрезаем: в списке чатов её всё равно
+    видно на три строки, а дочитывают её на самой странице."""
+    clean = " ".join(text.split())
+    return clean if len(clean) <= 300 else f"{clean[:299]}…"
+
+
 def task_closed(settings: Settings, task: Task) -> None:
     """Задача закрыта — гасим напоминания о её сроке.
 
@@ -192,4 +302,11 @@ def _money(value: Decimal | None) -> str:
     return f"{int(value):,}".replace(",", " ")
 
 
-__all__ = ["TAKEN_DESKS", "lot_opened", "task_added", "task_closed", "task_taken"]
+__all__ = [
+    "TAKEN_DESKS",
+    "lot_opened",
+    "mentioned",
+    "task_added",
+    "task_closed",
+    "task_taken",
+]

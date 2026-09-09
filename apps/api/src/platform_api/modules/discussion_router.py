@@ -11,7 +11,7 @@ import uuid
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_read
@@ -30,12 +30,23 @@ class MessageOut(BaseModel):
     author_id: str = ""
     created_at: str
     edited_at: str = ""
+    mentions: list[str] = []
+    """Кого позвали: идентификаторы сотрудников и `all`."""
 
 
 class MessageIn(BaseModel):
     """Что пишут."""
 
     body: str
+
+    mentions: list[str] = []
+    """Кого зовут этой репликой: идентификаторы из списка сотрудников и `all`.
+
+    Списком, а не разбором текста на сервере. Имя в тексте — это буквы:
+    однофамильцы, смена фамилии и опечатка превращают «кому ушло уведомление» в
+    вопрос без ответа. Браузеру при этом не верим — состав организации
+    сверяется в службе.
+    """
 
 
 @router.get("/{module}/{row_id:path}", summary="Обсуждение строки")
@@ -57,6 +68,7 @@ def post_message(
     body: MessageIn,
     identity: CurrentUser,
     db: Db,
+    request: Request,
     _guard: Annotated[None, requires_read] = None,
 ) -> MessageOut:
     """Добавляет реплику в ветку строки.
@@ -73,6 +85,8 @@ def post_message(
             module=module,
             row_id=row_id,
             body=body.body,
+            mentions=body.mentions,
+            settings=request.app.state.settings,
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -86,11 +100,19 @@ def patch_message(
     body: MessageIn,
     identity: CurrentUser,
     db: Db,
+    request: Request,
     _guard: Annotated[None, requires_read] = None,
 ) -> MessageOut:
+    """Правит свою реплику. Дописанное упоминание зовёт того, кого дописали."""
     try:
         changed = discussion.edit(
-            db, identity.organization.id, identity.user.id, message_id, body.body
+            db,
+            identity.organization.id,
+            identity.user.id,
+            message_id,
+            body.body,
+            mentions=body.mentions,
+            settings=request.app.state.settings,
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

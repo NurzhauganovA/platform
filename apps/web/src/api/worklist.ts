@@ -551,6 +551,8 @@ export interface Message {
   author_id: string;
   created_at: string;
   edited_at: string;
+  /** Кого позвали: идентификаторы сотрудников и `all` — всех. */
+  mentions: string[];
 }
 
 /**
@@ -565,14 +567,19 @@ export const discussionApi = {
       `/api/discussion/${module}/${encodeURIComponent(rowId)}`,
     ),
 
-  write: (module: string, rowId: string, body: string) =>
+  /** Пишет реплику. `mentions` — кого позвать: идентификаторы сотрудников и
+   *  `all`. Сервер сверяет их со своим составом заново. */
+  write: (module: string, rowId: string, body: string, mentions: string[] = []) =>
     api.post<Message>(
       `/api/discussion/${module}/${encodeURIComponent(rowId)}`,
-      { body },
+      { body, mentions },
     ),
 
-  edit: (messageId: string, body: string) =>
-    api.patch<Message>(`/api/discussion/messages/${messageId}`, { body }),
+  edit: (messageId: string, body: string, mentions: string[] = []) =>
+    api.patch<Message>(`/api/discussion/messages/${messageId}`, {
+      body,
+      mentions,
+    }),
 
   remove: (messageId: string) =>
     api.delete<void>(`/api/discussion/messages/${messageId}`),
