@@ -15,9 +15,8 @@ from platform_api.db.models import Membership, Organization, Role, User
 from platform_api.modules import discussion, notify
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import Session as DbSession
-
     from platform_api.config import Settings
+    from sqlalchemy.orm import Session as DbSession
 
 
 @pytest.fixture
