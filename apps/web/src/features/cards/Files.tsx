@@ -88,18 +88,36 @@ export function Files({ card }: { card: Card }) {
     onSuccess: ({ said, folder }) => {
       setTrouble("");
       setNotices(said);
-      // Папка, в которую только что положили, раскрывается сама: человек
-      // нажал «+ Файлы» именно у неё и ждёт увидеть, что там оказалось.
-      if (folder) setOpenShelves((was) => ({ ...was, [folder]: true }));
+      show(folder);
       refresh();
     },
-    onError: (error) =>
-      setTrouble(error instanceof Error ? error.message : "Не загрузилось"),
+    // Пачка обрывается на первом отказе, но всё, что уехало до него, на
+    // сервере уже лежит. Без обновления списка эти файлы не видны до
+    // перезагрузки страницы — человек читает красную строку и грузит их по
+    // второму разу, заводя дубли там, где сравнение по содержимому не спасёт:
+    // снимок экрана, пересохранённый телефоном, байт в байт уже не тот.
+    onError: (error) => {
+      setTrouble(error instanceof Error ? error.message : "Не загрузилось");
+      refresh();
+    },
   });
+
+  /** Раскрывает папку, в которую только что положили: человек нажал «+ Файлы»
+   *  именно у неё и ждёт увидеть, что там оказалось. */
+  const show = (folder: string) => {
+    if (folder) setOpenShelves((was) => ({ ...was, [folder]: true }));
+  };
 
   const drop = useMutation({
     mutationFn: (linkId: string) => cardsApi.detach(linkId),
-    onSuccess: refresh,
+    onSuccess: () => {
+      setTrouble("");
+      refresh();
+    },
+    // Отказ здесь виден не сразу: строка остаётся на месте, и это выглядит как
+    // непопадание по кнопке — жмут второй раз и третий.
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не отвязался"),
   });
 
   const makeFolder = useMutation({
@@ -124,7 +142,16 @@ export function Files({ card }: { card: Card }) {
   const move = useMutation({
     mutationFn: (input: { linkId: string; folder: string }) =>
       cardsApi.moveFile(input.linkId, input.folder),
-    onSuccess: refresh,
+    onSuccess: (_moved, input) => {
+      setTrouble("");
+      show(input.folder);
+      refresh();
+    },
+    // Список папок — поле с выбранным значением: при отказе оно перерисуется
+    // прежним, и выпадающий список молча «отщёлкнет» назад. Причину надо
+    // назвать словами — например, что папку убрали в соседней вкладке.
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не переложился"),
   });
 
   const all = data ?? [];
@@ -196,8 +223,13 @@ export function Files({ card }: { card: Card }) {
         }}
       />
 
+      {/* Живой областью: загрузка идёт без перехода по странице, фокус
+          остаётся на кнопке, и без `role` читалка про отказ молчит вовсе. */}
       {trouble && (
-        <p className="border-b border-hairline/70 px-[15px] py-2.5 text-[12.5px] text-critical">
+        <p
+          role="alert"
+          className="border-b border-hairline/70 px-[15px] py-2.5 text-[12.5px] text-critical"
+        >
           {trouble}
         </p>
       )}
@@ -207,7 +239,10 @@ export function Files({ card }: { card: Card }) {
           прочитать надо. Закрывается нажатием, само не гаснет: пропавшую
           подсказку человек ищет глазами по всему экрану. */}
       {notices.length > 0 && (
-        <div className="flex items-start gap-2.5 border-b border-hairline/70 bg-plane/60 px-[15px] py-2.5">
+        <div
+          role="status"
+          className="flex items-start gap-2.5 border-b border-hairline/70 bg-plane/60 px-[15px] py-2.5"
+        >
           <span className="min-w-0 flex-1 space-y-0.5">
             {notices.map((said) => (
               <span
@@ -304,16 +339,33 @@ export function Files({ card }: { card: Card }) {
  *
  * Номером, а не размером: размер под именем стоит и так, но «160 КБ» и
  * «182 КБ» глаз не запоминает, а «(2)» отвечает на «я точно про этот».
- * Проставляется в порядке приложения, и у одиночных имён его нет вовсе —
- * иначе номер висел бы у каждого второго файла, ничего не различая.
+ * У одиночных имён номера нет вовсе — иначе он висел бы у каждого второго
+ * файла, ничего не различая.
+ *
+ * Считается от старого к новому, хотя список приходит наоборот — от новых к
+ * старым. Иначе номер не держится: приложили третий «Договор.pdf», он встал
+ * наверх с номером (1), а прежний (1) стал (2) — и запись в переписке
+ * «оплатили Договор.pdf (2)» стала указывать на другой документ. Номер, чтобы
+ * им пользоваться, должен пережить следующую загрузку.
  */
 function numbering(files: Attachment[]): Record<string, number> {
   const seen = new Map<string, number>();
   for (const file of files) seen.set(file.name, (seen.get(file.name) ?? 0) + 1);
 
+  // Время приходит строкой ISO — такие сравниваются как обычные строки, и
+  // отдельный разбор даты тут лишний. Совпало до микросекунды (пачка из
+  // десяти снимков уезжает за миг) — доупорядочиваем по ключу: порядок должен
+  // быть один и тот же при каждой перерисовке, иначе номера мигают.
+  const older = (one: Attachment, two: Attachment) =>
+    one.added_at === two.added_at
+      ? one.id.localeCompare(two.id)
+      : one.added_at < two.added_at
+        ? -1
+        : 1;
+  const oldestFirst = [...files].sort(older);
   const counted = new Map<string, number>();
   const numbers: Record<string, number> = {};
-  for (const file of files) {
+  for (const file of oldestFirst) {
     if ((seen.get(file.name) ?? 0) < 2) continue;
     const next = (counted.get(file.name) ?? 0) + 1;
     counted.set(file.name, next);
