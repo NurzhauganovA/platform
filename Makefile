@@ -65,7 +65,8 @@ export OMARKET_DIR
 endif
 
 .PHONY: help sources build up prod down restart logs ps user shell migrate check tidy prune clean backup restore \
-	prod-user stage stage-down stage-logs stage-ps stage-user
+	prod-user stage stage-down stage-logs stage-ps stage-user \
+	notify-check prod-notify-check stage-notify-check
 
 help:
 	@echo "make up       собрать и поднять платформу  ->  http://localhost:8080"
@@ -74,6 +75,7 @@ help:
 	@echo "make backup   снять копию баз и файлов"
 	@echo "make user     завести сотрудника (на своей машине)"
 	@echo "              на сервере: make prod-user / make stage-user"
+	@echo "make notify-check  работают ли уведомления (на сервере: prod-notify-check)"
 	@echo "make logs     поток журналов"
 	@echo "make ps       что запущено"
 	@echo "make down     остановить"
@@ -179,6 +181,12 @@ ps:
 # заводил третий, `platform`: одноразовый контейнер поднимался в сети, где
 # базы нет, и сотрудник не заводился нигде. Промолчать тут нельзя, а угадать
 # среду по окружению — значит однажды угадать не ту.
+define notify-doctor
+	python -m platform_api.cli notify-doctor \
+		$(if $(EMAIL),--email $(EMAIL)) \
+		$(if $(SEND),--send)
+endef
+
 define create-user
 	python -m platform_api.cli create-user \
 		--email $(or $(EMAIL),analyst@fintend.kz) \
@@ -187,6 +195,23 @@ define create-user
 		--role $(or $(ROLE),analyst) \
 		--name "$(or $(NAME),Тендерщик)"
 endef
+
+# Работают ли уведомления. Изнутри контейнера платформы, а не с машины:
+# проверять надо ту сеть и те настройки, которыми ходит она сама. С машины
+# сервис виден по 127.0.0.1 и отвечает даже тогда, когда из контейнера до него
+# хода нет, — а именно этот случай и ловится.
+#
+#   make notify-check                       дошли ли до сервиса, принят ли ключ
+#   make notify-check EMAIL=имя@fintend.kz  плюс: знает ли он этого человека
+#   make notify-check EMAIL=... SEND=1      плюс: отправить проверочное
+notify-check:
+	@$(COMPOSE) exec api $(notify-doctor)
+
+prod-notify-check:
+	@$(PROD) exec api $(notify-doctor)
+
+stage-notify-check:
+	@$(STAGE) exec api $(notify-doctor)
 
 user:
 	@$(COMPOSE) run --rm --no-deps api $(create-user)
