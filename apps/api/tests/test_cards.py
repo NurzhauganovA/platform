@@ -19,6 +19,7 @@ from platform_api.db.models import (
     ApprovalKind,
     ApprovalState,
     Department,
+    LotCard,
     LotStatus,
     Organization,
     Participation,
@@ -69,6 +70,12 @@ def _завести(db: DbSession, org: Organization, кто: uuid.UUID) -> uuid
         by=кто,
     )
     return card.id
+
+
+def _карточка(db: DbSession, org: Organization) -> LotCard:
+    found = cards.by_row(db, organization_id=org.id, module="goszakup", row_id="81468165-ЗЦП1")
+    assert found is not None
+    return found
 
 
 def _подписать_всё(db: DbSession, org: Organization, card_id: uuid.UUID, кто: uuid.UUID) -> None:
@@ -554,12 +561,17 @@ def test_fail_fayl_k_lotu_ne_dvoitsya(db: DbSession, org: Organization, кто: 
     второй = cards.attach(
         db, organization_id=org.id, card_id=card_id, file_id=файл.id, added_by=кто
     )
-    assert первый.id == второй.id
+    assert первый.link.id == второй.link.id
+    # Первая привязка новая, вторая — узнанная по содержимому, и об этом есть
+    # что сказать человеку: иначе повторная загрузка выглядит пропажей.
+    assert первый.known is False
+    assert второй.known is True
+    assert второй.stored_name == "счёт.pdf"
 
     приложено = cards.files(db, organization_id=org.id, card_id=card_id)
     assert [item.name for item in приложено] == ["счёт.pdf"]
 
-    cards.detach(db, organization_id=org.id, link_id=первый.id)
+    cards.detach(db, organization_id=org.id, link_id=первый.link.id)
     assert cards.files(db, organization_id=org.id, card_id=card_id) == []
     # Из хранилища файл не удаляется: тот же файл может висеть на соседнем лоте.
     assert db.get(StoredFile, файл.id) is not None
@@ -823,3 +835,273 @@ def test_fail_vernut_v_rabotu_mozhno_bez_otchyota(
     )
 
     assert снова.state is TaskState.OPEN
+
+
+def test_fail_ubrannaya_papka_ne_unosit_fayly(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Папку убирают, файлы остаются.
+
+    Снабжение складывает в папку переписку с китайским поставщиком: снимки
+    экрана из WeChat, договор, счёт. Папка — способ разложить, а не второе
+    хранилище, и её удаление вместе с содержимым однажды унесло бы
+    единственный экземпляр договора. Файлы возвращаются в корень, и сколько
+    их вернулось — говорится числом.
+    """
+    from platform_api.db.models import StoredFile
+
+    card_id = _завести(db, org, кто)
+    папка = cards.make_folder(
+        db, organization_id=org.id, card_id=card_id, name="Поставщик Шэньчжэнь", by=кто
+    )
+    файл = StoredFile(
+        organization_id=org.id,
+        original_name="договор.pdf",
+        sha256="b" * 64,
+        size_bytes=2048,
+    )
+    db.add(файл)
+    db.flush()
+    cards.attach(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        file_id=файл.id,
+        added_by=кто,
+        folder_id=папка.id,
+    )
+
+    assert [
+        (item.name, item.files)
+        for item in cards.folders(db, organization_id=org.id, card_id=card_id)
+    ] == [("Поставщик Шэньчжэнь", 1)]
+
+    вернулось = cards.drop_folder(db, organization_id=org.id, folder_id=папка.id)
+
+    assert вернулось == 1
+    assert cards.folders(db, organization_id=org.id, card_id=card_id) == []
+    остались = cards.files(db, organization_id=org.id, card_id=card_id)
+    assert [item.name for item in остались] == ["договор.pdf"]
+    assert остались[0].folder_id == ""
+
+
+def test_fail_papka_s_tem_zhe_imenem_ne_zavoditsya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Две «Переписки» в одном лоте — это две папки, в которые кладут наугад."""
+    card_id = _завести(db, org, кто)
+    cards.make_folder(db, organization_id=org.id, card_id=card_id, name="Переписка", by=кто)
+
+    with pytest.raises(SpokenError):
+        cards.make_folder(db, organization_id=org.id, card_id=card_id, name=" Переписка ", by=кто)
+
+
+def test_fail_progon_dvigaet_lot_tolko_vperyod(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Досчитавшийся разбор не откатывает лот назад.
+
+    Разбор спецификации идёт минутами, и за это время менеджер успевает
+    отправить лот на согласование. Прогон, выставляющий «На разборе» по факту
+    своего завершения, стёр бы этот перевод — человек увидел бы лот там, откуда
+    он его уже убрал, и подписи собирал бы заново.
+    """
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+
+    assert cards.advance(db, card=card, to=LotStatus.ANALYSIS, why="разбор собран") is True
+    assert card.status is LotStatus.ANALYSIS
+
+    card.status = LotStatus.APPROVAL
+    assert cards.advance(db, card=card, to=LotStatus.ANALYSIS, why="разбор собран") is False
+    assert card.status is LotStatus.APPROVAL
+
+
+def test_fail_soshedshiy_s_distantsii_progonom_ne_dvigaetsya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """«Не участвуем» — решение человека, и фоновая задача его не пересматривает."""
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+    card.status = LotStatus.SKIPPED
+
+    assert cards.advance(db, card=card, to=LotStatus.DISCUSSION, why="замечание готово") is False
+    assert card.status is LotStatus.SKIPPED
+
+
+def test_fail_tot_zhe_fayl_v_druguyu_papku_pereezzhaet_i_govorit_ob_etom(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Повторная загрузка того же содержимого в другую папку переносит файл.
+
+    Переносит, а не заводит вторую запись: в папке «Скрины» и в папке «ТС»
+    лежал бы один и тот же документ двумя строками, и человек, убравший одну,
+    считал бы убранными обе.
+
+    Но молчать о переносе нельзя. Файл исчезает оттуда, где лежал, и на экране
+    это выглядит пропажей — тем более что сравнивается содержимое, а не имя:
+    два разных документа, названных одинаково, остались бы двумя.
+    """
+    from platform_api.db.models import StoredFile
+
+    card_id = _завести(db, org, кто)
+    скрины = cards.make_folder(db, organization_id=org.id, card_id=card_id, name="Скрины", by=кто)
+    тс = cards.make_folder(db, organization_id=org.id, card_id=card_id, name="ТС", by=кто)
+    файл = StoredFile(
+        organization_id=org.id,
+        original_name="Resume.pdf",
+        sha256="c" * 64,
+        size_bytes=160_000,
+    )
+    db.add(файл)
+    db.flush()
+
+    cards.attach(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        file_id=файл.id,
+        added_by=кто,
+        folder_id=скрины.id,
+    )
+    снова = cards.attach(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        file_id=файл.id,
+        added_by=кто,
+        folder_id=тс.id,
+    )
+
+    assert снова.known is True
+    assert снова.moved is True
+    assert снова.moved_from == "Скрины"
+    приложено = cards.files(db, organization_id=org.id, card_id=card_id)
+    assert len(приложено) == 1
+    assert приложено[0].folder_id == str(тс.id)
+
+
+def test_fail_odinakovye_imena_s_raznym_soderzhimym_ostayutsya_dvumya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """«Тот же файл» — это то же содержимое, а не то же имя.
+
+    Счёт от двух поставщиков оба зовутся `invoice.pdf`, и схлопнуть их по имени
+    значит потерять один: в заявку уйдёт цена не того. Байты разные — записи
+    разные, даже если в списке они выглядят близнецами.
+    """
+    from platform_api.db.models import StoredFile
+
+    card_id = _завести(db, org, кто)
+    первый = StoredFile(
+        organization_id=org.id, original_name="invoice.pdf", sha256="d" * 64, size_bytes=1000
+    )
+    второй = StoredFile(
+        organization_id=org.id, original_name="invoice.pdf", sha256="e" * 64, size_bytes=2000
+    )
+    db.add_all([первый, второй])
+    db.flush()
+
+    cards.attach(db, organization_id=org.id, card_id=card_id, file_id=первый.id, added_by=кто)
+    ещё = cards.attach(db, organization_id=org.id, card_id=card_id, file_id=второй.id, added_by=кто)
+
+    assert ещё.known is False
+    приложено = cards.files(db, organization_id=org.id, card_id=card_id)
+    assert [item.name for item in приложено] == ["invoice.pdf", "invoice.pdf"]
+    assert len({item.sha256 for item in приложено}) == 2
+
+
+def test_fail_zagruzka_govorit_pro_perenos(db: DbSession, app_client: TestClient) -> None:
+    """Ответ на загрузку рассказывает, что файл уже был и переехал.
+
+    Через HTTP, а не только в службе: молчащий ответ и есть та поломка, из-за
+    которой человек считает файл пропавшим — он клал его в «ТС», а исчез он из
+    «Скринов». Сравнение идёт по содержимому, и сказать об этом должен сервер:
+    браузер байтов чужой загрузки не видел.
+    """
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.MANAGER)
+    card = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="лот-с-папками",
+        snapshot=cards.Snapshot(code="GZ000777", title="Компьютеры"),
+    )
+    db.commit()
+
+    скрины = app_client.post(f"/api/cards/{card.id}/folders", json={"name": "Скрины"})
+    assert скрины.status_code == 201, скрины.text
+    тс = app_client.post(f"/api/cards/{card.id}/folders", json={"name": "ТС"})
+    assert тс.status_code == 201, тс.text
+
+    содержимое = ("%PDF-1.4 то же самое содержимое " * 20).encode()
+    первый = app_client.post(
+        f"/api/cards/{card.id}/files",
+        files={"file": ("Resume.pdf", содержимое, "application/pdf")},
+        data={"folder_id": скрины.json()["id"]},
+    )
+    assert первый.status_code == 201, первый.text
+    # Обычная загрузка проходит молча: файл виден в списке, и подпись под ним
+    # ничего не добавляет.
+    assert первый.json()["notice"] == ""
+
+    второй = app_client.post(
+        f"/api/cards/{card.id}/files",
+        files={"file": ("Resume_копия.pdf", содержимое, "application/pdf")},
+        data={"folder_id": тс.json()["id"]},
+    )
+    assert второй.status_code == 201, второй.text
+    сказано = второй.json()["notice"]
+    assert "Resume.pdf" in сказано
+    assert "Скрины" in сказано
+    assert "побайтно" in сказано
+
+    файлы = app_client.get(f"/api/cards/{card.id}/files").json()
+    assert len(файлы) == 1
+    assert файлы[0]["folder_id"] == тс.json()["id"]
+    # В списке рассказывать не о чем — поля там нет вовсе.
+    assert "notice" not in файлы[0]
+
+
+def test_fail_knopka_prilozhit_ne_vynimaet_fayl_iz_papki(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Загрузка без выбранной папки не трогает того, кто уже лежит в папке.
+
+    «Приложить» в шапке вкладки говорит «к лоту», а не «в общий список».
+    Вынимать ею файлы из папок значило бы разбирать раскладку случайным
+    нажатием: человек грузит счёт второй раз, не помня, что он уже в папке
+    поставщика, — и находит его вывалившимся в общий список.
+
+    Промолчать при этом тоже нельзя: в том месте, куда человек смотрит, файл
+    не появится, и это выглядит как несработавшая загрузка. Где он лежит,
+    сказано в ответе.
+    """
+    from platform_api.db.models import StoredFile
+
+    card_id = _завести(db, org, кто)
+    папка = cards.make_folder(db, organization_id=org.id, card_id=card_id, name="Счета", by=кто)
+    файл = StoredFile(
+        organization_id=org.id, original_name="счёт.pdf", sha256="f" * 64, size_bytes=100
+    )
+    db.add(файл)
+    db.flush()
+    cards.attach(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        file_id=файл.id,
+        added_by=кто,
+        folder_id=папка.id,
+    )
+
+    снова = cards.attach(
+        db, organization_id=org.id, card_id=card_id, file_id=файл.id, added_by=кто, folder_id=None
+    )
+
+    assert снова.moved is False
+    assert снова.folder == "Счета"
+    приложено = cards.files(db, organization_id=org.id, card_id=card_id)
+    assert [item.folder_id for item in приложено] == [str(папка.id)]

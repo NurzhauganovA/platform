@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session as DbSession
 from platform_api.config import Settings
 from platform_api.db.base import utcnow
 from platform_api.db.models import LotCard, SpecSheet
+from platform_api.errors import SpokenError
 from platform_api.logging import get_logger
 from platform_api.modules import sheeting
 
@@ -39,6 +40,7 @@ SUBJECT = "subject"
 DEMAND = "demand"
 BRIEF = "brief"
 PRICE = "price"
+COST = "cost"
 OURS = "ours"
 
 BY_MODEL = "model"
@@ -47,7 +49,7 @@ BY_MODEL = "model"
 BY_HAND = "hand"
 """Столбец завёл человек. Пересборка его не трогает."""
 
-WIDTH = {SUBJECT: 100, DEMAND: 340, BRIEF: 170, PRICE: 100, OURS: 240}
+WIDTH = {SUBJECT: 100, DEMAND: 340, BRIEF: 170, PRICE: 100, COST: 100, OURS: 240}
 """Ширина в точках. Предмет — одно слово, выжимка — числа столбиком, цена —
 число; широкими им быть нечем, а занятое ими место уводит вправо то, что
 заполняют руками. Требование заказчика остаётся самым широким: там абзац."""
@@ -77,6 +79,8 @@ class Table:
 
     columns: tuple[Column, ...]
     rows: tuple[Row, ...]
+    variant: str = "A"
+    """Какой это вариант разбора."""
     source_name: str = ""
     model: str = ""
     trouble: str = ""
@@ -103,16 +107,27 @@ def base_columns() -> tuple[Column, ...]:
 
 
 def hand_columns() -> tuple[Column, ...]:
-    """Два столбца, которые заводить руками пришлось бы в каждом лоте.
+    """Три столбца, которые заводить руками пришлось бы в каждом лоте.
 
-    Цена и наша техническая спецификация — то, ради чего разбор и затевается:
+    Цена, себестоимость и наш товар — то, ради чего разбор и затевается:
     строка требования нужна, чтобы напротив неё встало наше предложение с
     ценой. Столбцы человеческие, поэтому пересборка их не трогает, а убрать
     их с экрана по-прежнему можно крестиком.
+
+    Себестоимость стоит вплотную к цене намеренно: заработок считается из
+    разницы, и держать её через два столбца значит заставить человека возить
+    глазами по строке. Заполняет её снабжение — своей закупочной ценой, — и
+    поэтому это столбец, а не расчёт: цены поставщиков платформа по
+    госзакупкам пока не знает, а придуманная ею себестоимость хуже пустой.
+
+    Столбец назван «Наш товар», а не «Наша ТС»: сюда пишут, что именно
+    предлагаем — марку и модель, — а «ТС» читалось как «ещё одна техническая
+    спецификация», и половина заполняла его пересказом требования.
     """
     return (
         Column(key=PRICE, title="Цена", width=WIDTH[PRICE]),
-        Column(key=OURS, title="Наша ТС", width=WIDTH[OURS]),
+        Column(key=COST, title="Себес", width=WIDTH[COST]),
+        Column(key=OURS, title="Наш товар", width=WIDTH[OURS]),
     )
 
 
@@ -121,30 +136,126 @@ def default_columns() -> tuple[Column, ...]:
     return (*base_columns(), *hand_columns())
 
 
-def load(db: DbSession, card: LotCard) -> Table:
+FIRST = "A"
+"""Вариант, который собирает модель. Есть всегда."""
+
+MAX_VARIANTS = 6
+"""Сколько вариантов держать на лоте.
+
+Шесть букв — это шесть способов собрать один и тот же компьютер; дальше
+сравнение перестаёт помещаться в голову, а выбирать всё равно приходится
+один. Предел нужен и затем, что каждый вариант — это своя запись и свой
+разбор, который кто-то может запустить.
+"""
+
+
+def variants(db: DbSession, card: LotCard) -> list[str]:
+    """Какие варианты у лота есть. «A» — всегда, даже если таблицы ещё нет."""
+    letters = list(
+        db.scalars(
+            select(SpecSheet.variant)
+            .where(SpecSheet.module == card.module, SpecSheet.row_id == card.row_id)
+            .order_by(SpecSheet.variant)
+        )
+    )
+    return letters or [FIRST]
+
+
+def branch(db: DbSession, card: LotCard) -> str:
+    """Заводит следующий вариант от «A». Возвращает его букву.
+
+    Копируются столбцы целиком и ячейки столбцов модели — предмет, требование
+    заказчика и выжимка. Требования у вариантов одни и те же: заказчик просит
+    один и тот же товар, а различаются наши ответы — цена, себестоимость и что
+    именно предлагаем. Переписывать требования руками во втором варианте
+    значит однажды переписать их с ошибкой и подать заявку по придуманному.
+    """
+    letters = variants(db, card)
+    if len(letters) >= MAX_VARIANTS:
+        raise SpokenError(f"Вариантов уже {len(letters)}: больше не заводим")
+
+    taken = set(letters)
+    letter = next(
+        (chr(code) for code in range(ord("A"), ord("A") + MAX_VARIANTS) if chr(code) not in taken),
+        "",
+    )
+    if not letter:
+        raise SpokenError("Свободных букв не осталось")
+
+    first = _find(db, card, FIRST)
+    columns = _columns(first) if first is not None else default_columns()
+    rows = _out(first).rows if first is not None else ()
+    kept = {column.key for column in columns if column.filled_by == BY_MODEL}
+
+    made = SpecSheet(
+        organization_id=card.organization_id,
+        module=card.module,
+        row_id=card.row_id,
+        variant=letter,
+        columns=[_as_json(column) for column in columns],
+        rows=[
+            {
+                "key": row.key,
+                "cells": {key: value for key, value in row.cells.items() if key in kept},
+            }
+            for row in rows
+        ],
+        source_name=first.source_name if first is not None else "",
+    )
+    db.add(made)
+    db.flush()
+    logger.info("sheet.branched", code=card.code, variant=letter, rows=len(made.rows))
+    return letter
+
+
+def drop(db: DbSession, card: LotCard, variant: str) -> None:
+    """Убирает вариант. Последний не убирается: лот без разбора — пустая вкладка."""
+    letters = variants(db, card)
+    if len(letters) <= 1:
+        raise SpokenError("Это единственный вариант — удалять нечего")
+
+    found = _find(db, card, variant)
+    if found is None:
+        raise SpokenError(f"Варианта «{variant}» у этого лота нет")
+    db.delete(found)
+    db.flush()
+    logger.info("sheet.dropped", code=card.code, variant=variant)
+
+
+def load(db: DbSession, card: LotCard, variant: str = FIRST) -> Table:
     """Отдаёт таблицу лота. Нет — пустую с заготовкой столбцов.
 
     Пустая, а не отсутствующая: экран должен показать заготовку и кнопку
     «Разобрать», а не пустоту, по которой не понять, потеряно что-то или ещё
     не начато.
     """
-    found = _find(db, card)
+    found = _find(db, card, variant)
     if found is None:
-        return Table(columns=default_columns(), rows=())
+        return Table(columns=default_columns(), rows=(), variant=variant)
     return _out(found)
 
 
-def save(db: DbSession, card: LotCard, *, columns: list[Column], rows: list[Row]) -> Table:
+def save(
+    db: DbSession,
+    card: LotCard,
+    *,
+    columns: list[Column],
+    rows: list[Row],
+    variant: str = FIRST,
+) -> Table:
     """Сохраняет правки человека целиком.
 
     Целиком, а не по ячейке: таблица небольшая, а раздельная запись означала
     бы гонку между «переименовал столбец» и «дописал строку», сделанными
     одновременно двумя людьми в одном лоте.
     """
-    sheet = _find(db, card)
+    sheet = _find(db, card, variant)
     if sheet is None:
         sheet = SpecSheet(
-            organization_id=card.organization_id, module=card.module, row_id=card.row_id
+            organization_id=card.organization_id,
+            module=card.module,
+            row_id=card.row_id,
+            variant=variant,
         )
         db.add(sheet)
     sheet.columns = [_as_json(column) for column in columns]
@@ -161,6 +272,7 @@ def build(
     spec_text: str,
     spec_name: str,
     user_id: uuid.UUID | None = None,
+    variant: str = FIRST,
 ) -> Table:
     """Раскладывает спецификацию моделью.
 
@@ -172,10 +284,13 @@ def build(
     Спецификации нет — это не отказ, а ответ: у большинства лотов портала её
     действительно нет, и сказать об этом надо словами, а не пустой таблицей.
     """
-    sheet = _find(db, card)
+    sheet = _find(db, card, variant)
     if sheet is None:
         sheet = SpecSheet(
-            organization_id=card.organization_id, module=card.module, row_id=card.row_id
+            organization_id=card.organization_id,
+            module=card.module,
+            row_id=card.row_id,
+            variant=variant,
         )
         db.add(sheet)
 
@@ -243,9 +358,15 @@ def build(
     return _out(sheet)
 
 
-def _find(db: DbSession, card: LotCard) -> SpecSheet | None:
+def _find(db: DbSession, card: LotCard, variant: str = FIRST) -> SpecSheet | None:
+    """Запись варианта. Вариант обязателен: на строке их теперь несколько, и
+    поиск без него падал бы `MultipleResultsFound` на первом же заведённом."""
     return db.execute(
-        select(SpecSheet).where(SpecSheet.module == card.module, SpecSheet.row_id == card.row_id)
+        select(SpecSheet).where(
+            SpecSheet.module == card.module,
+            SpecSheet.row_id == card.row_id,
+            SpecSheet.variant == variant,
+        )
     ).scalar_one_or_none()
 
 
@@ -280,6 +401,7 @@ def _out(sheet: SpecSheet) -> Table:
     return Table(
         columns=columns,
         rows=rows,
+        variant=sheet.variant,
         source_name=sheet.source_name,
         model=sheet.model,
         trouble=sheet.trouble,

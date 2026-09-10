@@ -324,7 +324,7 @@ def _sheet_job(
         created_by_id=user_id,
         module="goszakup",
         kind="sheet",
-        params={"card_id": str(card.id)},
+        params={"card_id": str(card.id), "variant": "A"},
         total=1,
     )
     db.flush()

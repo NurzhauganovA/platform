@@ -1,20 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ClaudeCodeEditorTabs">
-    <option name="activeSessionId" value="17b69a9b-0ffd-4219-9818-4a5ae2b24d87" />
+    <option name="activeSessionId" value="dc6d66d8-bec0-401d-a3e3-d0640db89801" />
     <option name="openSessionIds">
       <list>
-        <option value="17b69a9b-0ffd-4219-9818-4a5ae2b24d87" />
+        <option value="92906095-9dc6-479c-a50d-03145b7f4566" />
+        <option value="dc6d66d8-bec0-401d-a3e3-d0640db89801" />
       </list>
     </option>
     <option name="sessionPaths">
       <map>
-        <entry key="17b69a9b-0ffd-4219-9818-4a5ae2b24d87" value="/sessions/ab4be8f4-803c-4dd6-a994-80fff5d6b8be" />
+        <entry key="92906095-9dc6-479c-a50d-03145b7f4566" value="/sessions/e161abac-4659-4979-95bf-de2f53fb5041" />
+        <entry key="dc6d66d8-bec0-401d-a3e3-d0640db89801" value="/sessions/e161abac-4659-4979-95bf-de2f53fb5041" />
       </map>
     </option>
     <option name="sessionTitles">
       <map>
-        <entry key="17b69a9b-0ffd-4219-9818-4a5ae2b24d87" value="$USER_HOME$/Downloads/Приложение 1. Планировка жил" />
+        <entry key="92906095-9dc6-479c-a50d-03145b7f4566" value="Сейчас есть файл demo.jsx, это файл которую я сдел" />
+        <entry key="dc6d66d8-bec0-401d-a3e3-d0640db89801" value="Сейчас есть файл demo.jsx, это файл которую я сдел" />
       </map>
     </option>
   </component>

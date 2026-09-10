@@ -167,11 +167,13 @@ export function Summary({
  * запрос раз в секунду — это три с половиной тысячи обращений за час
  * открытой вкладки ради числа, которое можно вычесть на месте.
  *
- * Срочность — лестницей, а не одним порогом. Раньше сутки красили цифры в
- * красный и на этом всё: «осталось 23 часа» и «осталось 40 минут» выглядели
- * одинаково, а это разные дни работы. Теперь у каждой ступени своя плашка и
- * своё слово рядом с цифрами — слово, потому что цвет в одиночку при
- * дальтонизме не отличает оранжевое от красного.
+ * Срочность — тремя ступенями: сутки, полсмены и дальше. Красится сам отсчёт,
+ * а не полоса под ним: полосу убрали — она показывала долю пройденного от
+ * взятия в работу, а решают по остатку.
+ *
+ * Ступеней три, а не пять: цвет в одиночку при дальтонизме не различает
+ * оранжевое от красного, и пять оттенков одного значили ровно то же, что три.
+ * Сами цифры при этом тикают, и «00:40:12» читается однозначно.
  */
 function Deadline({ card }: { card: Card }) {
   const [now, setNow] = useState(() => Date.now());
@@ -186,15 +188,6 @@ function Deadline({ card }: { card: Card }) {
   const end = new Date(card.deadline).getTime();
   const left = Math.max(0, end - now);
   const step = urgency(left);
-
-  // Доля пройденного от взятия в работу до окончания приёма. Полоса отвечает
-  // на «сколько уже съели», чего одни цифры не говорят: «осталось 4 часа» у
-  // недельного приёма и у суточного — разное положение дел.
-  const started = card.started_at ? new Date(card.started_at).getTime() : 0;
-  const span = started && end > started ? end - started : 0;
-  const gone = span
-    ? Math.min(100, Math.max(2, ((now - started) / span) * 100))
-    : 0;
 
   return (
     <>
@@ -214,23 +207,24 @@ function Deadline({ card }: { card: Card }) {
         </span>
       </span>
 
-      {/* Обе даты одной строкой и полоса под ними. Подписи собирают на два часа
-          раньше приёма, и держать это число в другом месте экрана значит
-          заставить человека складывать в уме на срочной работе. */}
+      {/* Обе даты одной строкой. Подписи собирают на два часа раньше приёма, и
+          держать это число в другом месте экрана значит заставить человека
+          складывать в уме на срочной работе.
+
+          Полосы пройденного под ними больше нет. Она показывала долю от
+          взятия в работу до окончания приёма — величину, которой никто не
+          пользуется: решают по остатку слева, а он и так набран крупно. Зато
+          сама полоса тянулась во всю ширину и притягивала взгляд к тому, что
+          ничего не решает; освободившееся место отдано датам, набранным
+          крупнее — их читают вторым взглядом, но читают. */}
       <span className="min-w-[120px] flex-1">
-        <span className="block truncate text-[11.5px] text-ink-muted tabular-nums">
-          приём до {stamp(card.deadline)}
-          {card.approve_by && ` · подписи до ${stamp(card.approve_by)}`}
-        </span>
-        <span
-          aria-hidden
-          className="mt-2 block h-[3px] w-full overflow-hidden rounded-sm bg-hairline"
-        >
-          {span > 0 && (
-            <span
-              className={cx("block h-full rounded-sm", step.bar)}
-              style={{ width: `${gone}%` }}
-            />
+        <span className="block text-[13.5px] leading-snug text-ink-secondary tabular-nums">
+          приём до <b className="font-semibold text-ink">{stamp(card.deadline)}</b>
+          {card.approve_by && (
+            <>
+              {" · подписи до "}
+              <b className="font-semibold text-ink">{stamp(card.approve_by)}</b>
+            </>
           )}
         </span>
       </span>
@@ -264,14 +258,10 @@ const HOUR = 60 * 60 * 1000;
  * должна быть видна боковым зрением, потому что смотрят в этот момент не на
  * неё, а на спецификацию.
  */
-function urgency(left: number): { text: string; bar: string } {
-  if (left === 0) return { text: "text-critical", bar: "bg-critical" };
-  if (left < HOUR) return { text: "text-critical", bar: "bg-critical" };
-  if (left < 3 * HOUR) return { text: "text-critical", bar: "bg-critical" };
-  if (left < 6 * HOUR) return { text: "text-critical", bar: "bg-critical" };
-  if (left < 12 * HOUR) return { text: "text-serious", bar: "bg-serious" };
-  if (left < 24 * HOUR) return { text: "text-warning", bar: "bg-warning" };
-  return { text: "text-ink", bar: "bg-ink" };
+function urgency(left: number): { text: string } {
+    if (left < 12 * HOUR) return { text: "text-critical" };
+    if (left < 24 * HOUR) return { text: "text-warning" };
+    return { text: "text-ink" };
 }
 
 /**

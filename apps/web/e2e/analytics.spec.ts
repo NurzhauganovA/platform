@@ -17,7 +17,7 @@ async function open(page: Page, slug: string, email = ANALYST) {
   await page.getByRole("textbox", { name: "Почта" }).fill(email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("button", { name: "Войти" }).click();
-  await page.waitForURL("**/skstore/bargains");
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
   await page.goto(`/${slug}/analytics`);
   // Считается из того же ответа, что рисует таблицу: на холодном кэше сервер
   // собирает его несколько секунд.

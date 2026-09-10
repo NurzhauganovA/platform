@@ -19,10 +19,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, BinaryIO
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from platform_api.auth.dependencies import CurrentUser, Db, require_roles
 from platform_api.config import Settings
@@ -242,6 +252,25 @@ class FileOut(BaseModel):
     note: str
     added_by: str
     added_at: str
+    folder_id: str = ""
+    """В какой папке лежит. Пусто — в корне."""
+
+
+class UploadedOut(FileOut):
+    """Ответ на загрузку: тот же файл плюс то, что стоит сказать про неё.
+
+    Отдельной схемой, а не полем в `FileOut`: список файлов приходит на каждое
+    открытие вкладки, и рассказывать в нём про загрузку нечего — поле стояло бы
+    пустым у каждой строки. По этим схемам генерируется клиент, и необязательное
+    поле, которое никогда не заполнено, читается как «иногда бывает» — его
+    начинают проверять там, где проверять нечего.
+    """
+
+    notice: str = ""
+    """Что произошло с этой загрузкой. Пусто — говорить нечего.
+
+    Полем ответа, а не догадкой браузера: файлы сравниваются по содержимому, и
+    знает об этом только сервер."""
 
 
 class PersonOut(BaseModel):
@@ -529,6 +558,105 @@ def _task_state(value: str) -> TaskState:
         ) from exc
 
 
+class FolderOut(BaseModel):
+    """Папка лота."""
+
+    id: str
+    name: str
+    files: int
+
+
+class FolderIn(BaseModel):
+    """Как назвать папку."""
+
+    name: str
+
+
+class MoveFileIn(BaseModel):
+    """Куда переложить файл. Пустая папка — в корень."""
+
+    folder_id: str = ""
+
+
+@router.get("/{card_id}/folders", summary="Папки лота")
+def get_folders(
+    card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None
+) -> list[FolderOut]:
+    """Папки с числом файлов в каждой.
+
+    Отдельным списком, а не полем у файлов: пустая папка существует сама по
+    себе — её заводят до того, как соберут счета, — и по одним файлам её не
+    восстановить.
+    """
+    try:
+        found = cards.folders(db, organization_id=identity.organization.id, card_id=card_id)
+    except SpokenError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return [FolderOut(**asdict(item)) for item in found]
+
+
+@router.post("/{card_id}/folders", summary="Завести папку", status_code=201)
+def post_folder(
+    card_id: uuid.UUID,
+    body: FolderIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Guard = None,
+) -> FolderOut:
+    made = _act(
+        lambda: cards.make_folder(
+            db,
+            organization_id=identity.organization.id,
+            card_id=card_id,
+            name=body.name,
+            by=identity.user.id,
+        )
+    )
+    db.commit()
+    return FolderOut(id=str(made.id), name=made.name, files=0)
+
+
+@router.delete("/folders/{folder_id}", summary="Убрать папку")
+def delete_folder(
+    folder_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None
+) -> dict[str, int]:
+    """Убирает папку, а файлы из неё возвращает в корень.
+
+    Возвращает, сколько вернулось: человек должен убедиться, что счета
+    поставщика не ушли вместе с папкой, — достать их обратно можно только по
+    хэшу, которого никто не помнит.
+    """
+    returned = _act(
+        lambda: cards.drop_folder(db, organization_id=identity.organization.id, folder_id=folder_id)
+    )
+    db.commit()
+    return {"вернулось_в_корень": returned}
+
+
+@router.post("/files/{link_id}/folder", summary="Переложить файл")
+def post_file_folder(
+    link_id: uuid.UUID,
+    body: MoveFileIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Guard = None,
+) -> FileOut:
+    moved = _act(
+        lambda: cards.move_file(
+            db,
+            organization_id=identity.organization.id,
+            link_id=link_id,
+            folder_id=uuid.UUID(body.folder_id) if body.folder_id else None,
+        )
+    )
+    db.commit()
+    found = cards.files(db, organization_id=identity.organization.id, card_id=moved.card_id)
+    one = next((item for item in found if item.id == str(moved.id)), None)
+    if one is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
+    return FileOut(**asdict(one))
+
+
 @router.get("/{card_id}/files", summary="Файлы лота")
 def get_files(
     card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None
@@ -547,8 +675,9 @@ async def post_file(
     db: Db,
     request: Request,
     file: Annotated[UploadFile, File()],
+    folder_id: Annotated[str, Form()] = "",
     _guard: Guard = None,
-) -> FileOut:
+) -> UploadedOut:
     """Кладёт файл в хранилище и привязывает к лоту.
 
     Хэш считается здесь по ходу записи, а не приходит от браузера: файл
@@ -592,13 +721,14 @@ async def post_file(
         db.add(stored)
         db.flush()
 
-    _act(
+    done = _act(
         lambda: cards.attach(
             db,
             organization_id=identity.organization.id,
             card_id=card_id,
             file_id=stored.id,
             added_by=identity.user.id,
+            folder_id=uuid.UUID(folder_id) if folder_id else None,
         )
     )
     db.commit()
@@ -607,7 +737,33 @@ async def post_file(
     one = next((item for item in found if item.sha256 == saved.sha256), None)
     if one is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл не найден")
-    return FileOut(**asdict(one))
+    return UploadedOut(**asdict(one), notice=_upload_notice(done, sent=file.filename or ""))
+
+
+def _upload_notice(done: cards.Attached, *, sent: str) -> str:
+    """Что сказать человеку про только что загруженный файл.
+
+    Говорится только про неочевидное. Обычная загрузка проходит молча: файл
+    виден в списке, и подпись «файл загружен» под ним ничего не добавляет.
+
+    Сравнивается содержимое, а не имя, и об этом сказано прямо. Разница
+    существенная: `Resume.pdf`, положенный в две папки, — один документ, и
+    убрать его из первой правильно; два разных документа, названных
+    одинаково, останутся двумя, и ни один не пропадёт.
+    """
+    if not done.known:
+        return ""
+    said = f"«{done.stored_name}» уже был приложен к лоту — содержимое совпадает побайтно"
+    if sent.strip() and sent.strip() != done.stored_name:
+        said += f", хотя загружали его под именем «{sent.strip()}»"
+    if done.moved:
+        came = f"«{done.moved_from}»" if done.moved_from else "общего списка"
+        return f"{said}. Перенесли из {came}, второй записи не завели."
+    # Не переехал — значит, остался там, где лежал, и в том месте, куда сейчас
+    # смотрит человек, не появится. Сказать где — единственный способ не
+    # оставить это выглядеть незагрузившимся.
+    where = f"в папке «{done.folder}»" if done.folder else "в общем списке"
+    return f"{said}. Лежит {where} — там и остался."
 
 
 @router.get("/{card_id}/files/{sha256}", summary="Скачать файл лота")
@@ -977,6 +1133,19 @@ class SheetOut(BaseModel):
     trouble: str = ""
     built_at: str = ""
 
+    variant: str = "A"
+    """Какой это вариант разбора."""
+
+    variants: list[str] = []
+    """Какие варианты есть у лота. «A» — всегда."""
+
+    can: list[str] = []
+    """Что можно сделать с вариантами: `branch`, `drop`.
+
+    Списком с сервера, а не правилами в браузере: последний вариант удалять
+    нельзя, и второй набор этого правила однажды разошёлся бы с первым — а
+    человек нажал бы кнопку и получил отказ, уже будучи уверенным."""
+
     job_id: str = ""
     """Разбор, который идёт прямо сейчас. Пусто — не идёт.
 
@@ -988,18 +1157,37 @@ class SheetOut(BaseModel):
 
 
 @router.get("/{card_id}/sheet", summary="Разбор спецификации таблицей")
-def get_sheet(card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None) -> SheetOut:
+def get_sheet(
+    card_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    variant: Annotated[str, Query(description="Какой вариант читать")] = sheets.FIRST,
+    _guard: Guard = None,
+) -> SheetOut:
     """Отдаёт таблицу лота. Не собрана — пустая заготовка с тремя столбцами.
 
     Читать бесплатно: разбор моделью живёт в задаче и запускается кнопкой.
     Иначе открытая страница списывала бы со счёта, а F5 нажимают часто.
     """
     card = _card_row(db, identity, card_id)
-    return _sheet_out(sheets.load(db, card), running=_running_sheet(db, card))
+    return _sheet_out(
+        sheets.load(db, card, variant),
+        running=_running_sheet(db, card, variant),
+        letters=sheets.variants(db, card),
+    )
 
 
-def _running_sheet(db: Db, card: LotCard) -> uuid.UUID | None:
-    """Разбор этого лота, стоящий в очереди или идущий прямо сейчас."""
+def _running_sheet(db: Db, card: LotCard, variant: str = sheets.FIRST) -> uuid.UUID | None:
+    """Разбор этого варианта, стоящий в очереди или идущий прямо сейчас.
+
+    Именно варианта, а не лота: пересобирают обычно один из них, и признак,
+    общий на все, зажигал бы «Модель разбирает…» в соседней таблице — той, где
+    ничего не происходит. Кнопка «Разобрать» при этом гаснет, и человек ждёт
+    работы, которую никто не начинал.
+
+    У задач, поставленных до появления вариантов, поля `variant` в параметрах
+    нет вовсе; такие считаются разбором «A» — других тогда и не было.
+    """
     return (
         db.execute(
             select(Job.id)
@@ -1009,6 +1197,7 @@ def _running_sheet(db: Db, card: LotCard) -> uuid.UUID | None:
                 Job.kind == "sheet",
                 Job.status.in_((JobStatus.QUEUED, JobStatus.RUNNING)),
                 Job.params["card_id"].astext == str(card.id),
+                func.coalesce(Job.params["variant"].astext, sheets.FIRST) == variant,
             )
             .order_by(Job.created_at.desc())
         )
@@ -1019,7 +1208,12 @@ def _running_sheet(db: Db, card: LotCard) -> uuid.UUID | None:
 
 @router.put("/{card_id}/sheet", summary="Сохранить правки таблицы")
 def put_sheet(
-    card_id: uuid.UUID, body: SheetIn, identity: CurrentUser, db: Db, _guard: Guard = None
+    card_id: uuid.UUID,
+    body: SheetIn,
+    identity: CurrentUser,
+    db: Db,
+    variant: Annotated[str, Query(description="Какой вариант правим")] = sheets.FIRST,
+    _guard: Guard = None,
 ) -> SheetOut:
     """Сохраняет то, что человек изменил руками.
 
@@ -1035,9 +1229,37 @@ def put_sheet(
             for i in body.columns
         ],
         rows=[sheets.Row(key=i.key, cells=dict(i.cells)) for i in body.rows],
+        variant=variant,
     )
     db.commit()
-    return _sheet_out(table)
+    return _sheet_out(table, letters=sheets.variants(db, card))
+
+
+@router.post("/{card_id}/sheet/variants", summary="Завести вариант разбора", status_code=201)
+def post_variant(
+    card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None
+) -> SheetOut:
+    """Заводит следующий вариант от «A».
+
+    Требования заказчика в нём те же — их переписывают не мы, — а свои столбцы
+    пустые: вариант затем и нужен, чтобы предложить тот же лот иначе.
+    """
+    card = _card_row(db, identity, card_id)
+    letter = _act(lambda: sheets.branch(db, card))
+    db.commit()
+    return _sheet_out(sheets.load(db, card, letter), letters=sheets.variants(db, card))
+
+
+@router.delete("/{card_id}/sheet/variants/{variant}", summary="Убрать вариант разбора")
+def delete_variant(
+    card_id: uuid.UUID, variant: str, identity: CurrentUser, db: Db, _guard: Guard = None
+) -> SheetOut:
+    """Убирает вариант и отдаёт тот, что остался первым."""
+    card = _card_row(db, identity, card_id)
+    _act(lambda: sheets.drop(db, card, variant))
+    db.commit()
+    letters = sheets.variants(db, card)
+    return _sheet_out(sheets.load(db, card, letters[0]), letters=letters)
 
 
 @router.post("/{card_id}/sheet", summary="Разобрать спецификацию моделью", status_code=202)
@@ -1046,6 +1268,7 @@ def start_sheet(
     identity: CurrentUser,
     db: Db,
     request: Request,
+    variant: Annotated[str, Query(description="Какой вариант пересобрать")] = sheets.FIRST,
     _guard: Guard = None,
 ) -> StartedJobOut:
     """Ставит разбор спецификации в очередь.
@@ -1062,7 +1285,7 @@ def start_sheet(
         created_by_id=identity.user.id,
         module=card.module,
         kind="sheet",
-        params={"card_id": str(card_id)},
+        params={"card_id": str(card_id), "variant": variant},
         total=1,
     )
     db.commit()
@@ -1087,8 +1310,22 @@ def _card_row(db: Db, identity: CurrentUser, card_id: uuid.UUID) -> LotCard:
     return found
 
 
-def _sheet_out(table: sheets.Table, *, running: uuid.UUID | None = None) -> SheetOut:
+def _sheet_out(
+    table: sheets.Table,
+    *,
+    running: uuid.UUID | None = None,
+    letters: list[str] | None = None,
+) -> SheetOut:
+    known = letters or [table.variant]
     return SheetOut(
+        variant=table.variant,
+        variants=known,
+        can=[
+            *(["branch"] if len(known) < sheets.MAX_VARIANTS else []),
+            # Последний вариант не удаляется: лот без разбора — пустая
+            # вкладка, а завести его заново можно только прогоном модели.
+            *(["drop"] if len(known) > 1 else []),
+        ],
         job_id=str(running) if running else "",
         columns=[
             ColumnIn(key=c.key, title=c.title, width=c.width, filled_by=c.filled_by)

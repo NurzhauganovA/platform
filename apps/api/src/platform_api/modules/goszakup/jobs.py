@@ -267,6 +267,11 @@ def write_remark(ctx: JobContext, *, remark_id: str = "", **_: Any) -> dict[str,
         model=draft.model,
         trouble=trouble,
     )
+    # Замечание написано — лот в обсуждении. Раньше статус оставался «Новым»
+    # до тех пор, пока кто-нибудь не переведёт его руками, и лот с готовым
+    # текстом на планёрке считали нетронутым.
+    if draft.text:
+        _to_discussion(ctx, wanted)
     ctx.db.commit()
     ctx.advance(3, total=3, note="Готово")
 
@@ -285,6 +290,34 @@ def write_remark(ctx: JobContext, *, remark_id: str = "", **_: Any) -> dict[str,
         # проверяет, что база площадки жива к моменту записи результата.
         "module": core.__name__.rsplit(".", 2)[-2],
     }
+
+
+def _to_discussion(ctx: JobContext, remark_id: Any) -> None:
+    """Переводит лот в «Обсуждение», если он взят в работу и стоит раньше.
+
+    Карточки может не быть вовсе: замечание пишут и по лоту, который в работу
+    не брали, — из списка портала. Тогда двигать нечего, и это не ошибка.
+    """
+    from platform_api.db.models import Discussion, LotStatus
+    from platform_api.modules import cards
+
+    remark = ctx.db.get(Discussion, remark_id)
+    if remark is None:
+        return
+    card = cards.by_row(
+        ctx.db,
+        organization_id=remark.organization_id,
+        module=remark.module,
+        row_id=remark.row_id,
+    )
+    if card is None:
+        return
+    cards.advance(
+        ctx.db,
+        card=card,
+        to=LotStatus.DISCUSSION,
+        why="Модель написала замечание",
+    )
 
 
 def _subject_of(ctx: JobContext, remark_id: Any) -> Any:
@@ -329,7 +362,9 @@ def _subject_of(ctx: JobContext, remark_id: Any) -> Any:
         )
 
 
-def build_sheet(ctx: JobContext, *, card_id: str = "", **_: Any) -> dict[str, Any]:
+def build_sheet(
+    ctx: JobContext, *, card_id: str = "", variant: str = "A", **_: Any
+) -> dict[str, Any]:
     """Раскладывает техническую спецификацию лота таблицей.
 
     Текст спецификации лежит в базе площадки — его забрал обход, и второй раз
@@ -341,8 +376,8 @@ def build_sheet(ctx: JobContext, *, card_id: str = "", **_: Any) -> dict[str, An
     from sqlalchemy import select
 
     from platform_api.config import get_settings
-    from platform_api.db.models import LotCard
-    from platform_api.modules import sheets
+    from platform_api.db.models import LotCard, LotStatus
+    from platform_api.modules import cards, sheets
 
     if not card_id:
         raise ValueError("Не указано, какой лот разбирать")
@@ -363,11 +398,22 @@ def build_sheet(ctx: JobContext, *, card_id: str = "", **_: Any) -> dict[str, An
         spec_text=spec_text,
         spec_name=spec_name,
         user_id=ctx.user_id,
+        variant=variant,
     )
+    # Разбор собрался — лот на разборе. Пустая таблица статуса не двигает:
+    # спецификации не было, и разбирать было нечего.
+    if table.rows:
+        cards.advance(
+            ctx.db,
+            card=card,
+            to=LotStatus.ANALYSIS,
+            why="Модель разобрала спецификацию",
+        )
     ctx.db.commit()
 
-    logger.info("goszakup.sheet.built", card=card_id, rows=len(table.rows))
+    logger.info("goszakup.sheet.built", card=card_id, variant=variant, rows=len(table.rows))
     return {
+        "variant": variant,
         "rows": len(table.rows),
         "model": table.model,
         "source": table.source_name,

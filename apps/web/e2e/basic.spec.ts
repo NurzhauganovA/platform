@@ -8,14 +8,25 @@ async function signIn(page: import("@playwright/test").Page) {
   await page.getByRole("textbox", { name: "Почта" }).fill(EMAIL);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("button", { name: "Войти" }).click();
-  // После входа открывается первый раздел меню — закупы площадки. Тендерный
-  // отбор лежит отдельным пунктом, и переходим туда явно.
-  await page.waitForURL("**/skstore/bargains");
+  await landed(page);
+}
+
+/**
+ * Ждём, что вход состоялся, — не проверяя, куда именно он привёл.
+ *
+ * После входа открывается первый пункт меню, а меню приходит из
+ * `/api/modules`: подключили раздел «Лоты в работе» — и первым стал он.
+ * Прибитый в проверке адрес раздела ронял бы все сквозные проверки разом при
+ * каждом таком подключении, и падали бы они по сроку, то есть без внятной
+ * причины на экране.
+ */
+async function landed(page: import("@playwright/test").Page) {
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 }
 
 async function openTenders(page: import("@playwright/test").Page) {
   await signIn(page);
-  await page.getByRole("link", { name: "Отбор закупок" }).click();
+  await page.getByRole("link", { name: "Отбор тендеров" }).click();
   await page.waitForURL("**/tender/worklist");
 }
 
@@ -59,7 +70,9 @@ test("меню строится из подключённых модулей", a
   // из /api/modules. Захардкоженный пункт означал бы сломанный контракт.
   await expect(page.getByRole("link", { name: "Закупы" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Предзаказы" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Отбор закупок" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Отбор тендеров" }),
+  ).toBeVisible();
 });
 
 test("разбор закупки открывается из таблицы", async ({ page }) => {

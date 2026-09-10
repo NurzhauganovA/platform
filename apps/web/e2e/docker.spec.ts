@@ -32,7 +32,8 @@ test("платформа в контейнерах работает целико
   await page.getByRole("textbox", { name: "Почта" }).fill(ANALYST);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("button", { name: "Войти" }).click();
-  await page.waitForURL("**/skstore/bargains");
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  await page.goto("/skstore/bargains");
 
   // Заголовок таблицы, а не просто `table`: при переходе между разделами
   // старая таблица ещё в разметке, и счёт строк попал бы по ней.
@@ -66,7 +67,7 @@ test("книга Excel отдаётся файлом и не стоит дене
   await page.getByRole("textbox", { name: "Почта" }).fill(ANALYST);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("button", { name: "Войти" }).click();
-  await page.waitForURL("**/skstore/bargains");
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
 
   const started = Date.now();
   const response = await page.request.get("/api/skstore/export");

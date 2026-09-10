@@ -23,7 +23,10 @@ async function signIn(page: Page, email: string) {
   await page.getByRole("textbox", { name: "Почта" }).fill(email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("button", { name: "Войти" }).click();
-  await page.waitForURL("**/skstore/bargains");
+  // Куда приведёт вход, решает меню из `/api/modules`, а проверкам ниже нужен
+  // именно список закупов — открываем его явно.
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  await page.goto("/skstore/bargains");
 }
 
 /** Ждём именно таблицу: до ответа API её нет, и проверки молча проходили бы. */
@@ -48,7 +51,7 @@ test("все три раздела есть в меню и открываютс�
     page.getByRole("heading", { name: "Предзаказы OMarket" }),
   ).toBeVisible();
 
-  await page.getByRole("link", { name: "Отбор закупок" }).click();
+  await page.getByRole("link", { name: "Отбор тендеров" }).click();
   await expect(
     page.getByRole("heading", { name: "Отбор закупок" }),
   ).toBeVisible();

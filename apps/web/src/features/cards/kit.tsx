@@ -273,3 +273,25 @@ export function Note({
     </span>
   );
 }
+
+/**
+ * Число со словом в нужном падеже: 1 файл, 2 файла, 5 файлов.
+ *
+ * Интерфейс русский, и «1 файлов» в заголовке папки читается как недоделка —
+ * тем более на экране, который сотрудник видит по десятку раз за смену.
+ * Правило одно на весь язык, поэтому оно здесь, а не в каждом месте, где
+ * что-то считается.
+ */
+export function plural(
+  count: number,
+  one: string,
+  few: string,
+  many: string,
+): string {
+  const tail = Math.abs(count) % 100;
+  if (tail >= 11 && tail <= 14) return `${count} ${many}`;
+  const last = tail % 10;
+  if (last === 1) return `${count} ${one}`;
+  if (last >= 2 && last <= 4) return `${count} ${few}`;
+  return `${count} ${many}`;
+}

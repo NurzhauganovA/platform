@@ -36,8 +36,8 @@ import {
 } from "@/api/cards";
 import { worklists, type SpecFile, type WorklistSlug } from "@/api/worklist";
 import { ApiError } from "@/api/client";
-import { jobsApi, useJobStream, type JobRun } from "@/api/jobs";
-import { Button, Card as Panel, Progress, Spinner, cx } from "@/ui";
+import { jobsApi } from "@/api/jobs";
+import { Button, Card as Panel, Spinner, cx } from "@/ui";
 import { BarHead, BarTitle, Note } from "./kit";
 
 /** Через сколько молчания сохранять правки. */
@@ -58,7 +58,8 @@ const BRIEF = "brief";
  */
 const HINTS: Record<string, string> = {
   price: "— ₸",
-  ours: "что предлагаем",
+  cost: "закупочная, ₸",
+  ours: "марка и модель",
 };
 
 export function SpecSheet({ card }: { card: Card }) {
@@ -67,12 +68,23 @@ export function SpecSheet({ card }: { card: Card }) {
   const [trouble, setTrouble] = useState("");
   const [saved, setSaved] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
+  // Какой вариант открыт. Своим состоянием, а не адресом страницы: варианты
+  // сравнивают, переключаясь между ними по нескольку раз, и адрес, меняющийся
+  // от каждого нажатия, засоряет историю браузера.
+  const [variant, setVariant] = useState("A");
   const dirty = useRef(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["card", card.id, "sheet"],
-    queryFn: () => sheetApi.get(card.id),
+    queryKey: ["card", card.id, "sheet", variant],
+    queryFn: () => sheetApi.get(card.id, variant),
     staleTime: 30_000,
+    // Пока разбор идёт, таблица перечитывается сама. Опросом, а не потоком
+    // событий: поток отвечает на «где именно сейчас модель», а этого никто
+    // не спрашивает — спрашивают «уже готово?». Зато поток рвался, и
+    // оборванный не отличался от идущего: полоса «Ставим в очередь…» висела
+    // на экране после того, как разбор давно закончился. Здесь источник
+    // правды один — ответ сервера: есть `job_id`, значит идёт.
+    refetchInterval: (query) => (query.state.data?.job_id ? 5_000 : false),
   });
 
   // Сам файл спецификации — из сведений о строке. Ключ тот же, что у ссылки
@@ -87,21 +99,13 @@ export function SpecSheet({ card }: { card: Card }) {
   });
   const spec = facts?.spec ?? null;
 
-  // Прогон, начатый не в этой вкладке: разбор запускается сам при взятии лота
-  // в работу, а карточку открывают позже и с другой машины. Без этого человек
-  // видел бы пустую таблицу, пока модель над ней работает, — и нажал бы
-  // «Разобрать» второй раз, оплатив ту же спецификацию дважды.
+  // Идёт ли разбор — по ответу сервера, а не по памяти вкладки. Разбор
+  // запускается сам при взятии лота в работу, карточку открывают позже и с
+  // другой машины: без серверного признака человек видел бы пустую таблицу,
+  // пока модель над ней работает, и нажал бы «Разобрать» второй раз, оплатив
+  // ту же спецификацию дважды.
   const running = jobId ?? data?.job_id ?? null;
-
-  // Ход разбора живьём. Модель читает три тысячи знаков и раскладывает их по
-  // предметам — это минута с лишним, и всё это время кнопка без ответа
-  // выглядит как непрожатая: человек жмёт второй раз и платит дважды.
-  const run = useJobStream(running, () => {
-    dirty.current = false;
-    void cache.invalidateQueries({ queryKey: ["card", card.id, "sheet"] });
-  });
-  const building =
-    run === null ? running !== null : ["queued", "running"].includes(run.status);
+  const building = Boolean(data?.job_id) || jobId !== null;
 
   // Пришедшее с сервера становится черновиком только пока человек не правил:
   // иначе фоновое обновление стёрло бы наполовину набранную ячейку.
@@ -110,8 +114,15 @@ export function SpecSheet({ card }: { card: Card }) {
   }, [data]);
 
   const save = useMutation({
+    // Вариант берётся из самой таблицы, а не из состояния экрана: отложенное
+    // сохранение срабатывает через паузу, и за неё человек успевает
+    // переключиться — черновик A уехал бы в адрес B и затёр бы его целиком,
+    // вместе со скопированными требованиями заказчика.
     mutationFn: (next: Sheet) =>
-      sheetApi.save(card.id, { columns: next.columns, rows: next.rows }),
+      sheetApi.save(card.id, next.variant, {
+        columns: next.columns,
+        rows: next.rows,
+      }),
     onSuccess: () => {
       dirty.current = false;
       setSaved(true);
@@ -140,8 +151,32 @@ export function SpecSheet({ card }: { card: Card }) {
       setTrouble(error instanceof ApiError ? error.message : "Не остановилось"),
   });
 
+  const branch = useMutation({
+    mutationFn: () => sheetApi.branch(card.id),
+    onSuccess: (fresh) => {
+      setTrouble("");
+      dirty.current = false;
+      setVariant(fresh.variant);
+      void cache.invalidateQueries({ queryKey: ["card", card.id, "sheet"] });
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не завёлся"),
+  });
+
+  const dropVariant = useMutation({
+    mutationFn: (letter: string) => sheetApi.drop(card.id, letter),
+    onSuccess: (fresh) => {
+      setTrouble("");
+      dirty.current = false;
+      setVariant(fresh.variant);
+      void cache.invalidateQueries({ queryKey: ["card", card.id, "sheet"] });
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не убрался"),
+  });
+
   const build = useMutation({
-    mutationFn: () => sheetApi.build(card.id),
+    mutationFn: () => sheetApi.build(card.id, variant),
     onSuccess: (started) => {
       setTrouble("");
       setJobId(started.job_id);
@@ -191,47 +226,38 @@ export function SpecSheet({ card }: { card: Card }) {
 
   return (
     <div className="space-y-2.5">
-      {/* Полоса, пока модель работает. Без неё минута ожидания неотличима от
-          зависшей страницы — а именно в этот момент нажимают второй раз. */}
-      {building && (
-        <Panel className="px-[15px] py-3">
-          <div className="flex items-center justify-between gap-4">
-            <Spinner label={run?.note || "Ставим в очередь…"} />
-            <span className="flex items-center gap-3">
-              <span className="text-[11.5px] text-ink-muted tabular-nums">
-                {run?.percent ?? 0}%
-              </span>
-              <button
-                type="button"
-                onClick={() => stop.mutate()}
-                disabled={!running || stop.isPending}
-                title="Снять разбор: прогон отменяется, кнопка отпускается"
-                className={cx(
-                  "rounded-[6px] px-1.5 py-0.5 text-[11.5px] text-ink-muted transition",
-                  "hover:bg-critical/10 hover:text-critical",
-                  "disabled:cursor-not-allowed disabled:opacity-45",
-                )}
-              >
-                {stop.isPending ? "Останавливаем…" : "Остановить"}
-              </button>
-            </span>
-          </div>
-          <div className="mt-2.5">
-            <Progress percent={run?.percent ?? 0} />
-          </div>
-        </Panel>
-      )}
+      {/* Полосы прогресса здесь нет намеренно.
 
-      {run?.status === "failed" && (
-        <p className="rounded-[10px] border border-critical/40 bg-critical/10 px-[15px] py-2.5 text-[12.5px] text-ink">
-          ✕ Разбор не удался. {run.error}
-        </p>
-      )}
+          Она показывала проценты и «Ставим в очередь…», а отвечала на вопрос,
+          которого никто не задавал: где именно сейчас модель. Спрашивают
+          другое — готово или нет. Зато она рвалась: поток событий обрывался,
+          оборванный не отличался от идущего, и полоса висела на экране после
+          того, как разбор давно закончился, — люди по ней решали, что
+          платформа сломалась. Осталась строка в шапке таблицы: она приходит
+          от сервера вместе с самой таблицей и гаснет тогда же, когда сервер
+          перестаёт называть разбор идущим. */}
 
       {draft.trouble && (
         <p className="rounded-[10px] border border-warning/40 bg-warning/10 px-[15px] py-2.5 text-[12.5px] text-ink">
           {draft.trouble}
         </p>
+      )}
+
+      {(draft.variants.length > 1 || !empty) && (
+        <Variants
+          letters={draft.variants}
+          current={draft.variant}
+          can={draft.can}
+          busy={branch.isPending || dropVariant.isPending}
+          onPick={(letter) => {
+            // Черновик сбрасывается вместе с переключением: несохранённая
+            // правка варианта A, доехавшая до B, затёрла бы его целиком.
+            dirty.current = false;
+            setVariant(letter);
+          }}
+          onBranch={() => branch.mutate()}
+          onDrop={(letter) => dropVariant.mutate(letter)}
+        />
       )}
 
       {empty ? (
@@ -271,7 +297,7 @@ export function SpecSheet({ card }: { card: Card }) {
                 onClick={() => build.mutate()}
                 disabled={build.isPending || building}
               >
-                {note(run, build.isPending) || "Разобрать спецификацию"}
+                {note(building, build.isPending) || "Разобрать спецификацию"}
               </Button>
             )}
             <Button variant="secondary" onClick={() => addRow(draft)}>
@@ -285,10 +311,12 @@ export function SpecSheet({ card }: { card: Card }) {
             sheet={draft}
             spec={spec}
             busy={build.isPending || building}
-            note={note(run, build.isPending)}
+            note={note(building, build.isPending)}
             saving={save.isPending}
             saved={saved}
             onBuild={() => build.mutate()}
+            onStop={running ? () => stop.mutate() : undefined}
+            stopping={stop.isPending}
           />
 
           <Grid sheet={draft} onChange={change} />
@@ -312,14 +340,115 @@ export function SpecSheet({ card }: { card: Card }) {
 /**
  * Что на кнопке, пока идёт разбор.
  *
- * Словами о шаге, а не «Подождите»: модель сначала читает спецификацию, потом
- * раскладывает её, и человек по надписи видит, что работа движется. Пустая
- * строка означает «кнопка свободна».
+ * Словами о деле, а не «Подождите»: человек должен видеть, что работа
+ * началась. Шага при этом не называем — прогресс мы больше не слушаем, а
+ * называть шаг, которого не знаешь, значит врать; «Модель разбирает…»
+ * верно на всём протяжении.
  */
-function note(run: JobRun | null, queuing: boolean): string {
+function note(building: boolean, queuing: boolean): string {
   if (queuing) return "Ставим в очередь…";
-  if (!run || !["queued", "running"].includes(run.status)) return "";
-  return run.note || "Модель разбирает…";
+  return building ? "Модель разбирает…" : "";
+}
+
+/**
+ * Варианты разбора: A, B, C…
+ *
+ * Один и тот же лот собирается по-разному — на своём корпусе и на готовом
+ * системном блоке, — и у каждого способа своя цена, свой поставщик и свой
+ * срок. Пока вариант был один, второй способ считали в уме или переписывали
+ * таблицу поверх первого: сравнить два предложения потом было не с чем.
+ *
+ * Буквами, а не вкладками с названиями: название варианта («на своём
+ * корпусе») живёт в столбце «Наш товар», а сравнивают их по строкам, не по
+ * заголовкам. Что можно завести и что удалить, решает сервер — здесь только
+ * рисуется.
+ */
+function Variants({
+  letters,
+  current,
+  can,
+  busy,
+  onPick,
+  onBranch,
+  onDrop,
+}: {
+  letters: string[];
+  current: string;
+  can: string[];
+  busy: boolean;
+  onPick: (letter: string) => void;
+  onBranch: () => void;
+  onDrop: (letter: string) => void;
+}) {
+  const [asking, setAsking] = useState(false);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 px-0.5">
+      <Note className="mr-1">Вариант</Note>
+      {letters.map((letter) => (
+        <button
+          key={letter}
+          type="button"
+          onClick={() => onPick(letter)}
+          aria-pressed={letter === current}
+          className={cx(
+            "h-[26px] w-[30px] rounded-[7px] text-[12.5px] font-medium transition",
+            letter === current
+              ? "bg-ink text-surface"
+              : "border border-hairline text-ink-secondary hover:bg-plane",
+          )}
+        >
+          {letter}
+        </button>
+      ))}
+
+      {can.includes("branch") && (
+        <button
+          type="button"
+          onClick={onBranch}
+          disabled={busy}
+          title="Завести ещё вариант: требования заказчика те же, наши столбцы пустые"
+          className={cx(
+            "h-[26px] rounded-[7px] border border-dashed border-baseline px-2.5",
+            "text-[12.5px] text-ink-secondary transition hover:bg-plane disabled:opacity-45",
+          )}
+        >
+          + Вариант
+        </button>
+      )}
+
+      {can.includes("drop") &&
+        (asking ? (
+          <span className="ml-auto flex items-center gap-2">
+            <Note>Вариант «{current}» и всё, что в нём набрано?</Note>
+            <Button variant="ghost" onClick={() => setAsking(false)}>
+              Отмена
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => {
+                setAsking(false);
+                onDrop(current);
+              }}
+            >
+              Удалить
+            </Button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setAsking(true)}
+            className={cx(
+              "ml-auto rounded-[6px] px-2 py-0.5 text-[11.5px] text-ink-muted transition",
+              "hover:bg-plane hover:text-ink",
+            )}
+          >
+            Удалить вариант «{current}»
+          </button>
+        ))}
+    </div>
+  );
 }
 
 /** Полоса над таблицей: чем собрано, сколько заполнено и чем это пересобрать. */
@@ -331,6 +460,8 @@ function Head({
   saving,
   saved,
   onBuild,
+  onStop,
+  stopping,
 }: {
   sheet: Sheet;
   /** Файл, из которого разбор собирается. Пусто — площадка его не забрала. */
@@ -340,6 +471,9 @@ function Head({
   saving: boolean;
   saved: boolean;
   onBuild: () => void;
+  /** Снять идущий разбор. Пусто — снимать нечего. */
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   // Заполнено — про наши столбцы, а не про столбцы модели: те приходят
   // заполненными всегда, и считать их значит показывать «4 из 4» над таблицей,
@@ -375,6 +509,30 @@ function Head({
       )}
 
       <span className="ml-auto flex items-center gap-2.5">
+        {/* Идущий разбор — строкой здесь, а не полосой над таблицей. Полоса
+            занимала блок и висела после окончания работы; строка приходит с
+            той же таблицей и гаснет вместе с признаком сервера. */}
+        {doing && (
+          <span className="flex items-center gap-2">
+            <Spinner label={doing} />
+            {onStop && (
+              <button
+                type="button"
+                onClick={onStop}
+                disabled={stopping}
+                title="Снять разбор: прогон отменяется, кнопка отпускается"
+                className={cx(
+                  "rounded-[6px] px-1.5 py-0.5 text-[11.5px] text-ink-muted transition",
+                  "hover:bg-critical/10 hover:text-critical",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                )}
+              >
+                {stopping ? "Останавливаем…" : "Остановить"}
+              </button>
+            )}
+          </span>
+        )}
+
         {/* Состояние сохранения словом, а не значком: «сохранено» и
             «сохраняем» на одном месте, и человек не гадает, ушли ли правки. */}
         {saving && <Note>сохраняем…</Note>}
@@ -392,7 +550,7 @@ function Head({
           disabled={busy}
           title="Собрать разбор моделью заново. Ваши столбцы не пострадают"
         >
-          {doing || "Разобрать заново"}
+          Разобрать заново
         </Button>
       </span>
     </BarHead>
@@ -483,7 +641,12 @@ function Grid({
               <Header
                 key={column.key}
                 column={column}
-                canDrop={column.filled_by === "hand"}
+                // Убрать можно любой столбец, включая модельные: в варианте
+                // «B» требование заказчика бывает лишним — там сравнивают
+                // наши предложения, а не переписывают спецификацию. Пересборка
+                // моделью вернёт свои три столбца обратно, и об этом сказано в
+                // подсказке.
+                canDrop
                 onTitle={(title) => setColumn(column.key, { title })}
                 onWidth={(width) => setColumn(column.key, { width })}
                 onAdd={() => addColumn(column.key)}
@@ -517,7 +680,10 @@ function Grid({
                   onClick={() => dropRow(row.key)}
                   title="Убрать строку"
                   className={cx(
-                    "rounded px-1.5 py-0.5 text-[12px] text-ink-muted opacity-0 transition",
+                    // Виден всегда, но приглушённо. Пока крестик появлялся
+                    // только под мышью, о нём не знали: строку, добавленную по
+                    // ошибке, оставляли в таблице и писали в ней «не надо».
+                    "rounded px-1.5 py-0.5 text-[12px] text-ink-muted opacity-40 transition",
                     "group-hover:opacity-100 hover:bg-critical/10 hover:text-critical",
                     "focus-visible:opacity-100",
                   )}
@@ -586,7 +752,7 @@ function Header({
           type="button"
           onClick={onAdd}
           title="Добавить столбец справа"
-          className="rounded px-1 text-[11.5px] text-ink-muted opacity-0 transition group-hover:opacity-100 hover:bg-plane hover:text-ink"
+          className="rounded px-1 text-[11.5px] text-ink-muted opacity-40 transition group-hover:opacity-100 hover:bg-plane hover:text-ink"
         >
           +
         </button>
@@ -594,8 +760,12 @@ function Header({
           <button
             type="button"
             onClick={onDrop}
-            title="Убрать столбец"
-            className="rounded px-1 text-[11.5px] text-ink-muted opacity-0 transition group-hover:opacity-100 hover:bg-critical/10 hover:text-critical"
+            title={
+              column.filled_by === "model"
+                ? "Убрать столбец. Разбор заново вернёт его обратно"
+                : "Убрать столбец"
+            }
+            className="rounded px-1 text-[11.5px] text-ink-muted opacity-40 transition group-hover:opacity-100 hover:bg-critical/10 hover:text-critical"
           >
             ×
           </button>
@@ -751,7 +921,9 @@ function ToSupply({ card }: { card: Card }) {
             ? "Передано. Снабжение возьмёт задачу и назовёт срок."
             : "Заведём задачу отделу: найти товар, подтвердить цену и срок."}
       </Note>
-      {trouble && <span className="text-[12.5px] text-critical">{trouble}</span>}
+      {trouble && (
+        <span className="text-[12.5px] text-critical">{trouble}</span>
+      )}
       <Button
         variant="primary"
         onClick={() => ask.mutate()}

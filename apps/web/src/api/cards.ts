@@ -208,6 +208,36 @@ export type Attachment = {
   note: string;
   added_by: string;
   added_at: string;
+  /** В какой папке лежит. Пусто — в корне. */
+  folder_id: string;
+};
+
+/**
+ * Ответ на загрузку файла.
+ *
+ * Отличается от строки списка одним полем — рассказом о том, что произошло.
+ * Файлы сравниваются по содержимому, а не по имени, и повторная загрузка того
+ * же документа в другую папку переносит его, а не заводит вторую запись:
+ * человеку про это надо сказать, иначе файл выглядит пропавшим оттуда, где
+ * лежал.
+ */
+export type Uploaded = Attachment & {
+  /** Что стоит сказать про эту загрузку. Пусто — говорить нечего. */
+  notice: string;
+};
+
+/**
+ * Папка для файлов лота.
+ *
+ * Снабжение находит товар в Китае: снимки переписки в WeChat, счета,
+ * договоры на китайском. Одним списком это перестаёт быть находимым уже на
+ * десятом файле.
+ */
+export type Folder = {
+  id: string;
+  name: string;
+  /** Сколько файлов внутри. Пустая папка — не ошибка: её завели заранее. */
+  files: number;
 };
 
 export type CardFilters = {
@@ -330,11 +360,33 @@ export const cardsApi = {
   files: (cardId: string) =>
     api.get<Attachment[]>(`/api/cards/${cardId}/files`),
 
-  attach: (cardId: string, file: File) => {
+  attach: (cardId: string, file: File, folderId = "") => {
     const form = new FormData();
     form.append("file", file);
-    return api.upload<Attachment>(`/api/cards/${cardId}/files`, form);
+    // Папка уходит вместе с файлом, а не вторым запросом: пачка снимков
+    // переписки кладётся в свою папку, и промежуточное состояние «файл уже
+    // в корне, сейчас переложим» человек успевает увидеть.
+    if (folderId) form.append("folder_id", folderId);
+    return api.upload<Uploaded>(`/api/cards/${cardId}/files`, form);
   },
+
+  folders: (cardId: string) =>
+    api.get<Folder[]>(`/api/cards/${cardId}/folders`),
+
+  makeFolder: (cardId: string, name: string) =>
+    api.post<Folder>(`/api/cards/${cardId}/folders`, { name }),
+
+  /** Убирает папку. Файлы из неё возвращаются в корень, а не удаляются. */
+  dropFolder: (folderId: string) =>
+    api.delete<{ вернулось_в_корень: number }>(
+      `/api/cards/folders/${folderId}`,
+    ),
+
+  /** Перекладывает файл. Пустая папка — в корень. */
+  moveFile: (linkId: string, folderId: string) =>
+    api.post<Attachment>(`/api/cards/files/${linkId}/folder`, {
+      folder_id: folderId,
+    }),
 
   detach: (linkId: string) => api.delete<void>(`/api/cards/files/${linkId}`),
 
@@ -382,6 +434,12 @@ export type SheetRow = {
 export type Sheet = {
   columns: SheetColumn[];
   rows: SheetRow[];
+  /** Какой это вариант разбора: «A», «B», «C»… */
+  variant: string;
+  /** Какие варианты есть у лота. «A» — всегда. */
+  variants: string[];
+  /** Что можно сделать с вариантами: `branch`, `drop`. Решает сервер. */
+  can: string[];
   /** Файл, по которому собрано. По нему видно, не устарела ли таблица. */
   source_name: string;
   model: string;
@@ -397,12 +455,27 @@ export type Sheet = {
 };
 
 export const sheetApi = {
-  get: (cardId: string) => api.get<Sheet>(`/api/cards/${cardId}/sheet`),
+  // Вариант — параметром адреса, а не полем тела: по адресу совпадает ключ
+  // кэша, и таблица B не подменяет собой таблицу A в памяти вкладки.
+  get: (cardId: string, variant = "A") =>
+    api.get<Sheet>(`/api/cards/${cardId}/sheet?variant=${variant}`),
 
-  save: (cardId: string, body: { columns: SheetColumn[]; rows: SheetRow[] }) =>
-    api.put<Sheet>(`/api/cards/${cardId}/sheet`, body),
+  save: (
+    cardId: string,
+    variant: string,
+    body: { columns: SheetColumn[]; rows: SheetRow[] },
+  ) => api.put<Sheet>(`/api/cards/${cardId}/sheet?variant=${variant}`, body),
 
   /** Ставит разбор в очередь: модель стоит денег и думает минуту. */
-  build: (cardId: string) =>
-    api.post<{ job_id: string }>(`/api/cards/${cardId}/sheet`),
+  build: (cardId: string, variant = "A") =>
+    api.post<{ job_id: string }>(
+      `/api/cards/${cardId}/sheet?variant=${variant}`,
+    ),
+
+  /** Заводит следующий вариант от «A»: требования те же, свои столбцы пустые. */
+  branch: (cardId: string) =>
+    api.post<Sheet>(`/api/cards/${cardId}/sheet/variants`),
+
+  drop: (cardId: string, variant: string) =>
+    api.delete<Sheet>(`/api/cards/${cardId}/sheet/variants/${variant}`),
 };

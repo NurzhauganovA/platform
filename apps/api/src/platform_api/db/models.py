@@ -1234,6 +1234,32 @@ class LotEvent(Base, UUIDPrimaryKey, Timestamps):
     ради этого готовую строку значит сломаться на первой же правке слов."""
 
 
+class LotFolder(Base, UUIDPrimaryKey, Timestamps):
+    """Папка для файлов лота.
+
+    Снабжение находит товар в Китае: снимки переписки в WeChat, счета
+    поставщиков, договоры на китайском. Одним списком это перестаёт быть
+    находимым уже на десятом файле — а десятый появляется в тот же день, когда
+    начали переписку.
+
+    Таблицей, а не строкой в самом файле. Пустая папка должна существовать:
+    человек заводит «Счета», уходит собирать их и возвращается через час — без
+    записи папки к тому времени нет. Имя при этом лежит в одном месте, и
+    «Счета», «счета» и «Счета » не расходятся тремя разными папками.
+    """
+
+    __tablename__ = "lot_folders"
+    __table_args__ = (UniqueConstraint("card_id", "name", name="lot_folder_name"),)
+
+    card_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lot_cards.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class LotFile(Base, UUIDPrimaryKey, Timestamps):
     """Файл, приложенный к лоту руками.
 
@@ -1255,6 +1281,19 @@ class LotFile(Base, UUIDPrimaryKey, Timestamps):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     note: Mapped[str] = mapped_column(Text, default="")
+
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lot_folders.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    """В какой папке лежит. Пусто — в корне.
+
+    `SET NULL`, а не каскад: удалённая папка возвращает файлы в корень, а не
+    уносит их с собой. Уборка не должна стирать работу снабжения — счёт
+    китайского поставщика и переписку по нему, — а достать файл обратно можно
+    только по хэшу, которого никто не помнит. Запрещать удаление непустой
+    папки тоже нельзя: тогда уборка начинается с переноса десяти файлов, и
+    человек удалит вместо этого сами файлы.
+    """
 
 
 class SpecSheet(Base, UUIDPrimaryKey, Timestamps):
@@ -1278,7 +1317,7 @@ class SpecSheet(Base, UUIDPrimaryKey, Timestamps):
     """
 
     __tablename__ = "spec_sheets"
-    __table_args__ = (UniqueConstraint("module", "row_id", name="sheet_on_row"),)
+    __table_args__ = (UniqueConstraint("module", "row_id", "variant", name="sheet_on_row"),)
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"), index=True
@@ -1286,6 +1325,20 @@ class SpecSheet(Base, UUIDPrimaryKey, Timestamps):
 
     module: Mapped[str] = mapped_column(String(32))
     row_id: Mapped[str] = mapped_column(String(128))
+
+    variant: Mapped[str] = mapped_column(String(4), default="A", server_default="A")
+    """Какой это вариант разбора: «A», «B», «C»…
+
+    Вариантов бывает несколько, потому что предложить закупку можно
+    по-разному: тот же компьютер собирается на своём корпусе и на готовом
+    системном блоке, и у каждого своя цена и свой поставщик. Раньше вариант
+    хранили, переписывая ту же таблицу, — и сравнить два предложения можно
+    было только по памяти того, кто их считал.
+
+    «A» есть всегда: это тот разбор, который собрала модель. Остальные
+    заводятся от него — требования заказчика в них те же, свои столбцы
+    пустые.
+    """
 
     columns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     """Столбцы: ключ, заголовок, ширина, кем заполняется."""

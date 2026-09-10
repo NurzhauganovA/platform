@@ -209,3 +209,83 @@ def test_идущий_разбор_виден_снаружи(
     running = _running_sheet(db, лот)
     assert running is not None
     assert running.status is JobStatus.QUEUED
+
+
+# --- статус двигается сам ---------------------------------------------------
+
+
+def test_фоновая_работа_двигает_статус_вперёд(
+    db: DbSession, org: Organization, кто: uuid.UUID, лот: Any
+) -> None:
+    """Замечание написано — лот в «Обсуждении», разбор собран — «На разборе».
+
+    Человек эти переводы всё равно делал, только позже и не всегда: лот с
+    готовым разбором неделю числился новым, и на планёрке его считали
+    нетронутым.
+    """
+    from platform_api.db.models import LotStatus
+
+    assert лот.status is LotStatus.NEW
+
+    assert cards.advance(db, card=лот, to=LotStatus.DISCUSSION, why="написано") is True
+    assert лот.status is LotStatus.DISCUSSION
+
+    assert cards.advance(db, card=лот, to=LotStatus.ANALYSIS, why="разобрано") is True
+    assert лот.status is LotStatus.ANALYSIS
+
+
+def test_назад_статус_не_откатывается(
+    db: DbSession, org: Organization, кто: uuid.UUID, лот: Any
+) -> None:
+    """Разбор досчитался после того, как менеджер увёл лот дальше.
+
+    Прогон идёт минутами, и к его концу человек успевает отправить лот на
+    согласование. Откат туда, где лот был, стёр бы эту работу — и человек
+    увидел бы, что платформа отменила его решение сама.
+    """
+    from platform_api.db.models import LotStatus
+
+    cards.advance(db, card=лот, to=LotStatus.APPROVAL, why="ушёл вперёд")
+
+    assert cards.advance(db, card=лот, to=LotStatus.DISCUSSION, why="поздно") is False
+    assert лот.status is LotStatus.APPROVAL
+
+
+def test_сошедший_с_дистанции_не_двигается(
+    db: DbSession, org: Organization, кто: uuid.UUID, лот: Any
+) -> None:
+    """«Не участвуем» — это решение человека, и прогон его не пересматривает.
+
+    Лот, по которому решили не идти, продолжает дописывать замечание: задача
+    уже в очереди. Вернуть его в «Обсуждение» значит показать на доске
+    закупку, от которой отказались.
+    """
+    from platform_api.db.models import LotStatus
+
+    лот.status = LotStatus.SKIPPED
+    db.flush()
+
+    assert cards.advance(db, card=лот, to=LotStatus.ANALYSIS, why="разобрано") is False
+    assert лот.status is LotStatus.SKIPPED
+
+
+def test_перевод_прогоном_помечен_машиной(
+    db: DbSession, org: Organization, кто: uuid.UUID, лот: Any
+) -> None:
+    """Премию получает человек, а не прогон.
+
+    Лента считает действия по людям, и перевод, записанный как чей-то, добавил
+    бы работу тому, кто в этот момент ничего не делал.
+    """
+    from platform_api.db.models import LotEvent, LotStatus
+
+    cards.advance(db, card=лот, to=LotStatus.DISCUSSION, why="написано")
+
+    запись = (
+        db.execute(select(LotEvent).where(LotEvent.card_id == лот.id, LotEvent.kind == "moved"))
+        .scalars()
+        .first()
+    )
+    assert запись is not None
+    assert запись.by_machine is True
+    assert запись.actor_id is None

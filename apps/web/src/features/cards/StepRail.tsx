@@ -247,6 +247,8 @@ export function TaskCard({
   me,
   deskName,
   busy,
+  backLabel = "Назад к шагам лота",
+  lot,
   onBack,
   onTake,
   onRelease,
@@ -256,6 +258,11 @@ export function TaskCard({
   me: string;
   deskName: string;
   busy: boolean;
+  /** Куда ведёт стрелка назад. На столе отдела это не шаги лота, а список. */
+  backLabel?: string;
+  /** Из какого лота задача. В колонке лота это и так известно, а на столе
+   *  отдела задача без лота — это работа неизвестно над чем. */
+  lot?: ReactNode;
   onBack: () => void;
   onTake: () => void;
   onRelease: () => void;
@@ -273,7 +280,7 @@ export function TaskCard({
         <button
           type="button"
           onClick={onBack}
-          aria-label="Назад к шагам лота"
+          aria-label={backLabel}
           className="flex h-7 w-7 items-center justify-center rounded-[7px] text-ink-muted transition hover:bg-plane hover:text-ink"
         >
           <svg
@@ -308,6 +315,7 @@ export function TaskCard({
         <h3 className="text-[16px] leading-tight font-semibold tracking-[-0.015em] text-ink">
           {task.title}
         </h3>
+        {lot && <div className="mt-1 text-[12.5px] text-ink-muted">{lot}</div>}
         {task.body && (
           <p className="mt-2 text-[13px] leading-relaxed whitespace-pre-wrap text-ink-secondary">
             {task.body}

@@ -61,7 +61,13 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
   const cache = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [openTask, setOpenTask] = useState<string | null>(null);
-  const [openNodes, setOpenNodes] = useState<Record<string, boolean>>({});
+  // Узлы развёрнуты сразу, а свернуть их можно руками — поэтому хранится
+  // закрытое, а не открытое. Свёрнутые по умолчанию, они прятали ровно то,
+  // ради чего колонку и открывают: у лота с четырьмя задачами на экране было
+  // шесть строк с числами и ни одной задачи, и чтобы увидеть, что от тебя
+  // хотят, приходилось раскрывать каждый узел по очереди.
+  const [closedNodes, setClosedNodes] = useState<Record<string, boolean>>({});
+  const opened = (key: string) => !closedNodes[key];
   const [trouble, setTrouble] = useState("");
 
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: auth.me });
@@ -134,16 +140,13 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
   const live = tasks.filter((task) => task.state === "open");
   const closed = tasks.filter((task) => task.state === "done");
   const toggle = (key: string) =>
-    setOpenNodes((was) => ({ ...was, [key]: !was[key] }));
+    setClosedNodes((was) => ({ ...was, [key]: !was[key] }));
 
   const mayAdd = card.can.includes("task");
   const talk = card.discussion;
   const writing =
     talk?.writing === "queued" || talk?.writing === "running";
   const analysisDone = card.step > ANALYSIS_STEP;
-  const signed = card.approvals.filter(
-    (one) => one.state === "approved",
-  ).length;
 
   return (
     <>
@@ -179,7 +182,7 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
             title="Обсуждение"
             desk="discussion"
             tasks={tasks}
-            open={openNodes.discussion}
+            open={opened("discussion")}
             onToggle={() => toggle("discussion")}
             onOpenTask={setOpenTask}
             mark={
@@ -229,7 +232,7 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
             title="Разбор"
             desk="analysis"
             tasks={tasks}
-            open={openNodes.analysis}
+            open={opened("analysis")}
             onToggle={() => toggle("analysis")}
             onOpenTask={setOpenTask}
             mark={analysisDone ? "done" : card.burning ? "hot" : "active"}
@@ -252,20 +255,25 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
               title={title}
               desk={desk}
               tasks={tasks}
-              open={openNodes[desk]}
+              open={opened(desk)}
               onToggle={() => toggle(desk)}
               onOpenTask={setOpenTask}
             />
           ))}
 
-          {/* Подача: свои задачи и пять подписей чёрточками. Число рядом —
-              цвет сам по себе не говорит, сколько собрано. */}
+          {/* Подача: свои задачи и срок сбора подписей.
+
+              Самих подписей здесь больше нет. Они стоят в полосе согласования
+              внизу экрана — плашками с именами отделов, — и там же ставятся;
+              чёрточки в этом узле показывали то же самое вторым видом, и
+              человек сверял «4 из 5» с пятью плашками, выясняя, где правда.
+              Срок остался: внизу его нет, а он про то, когда подписи нужны. */}
           <Rung
             last
             title="Подача"
             desk="submission"
             tasks={tasks}
-            open={openNodes.submission}
+            open={opened("submission")}
             onToggle={() => toggle("submission")}
             onOpenTask={setOpenTask}
             // Собранные подписи важнее сроков задач: без них статус недоступен,
@@ -277,29 +285,6 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
                   подписи до {stamp(card.approve_by)}
                 </span>
               ) : undefined
-            }
-            meta={
-              <span className="flex items-center gap-2">
-                <span className="inline-flex gap-[3px]">
-                  {card.approvals.map((one) => (
-                    <i
-                      key={one.kind}
-                      title={`${one.name}: ${one.state === "approved" ? "согласовал" : one.state === "rejected" ? "отклонил" : "ждём"}`}
-                      className={cx(
-                        "block h-[4px] w-[14px] rounded-sm",
-                        one.state === "approved"
-                          ? "bg-good"
-                          : one.state === "rejected"
-                            ? "bg-critical"
-                            : "bg-baseline",
-                      )}
-                    />
-                  ))}
-                </span>
-                <span className="tabular-nums">
-                  {signed} из {card.approvals.length || 5}
-                </span>
-              </span>
             }
           />
         </Panel>

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from platform_api.config import Settings
 from platform_api.db.base import utcnow
@@ -35,6 +35,7 @@ from platform_api.db.models import (
     LotCard,
     LotEvent,
     LotFile,
+    LotFolder,
     LotStatus,
     Membership,
     Participation,
@@ -542,6 +543,61 @@ def move(
     )
     db.flush()
     return card
+
+
+def advance(
+    db: DbSession,
+    *,
+    card: LotCard,
+    to: LotStatus,
+    why: str,
+) -> bool:
+    """Двигает лот вперёд по итогу фоновой работы. Возвращает, сдвинулся ли.
+
+    Ради того, чтобы статус не приходилось выставлять руками после каждого
+    прогона. Лот берут в работу — он «Новый»; модель дописала замечание — он
+    «Обсуждение»; собрался разбор спецификации — «На разборе». Человек эти
+    переводы всё равно делал, только позже и не всегда: лот с готовым разбором
+    неделю числился новым, и на планёрке его считали нетронутым.
+
+    **Только вперёд и только по дорожке.** Порядок берётся из `FLOW`, и если
+    лот уже дальше — прогон его не трогает: разбор досчитался через десять
+    минут после того, как менеджер отправил лот на согласование, и откат туда,
+    где он был, стёр бы работу человека. Сошедший с дистанции — «Не участвуем»,
+    «Проиграли», «Отменён» — не двигается вовсе: там решение принято, и
+    фоновая задача его не пересматривает.
+
+    **Прав тут не спрашивают, и это осознанно.** `ALLOWED` отвечает на вопрос
+    «кому можно нажать кнопку», а здесь кнопки нет: перевод — следствие
+    работы, которую человек уже заказал, взяв лот в работу. Записывается он
+    отметкой машины (`by_machine`), поэтому в сводке «кто работал» не крадёт
+    премию у людей.
+    """
+    if card.status is to:
+        return False
+    if card.status in _FINAL or card.status in {LotStatus.SKIPPED, LotStatus.CANCELLED}:
+        return False
+
+    order = {status: place for place, status in enumerate(FLOW)}
+    here, there = order.get(card.status), order.get(to)
+    if here is None or there is None or here >= there:
+        return False
+
+    was = card.status
+    card.status = to
+    trace(
+        db,
+        card_id=card.id,
+        kind="moved",
+        title=f"Перевёл в «{STATUS_NAMES[to]}»",
+        detail=why,
+        by_machine=True,
+        moved_from=was,
+        moved_to=to,
+    )
+    db.flush()
+    logger.info("cards.advanced", card=card.code, was=was.value, now=to.value)
+    return True
 
 
 def trace(
@@ -1448,6 +1504,16 @@ def _can(card: LotCard, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class Folder:
+    """Папка лота в том виде, в каком её показывают."""
+
+    id: str
+    name: str
+    files: int
+    """Сколько файлов внутри. Пустая папка — это не ошибка: её завели заранее."""
+
+
+@dataclass(frozen=True, slots=True)
 class Attachment:
     """Файл, приложенный к лоту руками."""
 
@@ -1458,6 +1524,8 @@ class Attachment:
     note: str
     added_by: str
     added_at: str
+    folder_id: str = ""
+    """В какой папке лежит. Пусто — в корне."""
 
 
 def files(db: DbSession, *, organization_id: uuid.UUID, card_id: uuid.UUID) -> list[Attachment]:
@@ -1486,9 +1554,152 @@ def files(db: DbSession, *, organization_id: uuid.UUID, card_id: uuid.UUID) -> l
             note=link.note,
             added_by=known.get(link.added_by_id, "") if link.added_by_id else "",
             added_at=link.created_at.isoformat(),
+            folder_id=str(link.folder_id) if link.folder_id else "",
         )
         for link, stored in rows
     ]
+
+
+def folders(db: DbSession, *, organization_id: uuid.UUID, card_id: uuid.UUID) -> list[Folder]:
+    """Папки лота с числом файлов в каждой.
+
+    Число считается запросом, а не перебором связей: у лота с перепиской по
+    трём поставщикам файлов набирается под сотню, и складывать их в питоне
+    ради трёх чисел — это сотня строк, поднятых объектами.
+    """
+    card = _required(db, organization_id, card_id)
+    counted: dict[uuid.UUID, int] = {
+        folder: int(count)
+        for folder, count in db.execute(
+            select(LotFile.folder_id, func.count())
+            .where(LotFile.card_id == card.id, LotFile.folder_id.is_not(None))
+            .group_by(LotFile.folder_id)
+        ).all()
+        if folder is not None
+    }
+    rows = db.execute(
+        select(LotFolder).where(LotFolder.card_id == card.id).order_by(LotFolder.name)
+    ).scalars()
+    return [Folder(id=str(row.id), name=row.name, files=counted.get(row.id, 0)) for row in rows]
+
+
+def make_folder(
+    db: DbSession, *, organization_id: uuid.UUID, card_id: uuid.UUID, name: str, by: uuid.UUID
+) -> LotFolder:
+    """Заводит папку. Повтор по имени отклоняет словами.
+
+    Проверка здесь, а не только ограничением базы: `IntegrityError` доходит до
+    человека пятисотой, и «Такая папка уже есть» он узнаёт из журнала
+    администратора, а не с экрана.
+    """
+    card = _required(db, organization_id, card_id)
+    clean = " ".join(name.split())[:120]
+    if not clean:
+        raise SpokenError("У папки должно быть название")
+
+    taken = db.execute(
+        select(LotFolder).where(
+            LotFolder.card_id == card.id, func.lower(LotFolder.name) == clean.lower()
+        )
+    ).scalar_one_or_none()
+    if taken is not None:
+        raise SpokenError(f"Папка «{taken.name}» уже есть")
+
+    made = LotFolder(card_id=card.id, name=clean, created_by_id=by)
+    db.add(made)
+    db.flush()
+    return made
+
+
+def drop_folder(db: DbSession, *, organization_id: uuid.UUID, folder_id: uuid.UUID) -> int:
+    """Убирает папку. Файлы из неё возвращаются в корень.
+
+    Возвращает, сколько файлов вернулось: человеку это надо сказать до
+    нажатия, а после — подтвердить, что они не пропали.
+
+    Связь снимается здесь же, хотя в базе стоит `SET NULL`: сессия держит
+    объекты в памяти, и без явного снятия открытая страница показывала бы
+    файлы в папке, которой уже нет.
+    """
+    folder = db.get(LotFolder, folder_id)
+    if folder is None:
+        raise SpokenError("Папка не найдена")
+    card = db.get(LotCard, folder.card_id)
+    if card is None or card.organization_id != organization_id:
+        raise SpokenError("Папка не найдена")
+
+    inside = list(db.execute(select(LotFile).where(LotFile.folder_id == folder.id)).scalars())
+    for link in inside:
+        link.folder_id = None
+    db.delete(folder)
+    db.flush()
+    return len(inside)
+
+
+def move_file(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    link_id: uuid.UUID,
+    folder_id: uuid.UUID | None,
+) -> LotFile:
+    """Перекладывает файл в папку. Пустая папка — в корень."""
+    link = db.get(LotFile, link_id)
+    if link is None:
+        raise SpokenError("Файл не найден")
+    card = db.get(LotCard, link.card_id)
+    if card is None or card.organization_id != organization_id:
+        raise SpokenError("Файл не найден")
+    link.folder_id = _folder_of(db, card, folder_id)
+    db.flush()
+    return link
+
+
+def _folder_of(db: DbSession, card: LotCard, folder_id: uuid.UUID | None) -> uuid.UUID | None:
+    """Папка этого лота — или отказ.
+
+    Чужая папка увела бы файл в соседнюю карточку: в своей он при этом просто
+    перестаёт быть виден, и выглядит это как пропажа.
+    """
+    if folder_id is None:
+        return None
+    folder = db.get(LotFolder, folder_id)
+    if folder is None or folder.card_id != card.id:
+        raise SpokenError("Такой папки у этого лота нет")
+    return folder.id
+
+
+@dataclass(frozen=True, slots=True)
+class Attached:
+    """Чем кончилась попытка приложить файл.
+
+    Нужно не для отчётности, а чтобы было что сказать человеку. Повторная
+    загрузка того же содержимого выглядит на экране как пропажа: файл не
+    появился там, куда его клали, а тихо переехал из соседней папки. Из этих
+    полей собирается фраза, которая объясняет, что произошло.
+    """
+
+    link: LotFile
+    known: bool
+    """Файл уже был приложен к этому лоту — то же содержимое, а не то же имя."""
+
+    stored_name: str
+    """Под каким именем он лежит у нас. У повторной загрузки имя берётся от
+    первой: хранилище складывает по содержимому, а имя у содержимого одно."""
+
+    moved: bool
+    """Пришлось ли его перенести в новую папку."""
+
+    moved_from: str
+    """Откуда перенесли. Пусто — из общего списка, вне папок."""
+
+    folder: str
+    """Где он лежит теперь. Пусто — в общем списке.
+
+    Нужно для случая, когда переносить некуда: файл прикладывают кнопкой из
+    шапки, папка не выбрана, а он уже лежит в одной из них. Тогда он остаётся
+    на месте — иначе кнопка «Приложить» молча вынимала бы файлы из папок, —
+    и человеку надо сказать, где его искать: в общем списке он не появится."""
 
 
 def attach(
@@ -1499,24 +1710,80 @@ def attach(
     file_id: uuid.UUID,
     added_by: uuid.UUID,
     note: str = "",
-) -> LotFile:
+    folder_id: uuid.UUID | None = None,
+) -> Attached:
     """Привязывает уже загруженный файл к лоту.
 
-    Один и тот же файл к одному лоту дважды не привязывается: хранилище
-    складывает по хэшу содержимого, и повторная загрузка того же счёта даёт ту
-    же запись — а в списке она выглядела бы двумя разными.
+    Один и тот же файл к одному лоту дважды не привязывается — и «тот же»
+    здесь про содержимое, а не про имя. Хранилище складывает по хэшу байтов:
+    `Resume.pdf` и `Резюме.pdf` с одинаковой начинкой — одна запись, а два
+    разных документа, названных одинаково, остаются двумя. Иначе рядом со
+    счётом лежала бы его же копия, а «какой из двух свежий» выяснялось бы
+    открыванием обоих.
+
+    Тот же файл, положенный в другую папку, переезжает туда. Это то, ради чего
+    его и грузят второй раз: снимок переписки, лежавший в общем списке,
+    человек прикладывает в папку поставщика именно затем, чтобы он оказался
+    там. Две записи на одно содержимое дали бы папку, где файл есть, и папку,
+    где он тоже есть, — а удалив один, человек считал бы удалённым оба.
+
+    Папка не выбрана — файл остаётся, где лежал. Кнопка «Приложить» в шапке
+    вкладки не говорит «в общий список», она говорит «к лоту», и вынимать ею
+    файлы из папок значило бы разбирать чужую раскладку случайным нажатием.
+
+    Молчать об этом переезде нельзя: файл исчезает оттуда, где лежал, и
+    сказать об этом должен тот, кто переносит. Отсюда `Attached`.
     """
     card = _required(db, organization_id, card_id)
+    where = _folder_of(db, card, folder_id)
+    stored_name = _stored_name(db, file_id)
     found = db.execute(
         select(LotFile).where(LotFile.card_id == card.id, LotFile.file_id == file_id)
     ).scalar_one_or_none()
     if found is not None:
-        return found
+        moved = where is not None and found.folder_id != where
+        came_from = _folder_name(db, found.folder_id) if moved else ""
+        if moved:
+            found.folder_id = where
+            db.flush()
+        return Attached(
+            link=found,
+            known=True,
+            stored_name=stored_name,
+            moved=moved,
+            moved_from=came_from,
+            folder=_folder_name(db, found.folder_id),
+        )
 
-    found = LotFile(card_id=card.id, file_id=file_id, added_by_id=added_by, note=note.strip())
+    found = LotFile(
+        card_id=card.id,
+        file_id=file_id,
+        added_by_id=added_by,
+        note=note.strip(),
+        folder_id=where,
+    )
     db.add(found)
     db.flush()
-    return found
+    return Attached(
+        link=found,
+        known=False,
+        stored_name=stored_name,
+        moved=False,
+        moved_from="",
+        folder=_folder_name(db, where),
+    )
+
+
+def _stored_name(db: DbSession, file_id: uuid.UUID) -> str:
+    stored = db.get(StoredFile, file_id)
+    return stored.original_name if stored is not None else ""
+
+
+def _folder_name(db: DbSession, folder_id: uuid.UUID | None) -> str:
+    if folder_id is None:
+        return ""
+    folder = db.get(LotFolder, folder_id)
+    return folder.name if folder is not None else ""
 
 
 def detach(db: DbSession, *, organization_id: uuid.UUID, link_id: uuid.UUID) -> None:
@@ -1618,18 +1885,22 @@ __all__ = [
     "Attachment",
     "Card",
     "Filters",
+    "Folder",
     "Job",
     "Person",
     "Sign",
     "Snapshot",
     "add_task",
+    "advance",
     "assign",
     "attach",
     "by_row",
     "close_task",
     "decide",
     "detach",
+    "drop_folder",
     "files",
+    "folders",
     "listing",
     "move",
     "one",

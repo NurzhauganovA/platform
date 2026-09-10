@@ -15,26 +15,18 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import {
-  cardsApi,
-  type Department,
-  type Job,
-  type TaskState,
-} from "@/api/cards";
+import { auth } from "@/api/tender";
+import { cardsApi, type Department, type Job } from "@/api/cards";
+import { TaskWindow } from "./TaskWindow";
 import { PageHeader } from "@/shell/AppShell";
 import { ApiError } from "@/api/client";
-import {
-  Button,
-  Card as Panel,
-  EmptyState,
-  Input,
-  Page,
-  Spinner,
-  Tabs,
-  cx,
-} from "@/ui";
+import { Card as Panel, EmptyState, Page, Spinner, Tabs, cx } from "@/ui";
 
 type Tab = "mine" | "queue" | "closed";
+
+/** Что делают с открытой задачей. Отчёт нужен только закрытию. */
+type Deed =
+  { kind: "take" } | { kind: "release" } | { kind: "done"; result: string };
 
 const TABS: { key: Tab; title: string }[] = [
   { key: "mine", title: "Мои задачи" },
@@ -128,149 +120,161 @@ function Jobs({
   tab: Tab;
   onDone: () => void;
 }) {
-  if (!jobs.length) {
-    return (
-      <Panel>
-        <EmptyState
-          title={
-            tab === "mine"
-              ? "На вас ничего не висит"
-              : tab === "queue"
-                ? "Очередь отдела пуста"
-                : "Закрытых задач нет"
-          }
-          description={
-            tab === "queue"
-              ? "Ничьи задачи отдела появляются здесь. Их берут отсюда."
-              : "Задачи заводятся с карточки лота."
-          }
-        />
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel className="overflow-hidden">
-      <ul className="divide-y divide-hairline">
-        {jobs.map((job) => (
-          <JobRow key={job.id} job={job} onDone={onDone} />
-        ))}
-      </ul>
-    </Panel>
-  );
-}
-
-function JobRow({ job, onDone }: { job: Job; onDone: () => void }) {
-  // Закрыть можно только с отчётом — та же дверь, что и в карточке лота.
-  // Пока здесь закрывали одной кнопкой, правило в карточке обходилось: в
-  // истории оставалось «закрыл», и ни премию посчитать, ни спросить, что
-  // именно нашли.
-  const [closing, setClosing] = useState(false);
-  const [what, setWhat] = useState("");
+  // Открытая задача хранится копией, а не поиском по списку: взятая уходит
+  // из «Очереди отдела», и окно, смотрящее в список, опустело бы прямо под
+  // рукой — посреди чтения задачи, которую человек только что взял.
+  const [open, setOpen] = useState<Job | null>(null);
   const [trouble, setTrouble] = useState("");
+  const { data: me } = useQuery({ queryKey: ["me"], queryFn: auth.me });
 
   const act = useMutation({
-    mutationFn: (deed: "take" | TaskState) =>
-      deed === "take"
-        ? cardsApi.takeTask(job.id)
-        : cardsApi.closeTask(job.id, deed, deed === "done" ? what : ""),
-    onSuccess: () => {
-      setClosing(false);
-      setWhat("");
+    mutationFn: (deed: Deed) =>
+      deed.kind === "take"
+        ? cardsApi.takeTask(open?.id ?? "")
+        : deed.kind === "release"
+          ? cardsApi.releaseTask(open?.id ?? "")
+          : cardsApi.closeTask(open?.id ?? "", "done", deed.result),
+    onSuccess: (fresh, deed) => {
       setTrouble("");
+      // Взяли — окно остаётся с обновлённой задачей: человек продолжает её
+      // читать и тут же пишет отчёт. Отдали или закрыли — закрываем: делать
+      // с ней больше нечего.
+      setOpen(deed.kind === "take" ? fresh : null);
       onDone();
     },
     onError: (error) =>
       setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
   });
 
-  return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
-      <Link
-        to={`/work/lots/${job.card_id}`}
-        className="font-mono text-xs text-ink-muted hover:text-ink"
-      >
-        {job.card_code}
-      </Link>
+  const opened = open && (
+    <TaskWindow
+      task={open}
+      me={me?.id ?? ""}
+      busy={act.isPending}
+      trouble={trouble}
+      onClose={() => {
+        setOpen(null);
+        setTrouble("");
+      }}
+      onTake={() => act.mutate({ kind: "take" })}
+      onRelease={() => act.mutate({ kind: "release" })}
+      onFinish={(result) => act.mutate({ kind: "done", result })}
+    />
+  );
 
-      <span className="min-w-0 flex-1">
-        <span
-          className={cx(
-            "block truncate text-sm",
-            job.state === "open" ? "text-ink" : "text-ink-muted line-through",
-          )}
-        >
-          {job.title}
-        </span>
-        <span className="mt-0.5 block truncate text-xs text-ink-muted">
-          {job.card_title}
-        </span>
-      </span>
-
-      {job.left && job.state === "open" && (
-        <span
-          className={cx(
-            "text-sm tabular-nums whitespace-nowrap",
-            job.overdue
-              ? "text-ink-muted line-through decoration-baseline"
-              : job.burning
-                ? "font-semibold text-critical"
-                : "text-ink-secondary",
-          )}
-        >
-          {job.left}
-        </span>
-      )}
-
-      {job.state === "open" ? (
-        <>
-          {!job.assignee && (
-            <button
-              type="button"
-              disabled={act.isPending}
-              onClick={() => act.mutate("take")}
-              className="rounded-[6px] border border-baseline px-2.5 py-1 text-xs text-ink transition hover:bg-plane disabled:opacity-45"
-            >
-              Взять себе
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={act.isPending}
-            onClick={() => setClosing((was) => !was)}
-            className="rounded-[6px] px-2.5 py-1 text-xs text-ink-muted transition hover:bg-plane hover:text-ink disabled:opacity-45"
-          >
-            {closing ? "Не закрывать" : "Закрыть"}
-          </button>
-        </>
-      ) : (
-        <span className="text-xs text-ink-muted">
-          {job.result || "закрыта"}
-        </span>
-      )}
-
-      {closing && (
-        /* Во всю ширину строки: отчёт пишут фразой, а не словом, и поле в
-           два сантиметра заставляет её сокращать до «сделал». */
-        <div className="mt-1 flex w-full flex-wrap items-center gap-2">
-          <Input
-            value={what}
-            onChange={(event) => setWhat(event.target.value)}
-            placeholder="Что сделано: нашли поставщика, цена подтверждена, отправили запрос"
-            className="min-w-64 flex-1"
-            autoFocus
+  if (!jobs.length) {
+    return (
+      <>
+        <Panel>
+          <EmptyState
+            title={
+              tab === "mine"
+                ? "На вас ничего не висит"
+                : tab === "queue"
+                  ? "Очередь отдела пуста"
+                  : "Закрытых задач нет"
+            }
+            description={
+              tab === "queue"
+                ? "Ничьи задачи отдела появляются здесь. Их берут отсюда."
+                : "Задачи заводятся с карточки лота."
+            }
           />
-          <Button
-            variant="primary"
-            onClick={() => act.mutate("done")}
-            disabled={!what.trim() || act.isPending}
-          >
-            {act.isPending ? "Закрываем…" : "Закрыть задачу"}
-          </Button>
-        </div>
-      )}
+        </Panel>
+        {opened}
+      </>
+    );
+  }
 
-      {trouble && <p className="w-full text-xs text-critical">{trouble}</p>}
+  return (
+    <>
+      <Panel className="overflow-hidden">
+        <ul className="divide-y divide-hairline">
+          {jobs.map((job) => (
+            <JobRow key={job.id} job={job} onOpen={() => setOpen(job)} />
+          ))}
+        </ul>
+      </Panel>
+      {opened}
+    </>
+  );
+}
+
+/**
+ * Строка задачи. Нажатие открывает её целиком.
+ *
+ * Кнопок в строке больше нет. Они позволяли взять и закрыть задачу, не
+ * прочитав её: в заголовке «Найти товар и подтвердить цены · GZ000082» нет ни
+ * товара, ни срока, ни того, что вернуть в ответе, — а отчёт о закрытии
+ * писали по памяти о разговоре в коридоре.
+ */
+function JobRow({ job, onOpen }: { job: Job; onOpen: () => void }) {
+  return (
+    <li>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+        {/* Ссылка на лот отдельной кнопкой, а не внутри строки: вложенная в
+            кнопку ссылка — неверная разметка, и нажатие на код открывало бы
+            заодно окно задачи. */}
+        <Link
+          to={`/work/lots/${job.card_id}`}
+          className="shrink-0 font-mono text-xs text-ink-muted hover:text-ink"
+          title="Открыть лот"
+        >
+          {job.card_code}
+        </Link>
+
+        <button
+          type="button"
+          onClick={onOpen}
+          className={cx(
+            "flex min-w-0 flex-1 items-center gap-x-3 gap-y-1 text-left",
+            "focus-visible:outline focus-visible:outline-2",
+            "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
+          )}
+        >
+          <span className="min-w-0 flex-1">
+            <span
+              className={cx(
+                "block truncate text-sm",
+                job.state === "open"
+                  ? "text-ink"
+                  : "text-ink-muted line-through",
+              )}
+            >
+              {job.title}
+            </span>
+            <span className="mt-0.5 block truncate text-xs text-ink-muted">
+              {job.card_title}
+            </span>
+          </span>
+
+          {job.left && job.state === "open" && (
+            <span
+              className={cx(
+                "shrink-0 text-sm tabular-nums whitespace-nowrap",
+                job.overdue
+                  ? "text-ink-muted line-through decoration-baseline"
+                  : job.burning
+                    ? "font-semibold text-critical"
+                    : "text-ink-secondary",
+              )}
+            >
+              {job.left}
+            </span>
+          )}
+
+          {/* Кто держит задачу — в самой строке: очередь отдела читают
+              глазами сверху вниз, и «свободна» должно быть видно без
+              открытия. */}
+          <span className="shrink-0 text-xs text-ink-muted">
+            {job.state !== "open"
+              ? "закрыта"
+              : job.assignee
+                ? job.assignee.split(" ")[0]
+                : "свободна"}
+          </span>
+        </button>
+      </div>
     </li>
   );
 }
