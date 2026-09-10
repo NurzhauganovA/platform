@@ -27,6 +27,7 @@ from platform_api.logging import configure_logging, get_logger
 from platform_api.modules import ModuleRegistry, discover_modules
 from platform_api.modules.audit_router import router as audit_router
 from platform_api.modules.discussion_router import router as discussion_router
+from platform_api.modules.notify_router import router as notify_router
 from platform_api.modules.remarks_router import router as remarks_router
 from platform_api.modules.tender.workspace import CaseWorkspace
 from platform_api.storage import FileStorage
@@ -198,6 +199,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(discussion_router)
     api.include_router(remarks_router)
     api.include_router(audit_router)
+    api.include_router(notify_router)
     for module in registry.all():
         api.include_router(module.router)
 

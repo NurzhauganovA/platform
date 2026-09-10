@@ -22,7 +22,7 @@ import { PageHeader } from "@/shell/AppShell";
 import { ApiError } from "@/api/client";
 import { Card as Panel, EmptyState, Page, Spinner, Tabs, cx } from "@/ui";
 
-type Tab = "mine" | "queue" | "closed";
+type Tab = "mine" | "queue" | "all" | "closed";
 
 /** Что делают с открытой задачей. Отчёт нужен только закрытию. */
 type Deed =
@@ -31,6 +31,11 @@ type Deed =
 const TABS: { key: Tab; title: string }[] = [
   { key: "mine", title: "Мои задачи" },
   { key: "queue", title: "Очередь отдела" },
+  // «Все» — весь отдел, включая взятые чужими. Вопрос «что сейчас у отдела» и
+  // «на ком висит вот это» возникает каждый день, а ответом до сих пор было
+  // открывание лотов по одному: своя очередь показывает только моё, общая —
+  // только ничьё, и взятая коллегой задача не видна нигде.
+  { key: "all", title: "Все" },
   { key: "closed", title: "Закрытые" },
 ];
 
@@ -44,6 +49,10 @@ export function DeskPage({
   subtitle: string;
 }) {
   const [tab, setTab] = useState<Tab>("mine");
+  // Чьи задачи показывать на вкладке «Все». Пусто — весь отдел. Живёт рядом с
+  // вкладкой, а не в адресе: отбор меняют по десятку раз на планёрке, и адрес,
+  // меняющийся от каждого нажатия, засоряет историю браузера.
+  const [who, setWho] = useState("");
   const cache = useQueryClient();
 
   const { data: mine, isLoading: loadingMine } = useQuery({
@@ -65,14 +74,34 @@ export function DeskPage({
     queryFn: () => cardsApi.tasks({ department, mine: true, state: "done" }),
     refetchInterval: 60_000,
   });
+  // Все открытые задачи отдела — вместе с взятыми. Читаются сразу: число стоит
+  // на самой вкладке, а отложенный запрос показывал бы ноль до нажатия.
+  const { data: everything } = useQuery({
+    queryKey: ["desk-tasks", department, "all"],
+    queryFn: () => cardsApi.tasks({ department }),
+    refetchInterval: 60_000,
+  });
   const refresh = () =>
     void cache.invalidateQueries({ queryKey: ["desk-tasks", department] });
 
+  const everyone = everything ?? [];
+  const picked = who
+    ? everyone.filter((task) => task.assignee_id === who)
+    : everyone;
   const counts: Record<Tab, number> = {
     mine: mine?.length ?? 0,
     queue: queue?.length ?? 0,
+    all: everyone.length,
     closed: closed?.length ?? 0,
   };
+
+  // Сотрудники для отбора — только те, на ком висят задачи этого отдела.
+  // Полный список людей компании в отделе снабжения означал бы выпадающий
+  // список на тридцать имён, из которых заняты трое.
+  const busy = new Map<string, string>();
+  for (const task of everyone) {
+    if (task.assignee_id) busy.set(task.assignee_id, task.assignee);
+  }
 
   return (
     <>
@@ -93,6 +122,15 @@ export function DeskPage({
       <Page>
         <Tabs tabs={TABS} value={tab} counts={counts} onChange={setTab} />
 
+        {tab === "all" && (
+          <Who
+            people={[...busy].map(([id, name]) => ({ id, name }))}
+            free={everyone.filter((task) => !task.assignee_id).length}
+            value={who}
+            onChange={setWho}
+          />
+        )}
+
         {loadingMine ? (
           <Panel className="px-5 py-4">
             <Spinner label="Читаем задачи…" />
@@ -100,7 +138,13 @@ export function DeskPage({
         ) : (
           <Jobs
             jobs={
-              (tab === "mine" ? mine : tab === "queue" ? queue : closed) ?? []
+              (tab === "mine"
+                ? mine
+                : tab === "queue"
+                  ? queue
+                  : tab === "all"
+                    ? picked
+                    : closed) ?? []
             }
             tab={tab}
             onDone={refresh}
@@ -109,6 +153,85 @@ export function DeskPage({
       </Page>
     </>
   );
+}
+
+/**
+ * Отбор по сотруднику на вкладке «Все».
+ *
+ * Именами, а не выпадающим списком: людей в отделе трое-четверо, и список
+ * прячет ответ на вопрос «а на ком висит» за лишним нажатием. «Ничьи» стоит
+ * рядом с именами намеренно — это тоже ответ на «чьё», и держать его на
+ * соседней вкладке значит заставить человека переключаться туда-обратно,
+ * сравнивая два экрана.
+ */
+function Who({
+  people,
+  free,
+  value,
+  onChange,
+}: {
+  people: { id: string; name: string }[];
+  free: number;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  if (!people.length && !free) return null;
+
+  return (
+    <div className="mb-2.5 flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 text-[11.5px] text-ink-muted">На ком</span>
+      <Pick on={!value} onClick={() => onChange("")}>
+        Все
+      </Pick>
+      {people.map((one) => (
+        <Pick
+          key={one.id}
+          on={value === one.id}
+          onClick={() => onChange(value === one.id ? "" : one.id)}
+        >
+          {short(one.name)}
+        </Pick>
+      ))}
+      {free > 0 && (
+        <span className="ml-1 text-[11.5px] text-ink-muted tabular-nums">
+          ничьих: {free}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Pick({
+  children,
+  on,
+  onClick,
+}: {
+  children: string;
+  on: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      className={cx(
+        "h-[26px] rounded-[7px] px-2.5 text-[12px] transition",
+        on
+          ? "bg-ink text-surface"
+          : "border border-hairline text-ink-secondary hover:bg-plane",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** «Нуржауганов Анварбек» → «Нуржауганов А.»: в ряд помещается вчетверо больше. */
+function short(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length < 2) return name;
+  return `${parts[0]} ${parts[1][0]}.`;
 }
 
 function Jobs({
@@ -296,6 +419,16 @@ export function SupplyDesk() {
       department="supply"
       title="Снабжение"
       subtitle="Поиск товара, подтверждение цен и сроков поставки"
+    />
+  );
+}
+
+export function DiscussionDesk() {
+  return (
+    <DeskPage
+      department="discussion"
+      title="Обсуждение"
+      subtitle="Замечания к спецификациям: что написать и кому передать"
     />
   );
 }

@@ -36,8 +36,30 @@ MAX_COLUMNS = 40
 
 MAX_SHEETS = 12
 
-_IMAGES = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"})
-_PLAIN = frozenset({".txt", ".csv", ".md", ".log"})
+_IMAGES = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".avif",
+        ".ico",
+        # Векторная картинка рисуется тем же `img`, что и снимок экрана. Именно
+        # `img`, а не встраиванием в страницу: внутри `.svg` бывает разметка со
+        # скриптами, и вставленная в нашу страницу она получила бы доступ к
+        # сессии смотрящего. В `img` браузер её не исполняет.
+        ".svg",
+        # Снимки с айфона. Браузеры рисуют их через раз — Safari да, Chrome
+        # нет, — поэтому рядом с картинкой всегда остаётся «Скачать».
+        ".heic",
+        ".heif",
+    }
+)
+_PLAIN = frozenset({".txt", ".csv", ".md", ".log", ".json", ".xml", ".yml", ".yaml", ".ini"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,13 +96,18 @@ class Preview:
     """Почему показать нельзя. Молчание читается как поломка платформы."""
 
 
-def build(path: Path) -> Preview:
+def build(path: Path, *, name: str = "") -> Preview:
     """Разбирает документ на то, чем его показать.
 
     Не падает ни на чём: битый файл, чужой формат, обрезанная выгрузка — всё
     это повод сказать словами и предложить скачать, а не отдать пятисотую.
+
+    `name` — как файл зовут у человека. Нужен затем, что хранилище платформы
+    складывает по хэшу содержимого, и у файла на диске имени нет вовсе:
+    `storage/ab/cd/abcdef…`. Формат при этом определяется расширением, и без
+    настоящего имени любой приложенный документ считался бы неизвестным.
     """
-    suffix = path.suffix.lower()
+    suffix = (Path(name).suffix or path.suffix).lower()
     if suffix == ".pdf":
         return Preview(kind="pdf")
     if suffix in _IMAGES:
@@ -152,40 +179,48 @@ def _workbook(path: Path) -> Preview:
     """Листы книги Excel — значениями, а не формулами.
 
     Формула без пересчёта показала бы «=B2*C2» там, где человек ждёт сумму.
+
+    Книга открывается потоком, а не путём. openpyxl, получив путь, проверяет
+    расширение и отказывается со словами «does not support  file format» —
+    ровно с двумя пробелами, потому что расширения там нет вовсе. А его нет:
+    хранилище платформы складывает по хэшу содержимого, и файл на диске зовётся
+    `e50cf4c0…` без всякого суффикса. Прайс поставщика из-за этого показывался
+    как «не удалось разобрать», хотя книга целая.
     """
     from openpyxl import load_workbook
 
-    workbook = load_workbook(str(path), read_only=True, data_only=True)
-    try:
-        pages_out: list[Sheet] = []
-        for label in workbook.sheetnames[:MAX_SHEETS]:
-            sheet = workbook[label]
-            lines: list[tuple[str, ...]] = []
-            cut = False
-            for number, row in enumerate(sheet.iter_rows(values_only=True)):
-                if number >= MAX_ROWS:
-                    cut = True
-                    break
-                lines.append(tuple(_cell(value) for value in row[:MAX_COLUMNS]))
-            # Хвост пустых строк в книгах обычный: лист «на вырост». Из-за
-            # него чтение упирается в предел, хотя содержимого три строки, —
-            # и лист помечался обрезанным на ровном месте.
-            while lines and not any(lines[-1]):
-                lines.pop()
-            pages_out.append(
-                Sheet(
-                    title=label,
-                    rows=tuple(lines),
-                    truncated=cut and len(lines) >= MAX_ROWS,
+    with path.open("rb") as stream:
+        workbook = load_workbook(stream, read_only=True, data_only=True)
+        try:
+            pages_out: list[Sheet] = []
+            for label in workbook.sheetnames[:MAX_SHEETS]:
+                sheet = workbook[label]
+                lines: list[tuple[str, ...]] = []
+                cut = False
+                for number, row in enumerate(sheet.iter_rows(values_only=True)):
+                    if number >= MAX_ROWS:
+                        cut = True
+                        break
+                    lines.append(tuple(_cell(value) for value in row[:MAX_COLUMNS]))
+                # Хвост пустых строк в книгах обычный: лист «на вырост». Из-за
+                # него чтение упирается в предел, хотя содержимого три строки, —
+                # и лист помечался обрезанным на ровном месте.
+                while lines and not any(lines[-1]):
+                    lines.pop()
+                pages_out.append(
+                    Sheet(
+                        title=label,
+                        rows=tuple(lines),
+                        truncated=cut and len(lines) >= MAX_ROWS,
+                    )
                 )
+            return Preview(
+                kind="sheet",
+                sheets=tuple(pages_out),
+                truncated=len(workbook.sheetnames) > MAX_SHEETS,
             )
-        return Preview(
-            kind="sheet",
-            sheets=tuple(pages_out),
-            truncated=len(workbook.sheetnames) > MAX_SHEETS,
-        )
-    finally:
-        workbook.close()
+        finally:
+            workbook.close()
 
 
 def _cell(value: Any) -> str:

@@ -1317,7 +1317,7 @@ class SpecSheet(Base, UUIDPrimaryKey, Timestamps):
     """
 
     __tablename__ = "spec_sheets"
-    __table_args__ = (UniqueConstraint("module", "row_id", "variant", name="sheet_on_row"),)
+    __table_args__ = (UniqueConstraint("module", "row_id", "variant", "kind", name="sheet_on_row"),)
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"), index=True
@@ -1338,6 +1338,22 @@ class SpecSheet(Base, UUIDPrimaryKey, Timestamps):
     «A» есть всегда: это тот разбор, который собрала модель. Остальные
     заводятся от него — требования заказчика в них те же, свои столбцы
     пустые.
+    """
+
+    kind: Mapped[str] = mapped_column(
+        String(16), default="analysis", server_default="analysis", index=True
+    )
+    """Чья это таблица: `analysis` — разбор, `supply` — снабжение.
+
+    Разными записями, а не столбцами в одной. Снабжение продолжает работу
+    разбора: берёт те же позиции и дописывает к ним поставщика, закупочную
+    цену и срок. Пока таблица была одна, эти две работы шли поверх друг друга —
+    снабженец правил строку, по которой разборщик считал маржу, и разбор
+    задним числом переставал сходиться с тем, что показывали на согласовании.
+
+    Копией, а не ссылкой: требования заказчика в снабженческой таблице те же,
+    но её строки живут дальше своей жизнью — товара по позиции может не
+    оказаться вовсе, и снабжение заменит её двумя.
     """
 
     columns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)

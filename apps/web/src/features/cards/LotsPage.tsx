@@ -166,7 +166,8 @@ export function LotsPage() {
           <div className="min-w-0">
             <p className="text-sm font-medium text-ink">Закупку пропустили?</p>
             <p className="mt-0.5 max-w-lg text-xs text-ink-muted">
-              Введите код номер - заберём с портала строго по нему и возьмём в работу
+              Введите код номер - заберём с портала строго по нему и возьмём в
+              работу
             </p>
           </div>
           <FetchByNumber />
@@ -258,7 +259,7 @@ export function LotsPage() {
 }
 
 const GRID =
-  "grid grid-cols-[3px_5.5rem_minmax(0,1fr)_8.5rem_6.5rem_9rem_5rem_7.5rem] items-center gap-x-4";
+  "grid grid-cols-[3px_5.5rem_minmax(0,1fr)_8.5rem_6.5rem_9rem_5rem_7.5rem_5.5rem] items-center gap-x-4";
 
 function Head() {
   return (
@@ -277,6 +278,12 @@ function Head() {
       <span>Этап</span>
       <span className="text-center">Задачи</span>
       <span>Ведёт</span>
+      <span
+        className="text-center"
+        title="Обсуждение · Разбор · Снабжение · Технолог"
+      >
+        Отделы
+      </span>
     </div>
   );
 }
@@ -347,8 +354,66 @@ function Row({ card }: { card: Card }) {
             <span className="text-ink-muted">ничьё</span>
           )}
         </span>
+
+        <Desks card={card} />
       </Link>
     </li>
+  );
+}
+
+/**
+ * Ход по отделам четырьмя точками: обсуждение, разбор, снабжение, технолог.
+ *
+ * Ради вопроса планёрки «что сейчас с этой закупкой». Ответ на него до сих пор
+ * собирался открыванием карточки и разглядыванием правого столбца — по одному
+ * лоту за раз, а на планёрке их тридцать. Этап в соседней колонке отвечает на
+ * другое: он про то, где лот в пути, и молчит о том, что снабжение своё уже
+ * сделало, а технолог ещё нет.
+ *
+ * Кто закончил, решает сервер (`card.desks`). Правила у отделов разные —
+ * обсуждение закрывается отправкой замечания, разбор переходом этапа,
+ * снабжение и технолог закрытыми задачами, — и второй набор этих правил в
+ * браузере разошёлся бы с правым столбцом карточки на первом же.
+ *
+ * Галочка внутри кружка, а не цвет кружка. Зелёное и серое при дальтонизме
+ * различаются плохо, а четыре точки подряд — это как раз тот случай, где
+ * ошибиться легче всего. Подпись у каждой своя: без неё «третий кружок» надо
+ * держать в голове.
+ */
+function Desks({ card }: { card: Card }) {
+  const desks = card.desks ?? [];
+  if (!desks.length) return <span aria-hidden />;
+
+  return (
+    <span className="flex items-center justify-center gap-1">
+      {desks.map((desk) => (
+        <span
+          key={desk.desk}
+          title={
+            desk.done
+              ? `${desk.title}: закончено`
+              : desk.open_tasks > 0
+                ? `${desk.title}: в работе, задач ${desk.open_tasks}`
+                : `${desk.title}: ещё не начинали`
+          }
+          className={cx(
+            "flex h-[18px] w-[18px] items-center justify-center rounded-full",
+            "text-[10px] leading-none font-bold",
+            desk.done
+              ? "bg-good/15 text-good"
+              : desk.open_tasks > 0
+                ? "border border-series-1/50 text-series-1"
+                : "border border-hairline text-ink-muted",
+          )}
+        >
+          {desk.done ? "✓" : desk.open_tasks > 0 ? String(desk.open_tasks) : ""}
+          <span className="sr-only">
+            {desk.title}
+            {desk.done ? " — закончено" : " — не закончено"}
+          </span>
+        </span>
+      ))}
+    </span>
   );
 }
 

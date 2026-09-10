@@ -1105,3 +1105,215 @@ def test_fail_knopka_prilozhit_ne_vynimaet_fayl_iz_papki(
     assert снова.folder == "Счета"
     приложено = cards.files(db, organization_id=org.id, card_id=card_id)
     assert [item.folder_id for item in приложено] == [str(папка.id)]
+
+
+def test_fail_fayl_otdayotsya_pod_svoim_imenem(db: DbSession, app_client: TestClient) -> None:
+    """Скачанный файл называется так же, как в списке.
+
+    Раньше уходили двенадцать знаков хэша без расширения: человек скачивал
+    «Договор.pdf», получал безымянный кусок и открывал его подбором программы.
+    Имя кодируется по RFC 5987 — в названиях у нас кириллица, а в заголовке
+    HTTP её быть не может.
+    """
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.MANAGER)
+    card = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="лот-с-договором",
+        snapshot=cards.Snapshot(code="GZ000901", title="Компьютеры"),
+    )
+    db.commit()
+
+    приложен = app_client.post(
+        f"/api/cards/{card.id}/files",
+        files={"file": ("Договор №7.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    ).json()
+
+    скачано = app_client.get(f"/api/cards/{card.id}/files/{приложен['sha256']}")
+    assert скачано.status_code == 200
+    как = скачано.headers["content-disposition"]
+    assert как.startswith("attachment")
+    assert "%D0%94%D0%BE%D0%B3%D0%BE%D0%B2%D0%BE%D1%80" in как
+    assert скачано.headers["content-type"].startswith("application/pdf")
+    # Угадывание типа по содержимому запрещено: без этого браузер открывает
+    # как страницу то, что мы отдали текстом.
+    assert скачано.headers["x-content-type-options"] == "nosniff"
+
+    показан = app_client.get(f"/api/cards/{card.id}/files/{приложен['sha256']}?inline=1")
+    assert показан.headers["content-disposition"].startswith("inline")
+
+
+def test_fail_chuzhoy_format_ne_otkryvaetsya_vo_vkladke(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Незнакомый формат скачивается, даже когда просят показать.
+
+    Файлы к лоту прикладывают люди, и страница с чужой разметкой, открытая с
+    нашего адреса, получает доступ к сессии смотрящего — то есть к закупкам,
+    ценам и марже. Список показываемого явный; неописанное скачивается, и это
+    скучный, но верный исход.
+    """
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.MANAGER)
+    card = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="лот-со-страницей",
+        snapshot=cards.Snapshot(code="GZ000902", title="Компьютеры"),
+    )
+    db.commit()
+
+    приложен = app_client.post(
+        f"/api/cards/{card.id}/files",
+        files={"file": ("письмо.html", b"<script>alert(1)</script>", "text/html")},
+    ).json()
+
+    ответ = app_client.get(f"/api/cards/{card.id}/files/{приложен['sha256']}?inline=1")
+
+    assert ответ.headers["content-disposition"].startswith("attachment")
+
+
+def test_fail_razbor_prilozhennogo_znaet_format_po_imeni(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Формат определяется по имени из списка, а не по файлу на диске.
+
+    Хранилище складывает по хэшу содержимого, и у файла на диске имени нет
+    вовсе: `storage/ab/cd/abcdef…`. Без настоящего имени любой приложенный
+    документ считался бы неизвестным, и вкладка предлагала бы только скачать.
+    """
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.MANAGER)
+    card = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="лот-со-снимком",
+        snapshot=cards.Snapshot(code="GZ000903", title="Компьютеры"),
+    )
+    db.commit()
+
+    снимок = app_client.post(
+        f"/api/cards/{card.id}/files",
+        files={"file": ("WeChat_2026-09-10.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64, "image/png")},
+    ).json()
+    книга = app_client.post(
+        f"/api/cards/{card.id}/files",
+        files={"file": ("прайс.xlsx", b"PK\x03\x04" + b"0" * 64, "application/vnd.ms-excel")},
+    ).json()
+
+    вид = app_client.get(f"/api/cards/{card.id}/files/{снимок['sha256']}/view").json()
+    assert вид["kind"] == "image"
+    assert вид["name"] == "WeChat_2026-09-10.png"
+
+    # Битая книга — не пятисотая: платформа говорит словами и предлагает
+    # скачать. Разбор чужого файла падать не имеет права.
+    сломанная = app_client.get(f"/api/cards/{card.id}/files/{книга['sha256']}/view")
+    assert сломанная.status_code == 200, сломанная.text
+    assert сломанная.json()["kind"] == "none"
+    assert сломанная.json()["note"]
+
+
+def test_fail_otdely_otmechayutsya_po_svoim_pravilam(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Четыре точки хода считает сервер, и правила у отделов разные.
+
+    Не выводятся одно из другого: обсуждение закрывается отправкой замечания,
+    разбор — переходом этапа, снабжение и технолог — закрытыми задачами. Один
+    расчёт на список и на карточку нужен затем, чтобы строка и правый столбец
+    не говорили о лоте разное.
+    """
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+
+    отметки = {mark.desk: mark for mark in cards.desk_marks(card)}
+    assert [mark.desk for mark in cards.desk_marks(card)] == [
+        "discussion",
+        "analysis",
+        "supply",
+        "technologist",
+    ]
+    # Новый лот: не сделано ничего, и это не «в работе» — до отделов не дошли.
+    assert all(not mark.done for mark in отметки.values())
+    assert all(mark.open_tasks == 0 for mark in отметки.values())
+
+    # Разбор закрывается переходом этапа, а не собранной таблицей: точка
+    # отвечает за «отдел отпустил лот дальше».
+    card.status = LotStatus.APPROVAL
+    assert {mark.desk: mark.done for mark in cards.desk_marks(card)}["analysis"] is True
+
+    # Снабжение: задача заведена и не закрыта — отдел работает, но не закончил.
+    task = cards.add_task(
+        db,
+        organization_id=org.id,
+        card_id=card.id,
+        title="Найти товар",
+        department=Department.SUPPLY,
+        created_by=кто,
+    )
+    db.refresh(card)
+    supply = {mark.desk: mark for mark in cards.desk_marks(card)}["supply"]
+    assert supply.done is False
+    assert supply.open_tasks == 1
+
+    cards.close_task(
+        db,
+        organization_id=org.id,
+        task_id=task.id,
+        state=TaskState.DONE,
+        result="нашли",
+        user_id=кто,
+    )
+    db.refresh(card)
+    assert {mark.desk: mark.done for mark in cards.desk_marks(card)}["supply"] is True
+
+
+def test_fail_zadachi_otdela_vidny_tselikom(db: DbSession, app_client: TestClient) -> None:
+    """Вкладка «Все» на столе отдела показывает и взятые чужими задачи.
+
+    Своя очередь показывает только моё, общая — только ничьё, и задача, взятая
+    коллегой, не видна нигде: вопрос «на ком висит вот это» до сих пор решался
+    открыванием лотов по одному.
+    """
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.MANAGER)
+    card = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="лот-с-очередью",
+        snapshot=cards.Snapshot(code="GZ000905", title="Компьютеры"),
+    )
+    чужой = User(email=f"{uuid.uuid4().hex[:8]}@fintend.kz", password_hash="x")
+    db.add(чужой)
+    db.flush()
+    задача = cards.add_task(
+        db,
+        organization_id=org.id,
+        card_id=card.id,
+        title="Найти товар",
+        department=Department.SUPPLY,
+        created_by=чужой.id,
+    )
+    cards.take_task(db, organization_id=org.id, task_id=задача.id, user_id=чужой.id)
+    db.commit()
+
+    мои = app_client.get("/api/cards/tasks?department=supply&mine=true").json()
+    ничьи = app_client.get("/api/cards/tasks?department=supply&unassigned=true").json()
+    все = app_client.get("/api/cards/tasks?department=supply").json()
+
+    assert мои == []
+    assert ничьи == []
+    assert [one["title"] for one in все] == ["Найти товар"]
+
+    # И тот же список, суженный до одного человека: это и есть отбор «на ком».
+    его = app_client.get(f"/api/cards/tasks?department=supply&assignee={чужой.id}").json()
+    assert [one["id"] for one in его] == [one["id"] for one in все]

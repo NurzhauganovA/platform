@@ -33,6 +33,7 @@ import {
   type Card,
   type Sheet,
   type SheetColumn,
+  type SheetKind,
 } from "@/api/cards";
 import { worklists, type SpecFile, type WorklistSlug } from "@/api/worklist";
 import { ApiError } from "@/api/client";
@@ -51,6 +52,59 @@ const DEMAND = "demand";
 const BRIEF = "brief";
 
 /**
+ * Итоги по денежным столбцам.
+ *
+ * Считаются в браузере, а не на сервере: таблица целиком уже в памяти вкладки,
+ * и запрос ради сложения сорока чисел — это полсекунды ожидания на каждое
+ * нажатие. Правки при этом сохраняются через паузу, а итог должен меняться
+ * вместе с набором, а не после неё.
+ *
+ * Какие столбцы денежные, решает не заголовок. Названия расходятся — «Цена»,
+ * «Цена, ₸», «Закупочная», — и правило по заголовку сломалось бы на первом же
+ * переименованном столбце. Признак другой: столбец заводит платформа, и ключ у
+ * него известен.
+ */
+function sums(sheet: Sheet): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const column of sheet.columns) {
+    if (!MONEY.has(column.key)) continue;
+    let sum = 0;
+    let seen = 0;
+    for (const row of sheet.rows) {
+      const value = money(row.cells[column.key] ?? "");
+      if (value === null) continue;
+      sum += value;
+      seen += 1;
+    }
+    // Пустой столбец итога не получает: «0 ₸» под ценой читается как «мы
+    // считаем, что бесплатно», а не как «ещё не заполнено».
+    if (seen > 0) out[column.key] = `${sum.toLocaleString("ru-RU")} ₸`;
+  }
+  return out;
+}
+
+/** Столбцы платформы, в которых лежат деньги. */
+const MONEY = new Set(["price", "cost"]);
+
+/**
+ * Число из ячейки. `null` — там не число.
+ *
+ * Пишут по-разному: «1 250 000», «1250000», «1 250 000 ₸», «1250,50». Разбор
+ * снисходительный намеренно — иначе одна ячейка с хвостом «₸» выкидывает
+ * позицию из суммы, и итог тихо расходится с тем, что видно глазами.
+ */
+function money(raw: string): number | null {
+  const clean = raw
+    .replace(/\u00a0/g, " ")
+    .replace(/[^\d,.-]/g, "")
+    .replace(/\s/g, "")
+    .replace(",", ".");
+  if (!clean || clean === "-" || clean === ".") return null;
+  const value = Number(clean);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
  * Подсказка в пустой ячейке наших столбцов.
  *
  * Словами работы, а не названием столбца: «Цена» над пустым полем и «Цена»
@@ -62,7 +116,20 @@ const HINTS: Record<string, string> = {
   ours: "марка и модель",
 };
 
-export function SpecSheet({ card }: { card: Card }) {
+export function SpecSheet({
+  card,
+  kind = "analysis",
+}: {
+  card: Card;
+  /**
+   * Чья таблица. Разбор и снабжение устроены одинаково и рисуются одним
+   * экраном: снабжение продолжает работу разбора теми же строками. Второй
+   * такой же экран разошёлся бы с первым на первом же столбце — а расхождение
+   * между тем, что считал разборщик, и тем, что видит снабжение, это спор о
+   * цене через неделю после подачи.
+   */
+  kind?: SheetKind;
+}) {
   const cache = useQueryClient();
   const [draft, setDraft] = useState<Sheet | null>(null);
   const [trouble, setTrouble] = useState("");
@@ -75,8 +142,8 @@ export function SpecSheet({ card }: { card: Card }) {
   const dirty = useRef(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["card", card.id, "sheet", variant],
-    queryFn: () => sheetApi.get(card.id, variant),
+    queryKey: ["card", card.id, "sheet", kind, variant],
+    queryFn: () => sheetApi.get(card.id, variant, kind),
     staleTime: 30_000,
     // Пока разбор идёт, таблица перечитывается сама. Опросом, а не потоком
     // событий: поток отвечает на «где именно сейчас модель», а этого никто
@@ -119,10 +186,12 @@ export function SpecSheet({ card }: { card: Card }) {
     // переключиться — черновик A уехал бы в адрес B и затёр бы его целиком,
     // вместе со скопированными требованиями заказчика.
     mutationFn: (next: Sheet) =>
-      sheetApi.save(card.id, next.variant, {
-        columns: next.columns,
-        rows: next.rows,
-      }),
+      sheetApi.save(
+        card.id,
+        next.variant,
+        { columns: next.columns, rows: next.rows },
+        next.kind,
+      ),
     onSuccess: () => {
       dirty.current = false;
       setSaved(true);
@@ -152,7 +221,7 @@ export function SpecSheet({ card }: { card: Card }) {
   });
 
   const branch = useMutation({
-    mutationFn: () => sheetApi.branch(card.id),
+    mutationFn: () => sheetApi.branch(card.id, kind),
     onSuccess: (fresh) => {
       setTrouble("");
       dirty.current = false;
@@ -164,7 +233,7 @@ export function SpecSheet({ card }: { card: Card }) {
   });
 
   const dropVariant = useMutation({
-    mutationFn: (letter: string) => sheetApi.drop(card.id, letter),
+    mutationFn: (letter: string) => sheetApi.drop(card.id, letter, kind),
     onSuccess: (fresh) => {
       setTrouble("");
       dirty.current = false;
@@ -207,6 +276,7 @@ export function SpecSheet({ card }: { card: Card }) {
   }
 
   const empty = draft.rows.length === 0;
+  const supply = kind === "supply";
 
   function addRow(sheet: Sheet) {
     change({
@@ -260,7 +330,26 @@ export function SpecSheet({ card }: { card: Card }) {
         />
       )}
 
-      {empty ? (
+      {supply && !draft.handed ? (
+        /* Снабжению таблицу заводит разборщик, а не оно само. Пустая таблица
+           без объяснения читалась бы как поломка: снабженец видит те же
+           столбцы, начинает заполнять — а разборщик в это время правит свою,
+           и на согласовании оказываются две разные цены. */
+        <Panel className="px-[15px] py-8 text-center">
+          <p className="text-[13px] text-ink">
+            Разбор ещё не передан снабжению
+          </p>
+          <p className="mx-auto mt-1 max-w-lg text-[12.5px] text-ink-muted">
+            Таблица появится здесь копией разбора — с теми же позициями и
+            требованиями заказчика. Дальше она живёт своей жизнью: снабжение
+            дописывает поставщика, закупочную цену и срок, а разбор остаётся
+            тем, по которому считали участие.
+          </p>
+          <p className="mx-auto mt-2 max-w-lg text-[12.5px] text-ink-muted">
+            Передаёт разборщик кнопкой «Передать снабжению» во вкладке «Разбор».
+          </p>
+        </Panel>
+      ) : empty ? (
         /* Пустое состояние честно разделяет два случая. «Спецификация ещё не
            разобрана» звучало одинаково и когда файл приложен, и когда его
            вовсе нет, — и по этой фразе нельзя было понять, чего ждать от
@@ -327,7 +416,7 @@ export function SpecSheet({ card }: { card: Card }) {
             <Button variant="secondary" onClick={() => addRow(draft)}>
               + Строка
             </Button>
-            <ToSupply card={card} />
+            {!supply && <ToSupply card={card} handed={draft.handed} />}
           </div>
         </Panel>
       )}
@@ -568,6 +657,7 @@ function Grid({
     () => sheet.columns.reduce((sum, column) => sum + column.width, 0),
     [sheet.columns],
   );
+  const totals = useMemo(() => sums(sheet), [sheet]);
 
   function setCell(rowKey: string, columnKey: string, value: string) {
     onChange({
@@ -647,6 +737,7 @@ function Grid({
                 // моделью вернёт свои три столбца обратно, и об этом сказано в
                 // подсказке.
                 canDrop
+                total={totals[column.key]}
                 onTitle={(title) => setColumn(column.key, { title })}
                 onWidth={(width) => setColumn(column.key, { width })}
                 onAdd={() => addColumn(column.key)}
@@ -710,6 +801,7 @@ function Grid({
 function Header({
   column,
   canDrop,
+  total,
   onTitle,
   onWidth,
   onAdd,
@@ -717,6 +809,8 @@ function Header({
 }: {
   column: SheetColumn;
   canDrop: boolean;
+  /** Итог по столбцу. Пусто — столбец не денежный или в нём нет чисел. */
+  total?: string;
   onTitle: (title: string) => void;
   onWidth: (width: number) => void;
   onAdd: () => void;
@@ -771,6 +865,21 @@ function Header({
           </button>
         )}
       </span>
+
+      {/* Итог под заголовком, а не строкой в подвале таблицы. Строк в разборе
+          бывает под сорок, и подвал уезжает за нижний край экрана: сумму
+          спрашивают на планёрке вслух, а искать её прокруткой — это те самые
+          пять секунд молчания. Складываются только денежные столбцы: в
+          «Кратко» числа тоже есть, но сумма ядер и гигабайтов не значит
+          ничего. */}
+      {total && (
+        <span
+          className="mt-0.5 block truncate text-[12px] font-semibold text-ink tabular-nums"
+          title={`Итого по столбцу «${column.title}»`}
+        >
+          {total}
+        </span>
+      )}
 
       {/* Полоса шириной в шесть точек: попасть в один пиксель мышью нельзя. */}
       <span
@@ -877,7 +986,7 @@ function freeKey(taken: string[], prefix: string): string {
  * сейчас. Назначить конкретного человека отсюда нельзя намеренно: кто свободен,
  * в отделе знают лучше.
  */
-function ToSupply({ card }: { card: Card }) {
+function ToSupply({ card, handed }: { card: Card; handed: boolean }) {
   const cache = useQueryClient();
   const [trouble, setTrouble] = useState("");
   const [sent, setSent] = useState(false);
@@ -895,18 +1004,25 @@ function ToSupply({ card }: { card: Card }) {
   );
 
   const ask = useMutation({
-    mutationFn: () =>
-      cardsApi.addTask(card.id, {
+    // Два действия одним нажатием, и они неразделимы. Задача без таблицы
+    // означает снабженца, который открыл пустую вкладку и пошёл спрашивать;
+    // таблица без задачи — таблицу, о которой никто не знает. Раньше кнопка
+    // делала только первое, и вкладки «Снабжение» не было вовсе.
+    mutationFn: async () => {
+      await sheetApi.handover(card.id);
+      return cardsApi.addTask(card.id, {
         title: `Найти товар и подтвердить цены · ${card.code}`,
         department: "supply",
-        body: "Разбор спецификации собран. Нужны поставщик, цена и срок поставки.",
+        body: "Разбор спецификации собран и передан таблицей во вкладку «Снабжение». Нужны поставщик, цена и срок поставки.",
         due_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
-      }),
+      });
+    },
     onSuccess: () => {
       setTrouble("");
       setSent(true);
       void cache.invalidateQueries({ queryKey: ["card-tasks", card.id] });
       void cache.invalidateQueries({ queryKey: ["card-tasks", "open"] });
+      void cache.invalidateQueries({ queryKey: ["card", card.id, "sheet"] });
     },
     onError: (error) =>
       setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
@@ -915,11 +1031,11 @@ function ToSupply({ card }: { card: Card }) {
   return (
     <span className="ml-auto flex flex-wrap items-center gap-2.5">
       <Note>
-        {already
-          ? "Задача снабжению уже стоит — она в очереди отдела."
+        {already || handed
+          ? "Передано: таблица во вкладке «Снабжение», задача в очереди отдела."
           : sent
             ? "Передано. Снабжение возьмёт задачу и назовёт срок."
-            : "Заведём задачу отделу: найти товар, подтвердить цену и срок."}
+            : "Скопируем таблицу во вкладку «Снабжение» и заведём задачу отделу."}
       </Note>
       {trouble && (
         <span className="text-[12.5px] text-critical">{trouble}</span>
@@ -927,7 +1043,7 @@ function ToSupply({ card }: { card: Card }) {
       <Button
         variant="primary"
         onClick={() => ask.mutate()}
-        disabled={already || ask.isPending}
+        disabled={already || handed || ask.isPending}
         title="Завести снабжению задачу найти товар. Взять её и назвать срок они смогут сами"
       >
         {ask.isPending ? "Передаём…" : "Передать снабжению"}

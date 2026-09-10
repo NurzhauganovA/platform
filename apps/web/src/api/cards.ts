@@ -7,6 +7,7 @@
  */
 
 import { api } from "@/api/client";
+import type { Preview } from "@/api/worklist";
 
 /** Где лот в сквозном процессе. Порядок объявления — порядок жизни. */
 export type LotStatus =
@@ -107,6 +108,24 @@ export type Card = {
   /** Обсуждение по лоту. Пусто — его не заводили. В списке карточек не
    *  приходит: там оно не показывается, а сотня чтений ради него лишняя. */
   discussion: Talk | null;
+  /** Ход по отделам: четыре точки в строке списка и галочки в карточке. */
+  desks: Desk[];
+};
+
+/**
+ * Отработал ли отдел по лоту.
+ *
+ * Считает сервер. Правила у отделов разные — обсуждение закрывается
+ * отправкой замечания, разбор переходом этапа, снабжение и технолог
+ * закрытыми задачами, — и второй набор этих правил в браузере разошёлся бы с
+ * первым на первом же.
+ */
+export type Desk = {
+  desk: string;
+  title: string;
+  done: boolean;
+  /** Сколько задач ещё висит. Ноль при `done: false` — до отдела не дошли. */
+  open_tasks: number;
 };
 
 /** Этап обсуждения. Наш ход, а не ответ заказчика. */
@@ -320,6 +339,8 @@ export const cardsApi = {
       department?: Department;
       mine?: boolean;
       unassigned?: boolean;
+      /** Задачи одного сотрудника. Пусто и без `mine` — весь отдел. */
+      assignee?: string;
       card_id?: string;
       /** `all` — и открытые, и закрытые. Умолчание — только открытые. */
       state?: TaskState | "all";
@@ -391,8 +412,19 @@ export const cardsApi = {
   detach: (linkId: string) => api.delete<void>(`/api/cards/files/${linkId}`),
 
   /** Ссылка на скачивание. Хэш в адресе, а не имя: имена повторяются. */
-  fileUrl: (cardId: string, sha256: string) =>
-    `/api/cards/${cardId}/files/${sha256}`,
+  /** Ссылка на сам файл. `inline` — показать во вкладке, а не скачать. */
+  fileUrl: (cardId: string, sha256: string, inline = false) =>
+    `/api/cards/${cardId}/files/${sha256}${inline ? "?inline=1" : ""}`,
+
+  /**
+   * Разбор файла для показа: абзацы, таблицы, листы.
+   *
+   * Тот же разбор и тот же просмотрщик, что у документов закупки. Второй
+   * способ показывать `.docx` разошёлся бы с первым на первой же таблице с
+   * объединёнными ячейками — а таблицы в спецификациях именно такие.
+   */
+  filePreview: (cardId: string, sha256: string) =>
+    api.get<Preview>(`/api/cards/${cardId}/files/${sha256}/view`),
 };
 
 /** Шаги пути в том порядке, в каком лот их проходит. */
@@ -431,6 +463,9 @@ export type SheetRow = {
   cells: Record<string, string>;
 };
 
+/** Чья таблица: разбор или снабжение. */
+export type SheetKind = "analysis" | "supply";
+
 export type Sheet = {
   columns: SheetColumn[];
   rows: SheetRow[];
@@ -438,6 +473,10 @@ export type Sheet = {
   variant: string;
   /** Какие варианты есть у лота. «A» — всегда. */
   variants: string[];
+  /** Чья это таблица: разбора или снабжения. */
+  kind: SheetKind;
+  /** Заведена ли снабжению его таблица. По ней вкладка решает, что показывать. */
+  handed: boolean;
   /** Что можно сделать с вариантами: `branch`, `drop`. Решает сервер. */
   can: string[];
   /** Файл, по которому собрано. По нему видно, не устарела ли таблица. */
@@ -455,16 +494,23 @@ export type Sheet = {
 };
 
 export const sheetApi = {
-  // Вариант — параметром адреса, а не полем тела: по адресу совпадает ключ
-  // кэша, и таблица B не подменяет собой таблицу A в памяти вкладки.
-  get: (cardId: string, variant = "A") =>
-    api.get<Sheet>(`/api/cards/${cardId}/sheet?variant=${variant}`),
+  // Вариант и вид — параметрами адреса, а не полями тела: по адресу совпадает
+  // ключ кэша, и таблица снабжения не подменяет собой разбор в памяти вкладки.
+  get: (cardId: string, variant = "A", kind: SheetKind = "analysis") =>
+    api.get<Sheet>(
+      `/api/cards/${cardId}/sheet?variant=${variant}&kind=${kind}`,
+    ),
 
   save: (
     cardId: string,
     variant: string,
     body: { columns: SheetColumn[]; rows: SheetRow[] },
-  ) => api.put<Sheet>(`/api/cards/${cardId}/sheet?variant=${variant}`, body),
+    kind: SheetKind = "analysis",
+  ) =>
+    api.put<Sheet>(
+      `/api/cards/${cardId}/sheet?variant=${variant}&kind=${kind}`,
+      body,
+    ),
 
   /** Ставит разбор в очередь: модель стоит денег и думает минуту. */
   build: (cardId: string, variant = "A") =>
@@ -472,10 +518,23 @@ export const sheetApi = {
       `/api/cards/${cardId}/sheet?variant=${variant}`,
     ),
 
-  /** Заводит следующий вариант от «A»: требования те же, свои столбцы пустые. */
-  branch: (cardId: string) =>
-    api.post<Sheet>(`/api/cards/${cardId}/sheet/variants`),
+  /** Заводит следующий вариант: требования те же, свои столбцы пустые. */
+  branch: (cardId: string, kind: SheetKind = "analysis") =>
+    api.post<Sheet>(`/api/cards/${cardId}/sheet/variants?kind=${kind}`),
 
-  drop: (cardId: string, variant: string) =>
-    api.delete<Sheet>(`/api/cards/${cardId}/sheet/variants/${variant}`),
+  drop: (cardId: string, variant: string, kind: SheetKind = "analysis") =>
+    api.delete<Sheet>(
+      `/api/cards/${cardId}/sheet/variants/${variant}?kind=${kind}`,
+    ),
+
+  /**
+   * Передаёт разбор снабжению — копией таблицы.
+   *
+   * Копией, а не той же записью: дальше они расходятся. Снабжение заменяет
+   * позицию двумя, когда товара нет, и правит количество под кратность
+   * упаковки; правки поверх разбора означали бы, что маржа, показанная на
+   * согласовании, задним числом перестала сходиться.
+   */
+  handover: (cardId: string, variant = "A") =>
+    api.post<Sheet>(`/api/cards/${cardId}/sheet/handover?variant=${variant}`),
 };

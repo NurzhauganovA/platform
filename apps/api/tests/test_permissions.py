@@ -264,3 +264,70 @@ def test_fail_vklyuchit_kod_mozhet_tolko_administrator(
     _login(db, app_client, Role.MANAGER)
     ответ = app_client.put("/api/goszakup/codes/262011.100.000000/active")
     assert ответ.status_code == 403
+
+
+def _без_servisa(client: TestClient) -> None:
+    """Гасит адрес сервиса у собранного приложения.
+
+    На машине разработчика `.env` обычно заполнен, и проверка «сервис не
+    настроен» без этого уходила бы в настоящую сеть за настоящим отказом —
+    то есть проверяла бы связь с чужой машиной, а не свою ветку кода.
+    """
+    client.app.state.settings.notify.url = ""  # type: ignore[attr-defined]
+
+
+def test_fail_uvedomleniya_tolko_administratoru(db: DbSession, app_client: TestClient) -> None:
+    """За экраном уведомлений почты всех сотрудников и то, кто что себе
+    отключил. Вопрос «почему Ивану не приходит» задаёт не Иван."""
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.MANAGER)
+    db.commit()
+
+    assert app_client.get("/api/notify").status_code == 403
+    assert app_client.get("/api/notify/people").status_code == 403
+    assert app_client.post("/api/notify/sync").status_code == 403
+
+
+def test_fail_bez_servisa_ekran_govorit_chto_ne_nastroeno(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Сервис не настроен — это рабочее состояние, а не поломка.
+
+    У разработчика он обычно не поднят, и экран должен сказать об этом словами,
+    а не отдать пятисотую: администратор, увидевший ошибку, идёт чинить то,
+    чего не делают намеренно.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+    _без_servisa(app_client)
+
+    ответ = app_client.get("/api/notify")
+
+    assert ответ.status_code == 200, ответ.text
+    сводка = ответ.json()
+    assert сводка["configured"] is False
+    assert сводка["reachable"] is False
+    assert "PLATFORM__NOTIFY__URL" in сводка["trouble"]
+    # Сколько людей у нас — считается всегда: это половина ответа на вопрос,
+    # доехал ли реестр.
+    assert сводка["people_here"] >= 1
+
+
+def test_fail_vygruzka_bez_servisa_otkazyvaet_slovami(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Кнопка «Выгрузить сотрудников» без настроенного сервиса не делает вид,
+    что сработала: молчаливый успех отправил бы администратора искать причину
+    в сервисе, которого нет."""
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+    _без_servisa(app_client)
+
+    ответ = app_client.post("/api/notify/sync")
+
+    assert ответ.status_code == 409, ответ.text

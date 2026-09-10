@@ -36,6 +36,7 @@ import {
   type WorklistSlug,
 } from "@/api/worklist";
 import { Button, Card as Panel, Spinner, bytes, cx } from "@/ui";
+import { FileWindow } from "./FileWindow";
 import { BarHead, BarTitle, Chip, Note, plural, stamp } from "./kit";
 import { Highlighted, MentionBox, collect } from "./Mentions";
 
@@ -58,6 +59,9 @@ export function Files({ card }: { card: Card }) {
   // умолчанию она возвращает ровно тот список, от которого уходили. Хранится
   // раскрытое, а не закрытое: закрыто всё, пока не открыли.
   const [openShelves, setOpenShelves] = useState<Record<string, boolean>>({});
+  // Какой файл открыт во весь экран. Копией, а не ссылкой в список: список
+  // обновляется фоном, и окно, смотрящее в него, мигало бы на каждом обновлении.
+  const [shown, setShown] = useState<Attachment | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["card-files", card.id],
@@ -158,6 +162,12 @@ export function Files({ card }: { card: Card }) {
   const shelves = folders ?? [];
   const loose = all.filter((item) => !item.folder_id);
   const twins = numbering(all);
+  // Соседи для стрелок — те, кто лежит там же. Листать из папки в общий
+  // список нельзя: человек смотрит переписку с одним поставщиком, и следующим
+  // кадром у него оказался бы чужой счёт.
+  const neighbours = shown
+    ? all.filter((one) => one.folder_id === shown.folder_id)
+    : [];
 
   return (
     <Panel className="overflow-hidden">
@@ -274,7 +284,6 @@ export function Files({ card }: { card: Card }) {
           {shelves.map((folder) => (
             <Shelf
               key={folder.id}
-              card={card}
               folder={folder}
               folders={shelves}
               files={all.filter((item) => item.folder_id === folder.id)}
@@ -286,6 +295,7 @@ export function Files({ card }: { card: Card }) {
                   [folder.id]: !was[folder.id],
                 }))
               }
+              onOpen={setShown}
               busy={drop.isPending || move.isPending || dropFolder.isPending}
               onAdd={() => {
                 setInto(folder.id);
@@ -302,11 +312,11 @@ export function Files({ card }: { card: Card }) {
               {loose.map((item) => (
                 <Row
                   key={item.id}
-                  card={card}
                   file={item}
                   folders={shelves}
                   twin={twins[item.id] ?? 0}
                   busy={drop.isPending || move.isPending}
+                  onOpen={() => setShown(item)}
                   onDrop={() => drop.mutate(item.id)}
                   onMove={(to) => move.mutate({ linkId: item.id, folder: to })}
                 />
@@ -324,6 +334,16 @@ export function Files({ card }: { card: Card }) {
             </p>
           )}
         </>
+      )}
+
+      {shown && (
+        <FileWindow
+          cardId={card.id}
+          file={shown}
+          neighbours={neighbours}
+          onMove={setShown}
+          onClose={() => setShown(null)}
+        />
       )}
     </Panel>
   );
@@ -437,7 +457,6 @@ function FolderMark({ open }: { open: boolean }) {
  * от пустой, и «а туда точно положилось» проверяют открыванием каждой.
  */
 function Shelf({
-  card,
   folder,
   folders,
   files,
@@ -445,12 +464,12 @@ function Shelf({
   open,
   busy,
   onToggle,
+  onOpen,
   onAdd,
   onDropFolder,
   onDropFile,
   onMove,
 }: {
-  card: Card;
   folder: Folder;
   folders: Folder[];
   files: Attachment[];
@@ -459,6 +478,7 @@ function Shelf({
   open: boolean;
   busy: boolean;
   onToggle: () => void;
+  onOpen: (file: Attachment) => void;
   onAdd: () => void;
   onDropFolder: () => void;
   onDropFile: (linkId: string) => void;
@@ -571,11 +591,11 @@ function Shelf({
             {files.map((item) => (
               <Row
                 key={item.id}
-                card={card}
                 file={item}
                 folders={folders}
                 twin={twins[item.id] ?? 0}
                 busy={busy}
+                onOpen={() => onOpen(item)}
                 onDrop={() => onDropFile(item.id)}
                 onMove={(to) => onMove(item.id, to)}
               />
@@ -682,21 +702,21 @@ function Portal({ card }: { card: Card }) {
 }
 
 function Row({
-  card,
   file,
   folders,
   twin,
   busy,
+  onOpen,
   onDrop,
   onMove,
 }: {
-  card: Card;
   file: Attachment;
   /** Куда можно переложить. Пусто — папок у лота ещё нет. */
   folders: Folder[];
   /** Который это файл с таким именем. Ноль — имя у лота одно такое. */
   twin: number;
   busy: boolean;
+  onOpen: () => void;
   onDrop: () => void;
   onMove: (to: string) => void;
 }) {
@@ -704,10 +724,11 @@ function Row({
     <li className="flex items-center gap-[11px] border-b border-hairline/70 px-[15px] py-[11px] last:border-b-0">
       <Kind name={file.name} />
       <div className="min-w-0 flex-1">
-        <a
-          href={cardsApi.fileUrl(card.id, file.sha256)}
-          className="flex items-baseline gap-1.5 text-[13px] font-medium text-ink hover:underline"
-          title={file.name}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex w-full items-baseline gap-1.5 text-left text-[13px] font-medium text-ink hover:underline"
+          title="Открыть файл"
         >
           <span className="truncate">{file.name}</span>
           {/* Номер стоит вне имени и не подчёркивается вместе с ним: это наша
@@ -720,7 +741,7 @@ function Row({
               ({twin})
             </span>
           )}
-        </a>
+        </button>
         <p className="truncate text-[11.5px] text-ink-muted tabular-nums">
           {[
             bytes(file.size_bytes),
@@ -755,6 +776,13 @@ function Row({
         </select>
       )}
 
+      <button
+        type="button"
+        onClick={onOpen}
+        className="shrink-0 rounded-[6px] px-2 py-0.5 text-[11.5px] font-medium text-series-1 transition hover:underline"
+      >
+        Открыть
+      </button>
       <button
         type="button"
         disabled={busy}

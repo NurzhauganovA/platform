@@ -158,6 +158,13 @@ export function CardPage() {
                   вокруг них давала рамку в рамке: две линии в трёх точках от
                   друг друга читаются как сбой отрисовки. */}
               {tab === "source" && <SpecSheet card={data} />}
+              {tab === "supply" && <SpecSheet card={data} kind="supply" />}
+              {(tab === "technologist" || tab === "assembler") && (
+                <Awaited
+                  title={tab === "technologist" ? "Технолог" : "Сборщик"}
+                  about={ABOUT[tab]}
+                />
+              )}
               {tab === "discussion" && <Discussion card={data} />}
               {tab === "files" && <Files card={data} />}
               {tab === "history" && <History card={data} />}
@@ -183,19 +190,56 @@ export function CardPage() {
   );
 }
 
-type Tab = "discussion" | "source" | "files" | "history";
+type Tab =
+  | "discussion"
+  | "source"
+  | "supply"
+  | "technologist"
+  | "assembler"
+  | "files"
+  | "history";
 
+// Порядок вкладок — порядок работы над лотом: замечание заказчику, разбор
+// спецификации, поиск товара, проверка технологом, сборка. Отделы идут подряд
+// и после разбора намеренно: снабжение начинает с того, чем разбор кончил, и
+// вкладка, стоящая до него, читалась бы как «сначала сюда».
 const TABS: { key: Tab; title: string }[] = [
   { key: "discussion", title: "Обсуждение" },
   { key: "source", title: "Разбор" },
+  { key: "supply", title: "Снабжение" },
+  { key: "technologist", title: "Технолог" },
+  { key: "assembler", title: "Сборщик" },
   { key: "files", title: "Файлы" },
   { key: "history", title: "Кто работал" },
 ];
+
+/**
+ * Вкладка, которую ещё не сделали.
+ *
+ * Пустая вкладка без объяснения читается как поломка: человек нажимает второй
+ * раз, обновляет страницу и идёт спрашивать. Здесь сказано прямо — работа
+ * отдела ведётся задачами в правом столбце, а свой экран у него появится.
+ */
+function Awaited({ title, about }: { title: string; about: string }) {
+  return (
+    <div className="rounded-[10px] border border-hairline bg-surface px-[15px] py-[26px] text-center">
+      <p className="text-[13px] font-medium text-ink">{title}</p>
+      <p className="mx-auto mt-1 max-w-md text-[12.5px] text-ink-muted">
+        {about}. Свой экран у этого отдела появится позже — пока работа идёт
+        задачами: заведите её в правом столбце, там же видно, кто взял и что
+        ответил.
+      </p>
+    </div>
+  );
+}
 
 /** Чем эта вкладка отличается от соседней. Одного названия мало. */
 const ABOUT: Record<Tab, string> = {
   discussion: "официальное обращение к заказчику до подачи заявки",
   source: "спецификация заказчика, разложенная по предметам",
+  supply: "та же таблица глазами снабжения: поставщик, закупочная цена, срок",
+  technologist: "подтверждение, что предложенное подходит под требования",
+  assembler: "сборка и отгрузка: что соберут и в какой срок",
   files: "спецификация заказчика и то, что приложили мы",
   history: "кто что делал — по этому считаем премию",
 };

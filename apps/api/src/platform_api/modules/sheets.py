@@ -81,6 +81,8 @@ class Table:
     rows: tuple[Row, ...]
     variant: str = "A"
     """Какой это вариант разбора."""
+    kind: str = "analysis"
+    """Чья таблица: разбора или снабжения."""
     source_name: str = ""
     model: str = ""
     trouble: str = ""
@@ -136,6 +138,17 @@ def default_columns() -> tuple[Column, ...]:
     return (*base_columns(), *hand_columns())
 
 
+ANALYSIS = "analysis"
+SUPPLY = "supply"
+"""Чья таблица: разбора или снабжения.
+
+Снабжение продолжает работу разбора — те же позиции плюс поставщик, закупочная
+цена и срок, — но живёт дальше своей жизнью: товара по позиции может не
+оказаться вовсе, и снабжение заменит её двумя. Правки поверх одной таблицы
+означали бы, что маржа, показанная на согласовании, задним числом перестала
+сходиться с разбором.
+"""
+
 FIRST = "A"
 """Вариант, который собирает модель. Есть всегда."""
 
@@ -149,19 +162,23 @@ MAX_VARIANTS = 6
 """
 
 
-def variants(db: DbSession, card: LotCard) -> list[str]:
+def variants(db: DbSession, card: LotCard, kind: str = ANALYSIS) -> list[str]:
     """Какие варианты у лота есть. «A» — всегда, даже если таблицы ещё нет."""
     letters = list(
         db.scalars(
             select(SpecSheet.variant)
-            .where(SpecSheet.module == card.module, SpecSheet.row_id == card.row_id)
+            .where(
+                SpecSheet.module == card.module,
+                SpecSheet.row_id == card.row_id,
+                SpecSheet.kind == kind,
+            )
             .order_by(SpecSheet.variant)
         )
     )
     return letters or [FIRST]
 
 
-def branch(db: DbSession, card: LotCard) -> str:
+def branch(db: DbSession, card: LotCard, kind: str = ANALYSIS) -> str:
     """Заводит следующий вариант от «A». Возвращает его букву.
 
     Копируются столбцы целиком и ячейки столбцов модели — предмет, требование
@@ -170,7 +187,7 @@ def branch(db: DbSession, card: LotCard) -> str:
     именно предлагаем. Переписывать требования руками во втором варианте
     значит однажды переписать их с ошибкой и подать заявку по придуманному.
     """
-    letters = variants(db, card)
+    letters = variants(db, card, kind)
     if len(letters) >= MAX_VARIANTS:
         raise SpokenError(f"Вариантов уже {len(letters)}: больше не заводим")
 
@@ -182,7 +199,7 @@ def branch(db: DbSession, card: LotCard) -> str:
     if not letter:
         raise SpokenError("Свободных букв не осталось")
 
-    first = _find(db, card, FIRST)
+    first = _find(db, card, FIRST, kind)
     columns = _columns(first) if first is not None else default_columns()
     rows = _out(first).rows if first is not None else ()
     kept = {column.key for column in columns if column.filled_by == BY_MODEL}
@@ -192,6 +209,7 @@ def branch(db: DbSession, card: LotCard) -> str:
         module=card.module,
         row_id=card.row_id,
         variant=letter,
+        kind=kind,
         columns=[_as_json(column) for column in columns],
         rows=[
             {
@@ -208,13 +226,71 @@ def branch(db: DbSession, card: LotCard) -> str:
     return letter
 
 
-def drop(db: DbSession, card: LotCard, variant: str) -> None:
+def handover(db: DbSession, card: LotCard, variant: str = FIRST) -> Table:
+    """Заводит снабжению его таблицу — копию разбора.
+
+    Копией, а не той же записью. Дальше эти таблицы расходятся: снабжение
+    заменяет позицию двумя, когда товара нет, дописывает поставщика и срок,
+    правит количество под кратность упаковки. Правки поверх разбора означали
+    бы, что маржа, посчитанная разборщиком, задним числом перестала сходиться
+    с тем, что показывали на согласовании, — а объяснять расхождение придётся
+    через неделю и по памяти.
+
+    Переносится всё: и требования заказчика, и наши цены. Снабжение отталкивается
+    от той цены, по которой считали участие: его работа — подтвердить её
+    поставщиком или сказать, что она не набирается.
+
+    Повторная передача таблицу не затирает. Разбор пересобирают и передают
+    второй раз, а в снабженческой копии к этому моменту уже стоят найденные
+    поставщики — переписать её значит стереть чужой рабочий день.
+    """
+    already = _find(db, card, variant, SUPPLY)
+    if already is not None:
+        return _out(already)
+
+    source = _find(db, card, variant, ANALYSIS)
+    columns = _columns(source) if source is not None else default_columns()
+    rows = _out(source).rows if source is not None else ()
+
+    made = SpecSheet(
+        organization_id=card.organization_id,
+        module=card.module,
+        row_id=card.row_id,
+        variant=variant,
+        kind=SUPPLY,
+        columns=[_as_json(column) for column in columns],
+        rows=[{"key": row.key, "cells": dict(row.cells)} for row in rows],
+        source_name=source.source_name if source is not None else "",
+    )
+    db.add(made)
+    db.flush()
+    logger.info("sheet.handover", code=card.code, variant=variant, rows=len(made.rows))
+    return _out(made)
+
+
+def handed(db: DbSession, card: LotCard) -> bool:
+    """Заведена ли снабжению таблица. По ней экран решает, что показывать."""
+    return (
+        db.scalar(
+            select(SpecSheet.id)
+            .where(
+                SpecSheet.module == card.module,
+                SpecSheet.row_id == card.row_id,
+                SpecSheet.kind == SUPPLY,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def drop(db: DbSession, card: LotCard, variant: str, kind: str = ANALYSIS) -> None:
     """Убирает вариант. Последний не убирается: лот без разбора — пустая вкладка."""
-    letters = variants(db, card)
+    letters = variants(db, card, kind)
     if len(letters) <= 1:
         raise SpokenError("Это единственный вариант — удалять нечего")
 
-    found = _find(db, card, variant)
+    found = _find(db, card, variant, kind)
     if found is None:
         raise SpokenError(f"Варианта «{variant}» у этого лота нет")
     db.delete(found)
@@ -222,16 +298,16 @@ def drop(db: DbSession, card: LotCard, variant: str) -> None:
     logger.info("sheet.dropped", code=card.code, variant=variant)
 
 
-def load(db: DbSession, card: LotCard, variant: str = FIRST) -> Table:
+def load(db: DbSession, card: LotCard, variant: str = FIRST, kind: str = ANALYSIS) -> Table:
     """Отдаёт таблицу лота. Нет — пустую с заготовкой столбцов.
 
     Пустая, а не отсутствующая: экран должен показать заготовку и кнопку
     «Разобрать», а не пустоту, по которой не понять, потеряно что-то или ещё
     не начато.
     """
-    found = _find(db, card, variant)
+    found = _find(db, card, variant, kind)
     if found is None:
-        return Table(columns=default_columns(), rows=(), variant=variant)
+        return Table(columns=default_columns(), rows=(), variant=variant, kind=kind)
     return _out(found)
 
 
@@ -242,6 +318,7 @@ def save(
     columns: list[Column],
     rows: list[Row],
     variant: str = FIRST,
+    kind: str = ANALYSIS,
 ) -> Table:
     """Сохраняет правки человека целиком.
 
@@ -249,13 +326,14 @@ def save(
     бы гонку между «переименовал столбец» и «дописал строку», сделанными
     одновременно двумя людьми в одном лоте.
     """
-    sheet = _find(db, card, variant)
+    sheet = _find(db, card, variant, kind)
     if sheet is None:
         sheet = SpecSheet(
             organization_id=card.organization_id,
             module=card.module,
             row_id=card.row_id,
             variant=variant,
+            kind=kind,
         )
         db.add(sheet)
     sheet.columns = [_as_json(column) for column in columns]
@@ -273,6 +351,7 @@ def build(
     spec_name: str,
     user_id: uuid.UUID | None = None,
     variant: str = FIRST,
+    kind: str = ANALYSIS,
 ) -> Table:
     """Раскладывает спецификацию моделью.
 
@@ -284,13 +363,14 @@ def build(
     Спецификации нет — это не отказ, а ответ: у большинства лотов портала её
     действительно нет, и сказать об этом надо словами, а не пустой таблицей.
     """
-    sheet = _find(db, card, variant)
+    sheet = _find(db, card, variant, kind)
     if sheet is None:
         sheet = SpecSheet(
             organization_id=card.organization_id,
             module=card.module,
             row_id=card.row_id,
             variant=variant,
+            kind=kind,
         )
         db.add(sheet)
 
@@ -358,14 +438,18 @@ def build(
     return _out(sheet)
 
 
-def _find(db: DbSession, card: LotCard, variant: str = FIRST) -> SpecSheet | None:
-    """Запись варианта. Вариант обязателен: на строке их теперь несколько, и
-    поиск без него падал бы `MultipleResultsFound` на первом же заведённом."""
+def _find(
+    db: DbSession, card: LotCard, variant: str = FIRST, kind: str = ANALYSIS
+) -> SpecSheet | None:
+    """Запись варианта. Вариант и вид обязательны: на строке их теперь
+    несколько, и поиск без них падал бы `MultipleResultsFound` на первом же
+    заведённом."""
     return db.execute(
         select(SpecSheet).where(
             SpecSheet.module == card.module,
             SpecSheet.row_id == card.row_id,
             SpecSheet.variant == variant,
+            SpecSheet.kind == kind,
         )
     ).scalar_one_or_none()
 
@@ -402,6 +486,7 @@ def _out(sheet: SpecSheet) -> Table:
         columns=columns,
         rows=rows,
         variant=sheet.variant,
+        kind=sheet.kind,
         source_name=sheet.source_name,
         model=sheet.model,
         trouble=sheet.trouble,

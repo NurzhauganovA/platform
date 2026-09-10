@@ -137,6 +137,7 @@ def test_fail_menyu_sovpadaet_s_pravami() -> None:
         "/goszakup/codes": READS,
         "/goszakup/remarks": REMARKS,
         "/work/lots": CRM,
+        "/work/discussion": CRM,
         "/work/analysis": CRM,
         "/work/supply": CRM,
         "/work/legal": CRM,
@@ -145,6 +146,9 @@ def test_fail_menyu_sovpadaet_s_pravami() -> None:
         # это сделал», и человек, о котором спрашивают, не должен видеть, что
         # именно о нём записано.
         "/work/audit": (Role.ADMIN,),
+        # Уведомления — тоже только администратору: за экраном почты всех
+        # сотрудников и то, кто из них что себе отключил.
+        "/work/notifications": (Role.ADMIN,),
         "/work/submit": CRM,
     }
     расхождения: list[str] = []

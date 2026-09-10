@@ -168,3 +168,80 @@ def test_fail_stolbtsy_zavodyatsya_s_sebesom(db: DbSession, card: LotCard) -> No
     assert ключи == ["subject", "demand", "brief", "price", "cost", "ours"]
     названия = {column.key: column.title for column in sheets.hand_columns()}
     assert названия["ours"] == "Наш товар"
+
+
+def test_fail_snabzhenie_poluchaet_kopiyu_a_ne_tu_zhe_tablicu(db: DbSession, card: LotCard) -> None:
+    """Передача заводит снабжению свою таблицу — копию разбора.
+
+    Копию, а не ту же запись: дальше они расходятся. Снабжение заменяет
+    позицию двумя, когда товара нет, и правит количество под кратность
+    упаковки. Правки поверх разбора означали бы, что маржа, посчитанная
+    разборщиком, задним числом перестала сходиться с тем, что показывали на
+    согласовании.
+    """
+    _разобрать(db, card)
+
+    передано = sheets.handover(db, card)
+
+    assert передано.kind == sheets.SUPPLY
+    assert передано.rows[0].cells["demand"] == "не менее 8 ядер"
+    # Цена переносится: снабжение отталкивается от той, по которой считали
+    # участие, — его работа подтвердить её поставщиком.
+    assert передано.rows[0].cells["price"] == "120000"
+
+    sheets.save(
+        db,
+        card,
+        columns=list(sheets.default_columns()),
+        rows=[sheets.Row(key="r1", cells={"demand": "не менее 8 ядер", "price": "131000"})],
+        kind=sheets.SUPPLY,
+    )
+
+    assert sheets.load(db, card).rows[0].cells["price"] == "120000"
+    assert sheets.load(db, card, kind=sheets.SUPPLY).rows[0].cells["price"] == "131000"
+
+
+def test_fail_povtornaya_peredacha_ne_zatiraet_rabotu_snabzheniya(
+    db: DbSession, card: LotCard
+) -> None:
+    """Разбор пересобирают и передают второй раз, а в копии к этому моменту
+    уже стоят найденные поставщики — переписать её значит стереть чужой
+    рабочий день."""
+    _разобрать(db, card)
+    sheets.handover(db, card)
+    sheets.save(
+        db,
+        card,
+        columns=list(sheets.default_columns()),
+        rows=[sheets.Row(key="r1", cells={"ours": "Core i5 от ТОО «Альфа»"})],
+        kind=sheets.SUPPLY,
+    )
+
+    снова = sheets.handover(db, card)
+
+    assert снова.rows[0].cells["ours"] == "Core i5 от ТОО «Альфа»"
+
+
+def test_fail_varianty_u_dvuh_tablic_svoi(db: DbSession, card: LotCard) -> None:
+    """Вариант «B» разбора не появляется у снабжения сам собой.
+
+    Таблицы разные, и списки вариантов у них разные: снабжение считает по тому
+    варианту, который ему передали, а не по всем, которые придумал разборщик.
+    """
+    _разобрать(db, card)
+    sheets.handover(db, card)
+    sheets.branch(db, card)
+
+    assert sheets.variants(db, card) == ["A", "B"]
+    assert sheets.variants(db, card, sheets.SUPPLY) == ["A"]
+
+
+def test_fail_peredacha_vidna_priznakom(db: DbSession, card: LotCard) -> None:
+    """По признаку вкладка «Снабжение» решает, показывать таблицу или
+    объяснять, что разбор ещё не передали. Пустая таблица без объяснения
+    читается как поломка."""
+    _разобрать(db, card)
+
+    assert sheets.handed(db, card) is False
+    sheets.handover(db, card)
+    assert sheets.handed(db, card) is True

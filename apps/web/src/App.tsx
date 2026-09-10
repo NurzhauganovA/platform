@@ -24,9 +24,15 @@ import { CardPage } from "@/features/cards/CardPage";
 import { LotsPage } from "@/features/cards/LotsPage";
 import { ApprovalPage } from "@/features/cards/ApprovalPage";
 import { SubmitPage } from "@/features/cards/SubmitPage";
-import { AnalysisDesk, LegalDesk, SupplyDesk } from "@/features/cards/DeskPage";
+import {
+  AnalysisDesk,
+  DiscussionDesk,
+  LegalDesk,
+  SupplyDesk,
+} from "@/features/cards/DeskPage";
 import { CodesPage } from "@/features/goszakup/CodesPage";
 import { ProfilePage } from "@/features/profile/ProfilePage";
+import { NotifyPage } from "@/features/notify/NotifyPage";
 import { AuditPage } from "@/features/audit/AuditPage";
 import { GoszakupPage } from "@/features/worklist/GoszakupPage";
 import { RemarkPage } from "@/features/remarks/RemarkPage";
@@ -95,11 +101,13 @@ function Routing() {
         <Route path="tender/analytics" element={<TenderAnalytics />} />
         <Route path="work/lots" element={<LotsPage />} />
         <Route path="work/lots/:id" element={<CardPage />} />
+        <Route path="work/discussion" element={<DiscussionDesk />} />
         <Route path="work/analysis" element={<AnalysisDesk />} />
         <Route path="work/supply" element={<SupplyDesk />} />
         <Route path="work/legal" element={<LegalDesk />} />
         <Route path="work/approval" element={<ApprovalPage />} />
         <Route path="work/audit" element={<AuditPage />} />
+        <Route path="work/notifications" element={<NotifyPage />} />
         <Route path="work/submit" element={<SubmitPage />} />
         <Route path="goszakup/lots" element={<GoszakupPage />} />
         <Route path="goszakup/codes" element={<CodesPage />} />

@@ -53,9 +53,14 @@ from platform_api.errors import SpokenError
 from platform_api.jobs.service import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.logging import get_logger
-from platform_api.modules import ModuleRegistry, cards, sheets
+from platform_api.modules import ModuleRegistry, cards, preview, sheets
 from platform_api.modules.goszakup import start
-from platform_api.modules.schemas import StartedJobOut
+from platform_api.modules.schemas import (
+    PreviewBlockOut,
+    PreviewOut,
+    PreviewSheetOut,
+    StartedJobOut,
+)
 
 logger = get_logger(__name__)
 
@@ -109,6 +114,15 @@ class TalkOut(BaseModel):
     overdue: bool
     writing: str = ""
     """Как идёт написание моделью: `queued`, `running`, `ready`, `failed`."""
+
+
+class DeskOut(BaseModel):
+    """Отработал ли отдел по лоту. Точка в строке списка, галочка в карточке."""
+
+    desk: str
+    title: str
+    done: bool
+    open_tasks: int
 
 
 class CardOut(BaseModel):
@@ -166,6 +180,9 @@ class CardOut(BaseModel):
     done_tasks: int
     can: list[str]
     discussion: TalkOut | None = None
+    desks: list[DeskOut] = []
+    """Ход по отделам. Считает сервер: правила у отделов разные, и второй
+    расчёт в браузере разошёлся бы с первым на первом же правиле."""
 
 
 class TaskOut(BaseModel):
@@ -512,6 +529,7 @@ def get_tasks(
     department: Annotated[Department | None, Query()] = None,
     mine: Annotated[bool, Query(description="Только мои")] = False,
     unassigned: Annotated[bool, Query(description="Ничьи в очереди отдела")] = False,
+    assignee: Annotated[uuid.UUID | None, Query(description="Задачи одного сотрудника")] = None,
     card_id: Annotated[uuid.UUID | None, Query()] = None,
     task_state: Annotated[
         str,
@@ -529,13 +547,23 @@ def get_tasks(
     другого не собрать. Умолчание при этом осталось прежним — открытые: их
     спрашивают в девяти случаях из десяти, и очередь, которая по умолчанию
     отдаёт всё закрытое за год, бесполезна.
+
+    Без `mine`, `unassigned` и `assignee` отдаётся весь отдел. Это вкладка
+    «Все» на столе: у руководителя вопрос «что сейчас у отдела» и «на ком
+    висит вот это» возникает каждый день, а до сих пор ответом было открывание
+    лотов по одному. Прав это не расширяет — за задачей нет ни цен, ни маржи,
+    а сам стол и так открыт всем, кто работает с лотами.
     """
     want = None if task_state == "all" else _task_state(task_state)
     found = cards.tasks(
         db,
         organization_id=identity.organization.id,
         department=department,
-        assignee_id=identity.user.id if mine else None,
+        # Свои — по признаку, чужие — по имени. Два способа, а не один, потому
+        # что «мои» не должны зависеть от того, знает ли браузер свой
+        # идентификатор: он его знает, но лишний запрос ради этого на каждом
+        # открытии стола — это лишний круг до сервера.
+        assignee_id=identity.user.id if mine else assignee,
         unassigned=unassigned,
         card_id=card_id,
         state=want,
@@ -773,6 +801,7 @@ def download_file(
     identity: CurrentUser,
     db: Db,
     request: Request,
+    inline: Annotated[bool, Query(description="Открыть во вкладке, а не скачать")] = False,
     _guard: Guard = None,
 ) -> StreamingResponse:
     """Отдаёт файл, приложенный к этому лоту.
@@ -780,6 +809,10 @@ def download_file(
     Проверяется именно связь с лотом, а не только наличие файла в хранилище:
     хэш угадать нельзя, но он попадает в ссылки и в журнал, а по чужому лоту
     файлов видеть не полагается.
+
+    `inline` — показать, а не скачать. Признаком, а не отдельным адресом: файл
+    один и тот же, разные у него только заголовки, и вторая ручка означала бы
+    вторую проверку прав, которая однажды разойдётся с первой.
     """
     from platform_api.storage import FileStorage
 
@@ -793,10 +826,173 @@ def download_file(
         stream = storage.open(sha256)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
     return StreamingResponse(
         stream,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{one.sha256[:12]}"'},
+        media_type=_media_type(one.name),
+        headers=_serving(one.name, inline=inline),
+    )
+
+
+# Форматы Office и соседи, которых нет во встроенном справочнике Python.
+# Справочник он берёт из системы, а в образе её нет вовсе: `.docx` и `.xlsx`
+# уходили потоком байтов, и скачанный файл открывался не той программой.
+_TYPES = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".doc": "application/msword",
+    ".xls": "application/vnd.ms-excel",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".rtf": "application/rtf",
+    ".pdf": "application/pdf",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".avif": "image/avif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".zip": "application/zip",
+    ".rar": "application/vnd.rar",
+    ".7z": "application/x-7z-compressed",
+}
+
+
+def _media_type(name: str) -> str:
+    """Чем это открывать, по имени файла.
+
+    По имени, а не по содержимому: хранилище складывает по хэшу, и у файла на
+    диске имени нет. Неизвестное отдаётся потоком байтов — браузер тогда просто
+    скачает, и это правильный исход для формата, который он всё равно не
+    покажет.
+    """
+    import mimetypes
+    from pathlib import Path
+
+    suffix = Path(name).suffix.lower()
+    if suffix in _TYPES:
+        return _TYPES[suffix]
+    guessed, _ = mimetypes.guess_type(name)
+    return guessed or "application/octet-stream"
+
+
+# Что можно показать прямо во вкладке. Список явный, а не «всё, кроме
+# опасного»: файлы к лоту прикладывают люди, и страница с чужой разметкой,
+# открытая с нашего адреса, получает доступ к сессии смотрящего — то есть к
+# закупкам, ценам и марже. Неописанный формат скачивается, и это скучный, но
+# верный исход.
+_SHOWN = frozenset(
+    {
+        "application/pdf",
+        "text/plain",
+        "text/csv",
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/tiff",
+        "image/avif",
+        "image/heic",
+        "image/heif",
+        "image/vnd.microsoft.icon",
+        "image/x-icon",
+        "image/svg+xml",
+    }
+)
+
+
+def _serving(name: str, *, inline: bool) -> dict[str, str]:
+    """Заголовки отдачи: как назвать файл и открывать ли его во вкладке.
+
+    Имя настоящее, а не хэш. Раньше уходили двенадцать знаков хэша без
+    расширения: человек скачивал «Договор.pdf», получал безымянный кусок и
+    открывал его подбором программы. Имя кодируется по RFC 5987 — в названиях
+    у нас кириллица, а в заголовке HTTP её быть не может.
+
+    Показ разрешён только знакомым форматам, и вдобавок запрещено угадывание
+    типа (`nosniff`): без него браузер решает по содержимому и открывает как
+    страницу то, что мы отдали текстом.
+
+    `.svg` показывается — его рисуют тегом `img`, где скрипты не исполняются, —
+    но заголовки всё равно ставят песочницу: та же ссылка, открытая в соседней
+    вкладке руками, иначе выполнила бы чужую разметку с нашего адреса.
+    """
+    from urllib.parse import quote
+
+    kind = _media_type(name)
+    how = "inline" if inline and kind in _SHOWN else "attachment"
+    safe = quote(name or "file", safe="")
+    headers = {
+        "Content-Disposition": f"{how}; filename*=UTF-8''{safe}",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if kind == "image/svg+xml":
+        headers["Content-Security-Policy"] = "sandbox"
+    return headers
+
+
+@router.get("/{card_id}/files/{sha256}/view", summary="Показать файл в платформе")
+def view_file(
+    card_id: uuid.UUID,
+    sha256: str,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Guard = None,
+) -> PreviewOut:
+    """Разбирает приложенный файл на то, чем его показать.
+
+    Тот же разборщик, что у документов закупки (`modules/preview.py`), и то же
+    окно в браузере. Второй способ показывать `.docx` разошёлся бы с первым на
+    первой же таблице с объединёнными ячейками — а таблицы в спецификациях
+    именно такие.
+
+    Имя передаётся отдельно: хранилище складывает по хэшу содержимого, и у
+    файла на диске имени нет вовсе. Без него формат не определить, и всякий
+    приложенный документ считался бы неизвестным.
+
+    Картинки и PDF разбирать нечего — их рисует сам браузер по ссылке на файл.
+    Наружу для них уходит только вид и размер.
+    """
+    from platform_api.storage import FileStorage
+
+    found = cards.files(db, organization_id=identity.organization.id, card_id=card_id)
+    one = next((item for item in found if item.sha256 == sha256), None)
+    if one is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файла нет у лота")
+
+    storage: FileStorage = request.app.state.storage
+    where = storage.path_for(sha256)
+    if not where.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Файл записан в базе, но в хранилище его нет",
+        )
+
+    parsed = preview.build(where, name=one.name)
+    return PreviewOut(
+        kind=parsed.kind,
+        name=one.name,
+        size_bytes=one.size_bytes,
+        blocks=[
+            PreviewBlockOut(
+                kind=block.kind, text=block.text, rows=[list(row) for row in block.rows]
+            )
+            for block in parsed.blocks
+        ],
+        sheets=[
+            PreviewSheetOut(
+                title=sheet.title,
+                rows=[list(row) for row in sheet.rows],
+                truncated=sheet.truncated,
+            )
+            for sheet in parsed.sheets
+        ],
+        truncated=parsed.truncated,
+        note=parsed.note,
     )
 
 
@@ -1136,6 +1332,13 @@ class SheetOut(BaseModel):
     variant: str = "A"
     """Какой это вариант разбора."""
 
+    kind: str = "analysis"
+    """Чья таблица: `analysis` — разбор, `supply` — снабжение."""
+
+    handed: bool = False
+    """Заведена ли снабжению его таблица. По ней вкладка «Снабжение» решает,
+    показывать таблицу или объяснять, что разбор ещё не передали."""
+
     variants: list[str] = []
     """Какие варианты есть у лота. «A» — всегда."""
 
@@ -1162,6 +1365,9 @@ def get_sheet(
     identity: CurrentUser,
     db: Db,
     variant: Annotated[str, Query(description="Какой вариант читать")] = sheets.FIRST,
+    kind: Annotated[
+        str, Query(description="Чья таблица: analysis — разбор, supply — снабжение")
+    ] = sheets.ANALYSIS,
     _guard: Guard = None,
 ) -> SheetOut:
     """Отдаёт таблицу лота. Не собрана — пустая заготовка с тремя столбцами.
@@ -1171,9 +1377,10 @@ def get_sheet(
     """
     card = _card_row(db, identity, card_id)
     return _sheet_out(
-        sheets.load(db, card, variant),
-        running=_running_sheet(db, card, variant),
-        letters=sheets.variants(db, card),
+        sheets.load(db, card, variant, kind),
+        running=_running_sheet(db, card, variant) if kind == sheets.ANALYSIS else None,
+        letters=sheets.variants(db, card, kind),
+        handed=sheets.handed(db, card),
     )
 
 
@@ -1213,6 +1420,9 @@ def put_sheet(
     identity: CurrentUser,
     db: Db,
     variant: Annotated[str, Query(description="Какой вариант правим")] = sheets.FIRST,
+    kind: Annotated[
+        str, Query(description="Чья таблица: analysis — разбор, supply — снабжение")
+    ] = sheets.ANALYSIS,
     _guard: Guard = None,
 ) -> SheetOut:
     """Сохраняет то, что человек изменил руками.
@@ -1230,14 +1440,23 @@ def put_sheet(
         ],
         rows=[sheets.Row(key=i.key, cells=dict(i.cells)) for i in body.rows],
         variant=variant,
+        kind=kind,
     )
     db.commit()
-    return _sheet_out(table, letters=sheets.variants(db, card))
+    return _sheet_out(
+        table, letters=sheets.variants(db, card, kind), handed=sheets.handed(db, card)
+    )
 
 
 @router.post("/{card_id}/sheet/variants", summary="Завести вариант разбора", status_code=201)
 def post_variant(
-    card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None
+    card_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    kind: Annotated[
+        str, Query(description="Чья таблица: analysis — разбор, supply — снабжение")
+    ] = sheets.ANALYSIS,
+    _guard: Guard = None,
 ) -> SheetOut:
     """Заводит следующий вариант от «A».
 
@@ -1245,21 +1464,59 @@ def post_variant(
     пустые: вариант затем и нужен, чтобы предложить тот же лот иначе.
     """
     card = _card_row(db, identity, card_id)
-    letter = _act(lambda: sheets.branch(db, card))
+    letter = _act(lambda: sheets.branch(db, card, kind))
     db.commit()
-    return _sheet_out(sheets.load(db, card, letter), letters=sheets.variants(db, card))
+    return _sheet_out(
+        sheets.load(db, card, letter, kind),
+        letters=sheets.variants(db, card, kind),
+        handed=sheets.handed(db, card),
+    )
 
 
 @router.delete("/{card_id}/sheet/variants/{variant}", summary="Убрать вариант разбора")
 def delete_variant(
-    card_id: uuid.UUID, variant: str, identity: CurrentUser, db: Db, _guard: Guard = None
+    card_id: uuid.UUID,
+    variant: str,
+    identity: CurrentUser,
+    db: Db,
+    kind: Annotated[
+        str, Query(description="Чья таблица: analysis — разбор, supply — снабжение")
+    ] = sheets.ANALYSIS,
+    _guard: Guard = None,
 ) -> SheetOut:
     """Убирает вариант и отдаёт тот, что остался первым."""
     card = _card_row(db, identity, card_id)
-    _act(lambda: sheets.drop(db, card, variant))
+    _act(lambda: sheets.drop(db, card, variant, kind))
     db.commit()
-    letters = sheets.variants(db, card)
-    return _sheet_out(sheets.load(db, card, letters[0]), letters=letters)
+    letters = sheets.variants(db, card, kind)
+    return _sheet_out(
+        sheets.load(db, card, letters[0], kind), letters=letters, handed=sheets.handed(db, card)
+    )
+
+
+@router.post("/{card_id}/sheet/handover", summary="Передать разбор снабжению", status_code=201)
+def post_handover(
+    card_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    variant: Annotated[str, Query(description="Какой вариант передаём")] = sheets.FIRST,
+    _guard: Guard = None,
+) -> SheetOut:
+    """Заводит снабжению его таблицу — копию разбора.
+
+    Копией, а не той же записью: дальше они расходятся. Снабжение заменяет
+    позицию двумя, когда товара нет, дописывает поставщика и срок, правит
+    количество под кратность упаковки. Правки поверх разбора означали бы, что
+    маржа, посчитанная разборщиком, задним числом перестала сходиться с тем,
+    что показывали на согласовании.
+
+    Повторная передача таблицу не затирает: разбор пересобирают и передают
+    второй раз, а в копии к этому моменту уже стоят найденные поставщики.
+    """
+    card = _card_row(db, identity, card_id)
+    table = _act(lambda: sheets.handover(db, card, variant))
+    db.commit()
+    return _sheet_out(table, letters=sheets.variants(db, card, sheets.SUPPLY), handed=True)
 
 
 @router.post("/{card_id}/sheet", summary="Разобрать спецификацию моделью", status_code=202)
@@ -1315,10 +1572,13 @@ def _sheet_out(
     *,
     running: uuid.UUID | None = None,
     letters: list[str] | None = None,
+    handed: bool = False,
 ) -> SheetOut:
     known = letters or [table.variant]
     return SheetOut(
         variant=table.variant,
+        kind=table.kind,
+        handed=handed,
         variants=known,
         can=[
             *(["branch"] if len(known) < sheets.MAX_VARIANTS else []),

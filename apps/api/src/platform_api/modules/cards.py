@@ -428,6 +428,12 @@ class Card:
     """Обсуждение по лоту, если его заводили. В списке пусто: там оно не
     показывается, а запрос на сотню строк ради него — сотня лишних чтений."""
 
+    desks: tuple[DeskMark, ...] = ()
+    """Отработали ли отделы. Четыре точки в строке списка и галочки в карточке.
+
+    Считает сервер, а не браузер: правила у отделов разные и не выводятся одно
+    из другого, а список и карточка должны говорить одно и то же."""
+
 
 def open_card(
     db: DbSession,
@@ -1181,7 +1187,23 @@ def listing(
     # между проверочной средой и рабочей.
     rows.sort(key=lambda row: (row.status in _FINAL, row.deadline is None, row.deadline or moment))
     known = people(db, rows)
-    found = [_shown(row, known, role=role, user_id=user_id, now=moment) for row in rows]
+    # Обсуждения — одним запросом на весь список. Их читают ради точки хода в
+    # строке: без них «Обсуждение» у всех выглядело бы незакрытым. По одному на
+    # карточку было бы сто запросов на сто строк — это и есть та секунда, из-за
+    # которой список «подтормаживает».
+    talks = _talks_for(db, rows)
+    found = [
+        _shown(
+            row,
+            known,
+            role=role,
+            user_id=user_id,
+            now=moment,
+            talk=talks.get((row.module, row.row_id)),
+            brief=True,
+        )
+        for row in rows
+    ]
     if want.burning:
         found = [item for item in found if item.burning and not item.overdue]
     return found
@@ -1329,6 +1351,96 @@ def _job(
     )
 
 
+DESK_MARKS: tuple[tuple[Department, str], ...] = (
+    (Department.DISCUSSION, "Обсуждение"),
+    (Department.ANALYSIS, "Разбор"),
+    (Department.SUPPLY, "Снабжение"),
+    (Department.TECHNOLOGIST, "Технолог"),
+)
+"""Четыре отдела, по которым видно ход лота одним взглядом.
+
+Именно эти четыре, а не все восемь. В списке лотов у строки есть место на
+четыре точки, и выбраны те, через которые проходит каждая закупка по порядку:
+замечание заказчику, разбор спецификации, поиск товара, подтверждение
+технологом. Юрист подключается не всегда, сборщик и подача идут после решения
+об участии, а согласование видно подписями.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class DeskMark:
+    """Отработал ли отдел по лоту.
+
+    Ответ на вопрос планёрки «что сейчас с этой закупкой» одним взглядом на
+    строку: четыре точки вместо открывания четырёх карточек подряд.
+    """
+
+    desk: str
+    title: str
+    done: bool
+    """Отдел закончил. Правило у каждого своё и объяснено в `desk_marks`."""
+
+    open_tasks: int
+    """Сколько задач отдела ещё висит. Ноль при `done=False` означает, что до
+    отдела просто не дошли, — и это другое состояние, чем «работает»."""
+
+
+def desk_marks(card: LotCard, *, talk: Discussion | None = None) -> tuple[DeskMark, ...]:
+    """Отметки отделов — те же, что рисует правый столбец карточки.
+
+    Считаются здесь, а не в браузере, потому что нужны в двух местах: в списке
+    лотов точками и в карточке галочками. Два расчёта разошлись бы на первом же
+    правиле — а правила у отделов разные и не выводятся одно из другого:
+
+    * **Обсуждение** закончено, когда замечание отправлено. Не когда написано:
+      написанный и не отправленный текст — это работа, которую ещё делают.
+    * **Разбор** закончен, когда лот прошёл этот этап пути. Таблица к этому
+      моменту собрана, но собранная таблица сама по себе не значит, что решение
+      принято, — а точка отвечает именно за «отдел отпустил лот дальше».
+    * **Снабжение и технолог** — когда у отдела не осталось открытых задач, и
+      хотя бы одна была. Работа этих отделов и есть задачи: «найти товар»,
+      «подтвердить, что подходит». Отсутствие задач вовсе — не готовность, а
+      «руки не дошли», и точка остаётся пустой.
+    """
+    order = {status: place for place, status in enumerate(FLOW)}
+    here = order.get(card.status, -1)
+    analysis_done = card.status in _FINAL or here > order.get(LotStatus.ANALYSIS, 0)
+
+    marks: list[DeskMark] = []
+    for desk, title in DESK_MARKS:
+        mine = [task for task in card.tasks if task.department is desk]
+        live = sum(1 for task in mine if task.state is TaskState.OPEN)
+        if desk is Department.DISCUSSION:
+            done = talk is not None and talk.stage is DiscussionStage.SENT
+        elif desk is Department.ANALYSIS:
+            done = analysis_done
+        else:
+            done = bool(mine) and live == 0
+        marks.append(DeskMark(desk=desk.value, title=title, done=done, open_tasks=live))
+    return tuple(marks)
+
+
+def _talks_for(db: DbSession, rows: Sequence[LotCard]) -> dict[tuple[str, str], Discussion]:
+    """Обсуждения списка лотов — одним запросом.
+
+    Ключ тот же, что у карточки: площадка плюс строка. Берётся последнее по
+    времени: обсуждение на лоте одно, но история переписывалась, и запись с
+    тем же ключом теоретически бывает не одна.
+    """
+    if not rows:
+        return {}
+    keys = {(row.module, row.row_id) for row in rows}
+    found = db.execute(
+        select(Discussion)
+        .where(
+            Discussion.module.in_({module for module, _ in keys}),
+            Discussion.row_id.in_({row_id for _, row_id in keys}),
+        )
+        .order_by(Discussion.created_at)
+    ).scalars()
+    return {(one.module, one.row_id): one for one in found if (one.module, one.row_id) in keys}
+
+
 def _shown(
     card: LotCard,
     known: dict[uuid.UUID, str],
@@ -1337,6 +1449,7 @@ def _shown(
     user_id: uuid.UUID,
     now: datetime,
     talk: Discussion | None = None,
+    brief: bool = False,
 ) -> Card:
     # Срок считается только пока лот в игре. У завершённого «осталось 3 дня»
     # означало бы, что по нему ещё что-то нужно сделать.
@@ -1391,7 +1504,11 @@ def _shown(
         open_tasks=open_tasks,
         done_tasks=len(card.tasks) - open_tasks,
         can=_can(card, role=role, user_id=user_id),
-        discussion=_talk(talk, now),
+        # В списке обсуждение целиком не отдаётся: там оно не показывается, а
+        # сотня вложенных объектов — это лишний вес ответа. Отметка отдела при
+        # этом считается по нему же, и для неё оно и читалось.
+        discussion=None if brief else _talk(talk, now),
+        desks=desk_marks(card, talk=talk),
     )
 
 

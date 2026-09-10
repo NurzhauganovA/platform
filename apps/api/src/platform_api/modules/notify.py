@@ -177,7 +177,8 @@ def set_channels(
         body["email_enabled"] = email_enabled
     if not body:
         return channels(settings, user_id=user_id)
-    return _request(settings, "PATCH", f"/api/recipients/{user_id}", body)
+    answer = _request(settings, "PATCH", f"/api/recipients/{user_id}", body)
+    return answer if isinstance(answer, dict) else None
 
 
 def unlink_telegram(settings: Settings, *, user_id: uuid.UUID) -> None:
@@ -186,17 +187,77 @@ def unlink_telegram(settings: Settings, *, user_id: uuid.UUID) -> None:
     _request(settings, "DELETE", f"/api/recipients/{user_id}/telegram", None)
 
 
+def alive(settings: Settings) -> dict[str, Any] | None:
+    """Готовность сервиса: настроены ли каналы и что он сам считает пробелами.
+
+    Открыта без ключа — её же опрашивает Docker. Отвечает даже тогда, когда у
+    сервиса недоступна база: проверка смотрит настройки, а не хранилище.
+    Поэтому одной её мало, и рядом всегда спрашивается сводка.
+    """
+    return _get(settings, "/api/health", guarded=False)
+
+
+def counters(settings: Settings) -> dict[str, Any] | None:
+    """Сводка рассылки: сколько людей, сколько привязано, что не дошло.
+
+    Собирается из базы сервиса, поэтому заодно доказывает, что база у него
+    жива, — в отличие от готовности.
+    """
+    return _get(settings, "/api/stats")
+
+
+def everyone(settings: Settings) -> list[dict[str, Any]] | None:
+    """Весь реестр сервиса: у кого привязан Телеграм, кто что себе отключил.
+
+    Список приходит от сервиса, а не собирается из базы платформы. Реестр —
+    его, и вопрос «почему Ивану не приходит» решается взглядом именно туда:
+    человек мог отключить канал в боте, и платформа об этом не знает.
+    """
+    answer = _request(settings, "GET", "/api/recipients", None, listed=True)
+    return answer if isinstance(answer, list) else None
+
+
+def history(settings: Settings, *, user_id: uuid.UUID, limit: int = 10) -> list[dict[str, Any]]:
+    """Чем кончились последние отправки человеку.
+
+    Причина неудачи лежит у доставки, а не у уведомления: «Телеграм не
+    привязан», «тихие часы», отказ почтового сервера словами. Это и есть
+    ответ на «почему не пришло» — остальное про него только догадки.
+    """
+    answer = _request(
+        settings,
+        "GET",
+        f"/api/notifications?user_id={user_id}&limit={limit}",
+        None,
+        listed=True,
+    )
+    return answer if isinstance(answer, list) else []
+
+
+def check(settings: Settings, *, user_id: uuid.UUID) -> bool:
+    """Ставит человеку проверочное сообщение. Возвращает, приняли ли заявку."""
+    return _post(settings, f"/api/recipients/{user_id}/test", {}) is not None
+
+
 def _post(settings: Settings, path: str, body: dict[str, Any]) -> dict[str, Any] | None:
-    return _request(settings, "POST", path, body)
+    answer = _request(settings, "POST", path, body)
+    return answer if isinstance(answer, dict) else None
 
 
-def _get(settings: Settings, path: str) -> dict[str, Any] | None:
-    return _request(settings, "GET", path, None)
+def _get(settings: Settings, path: str, *, guarded: bool = True) -> dict[str, Any] | None:
+    answer = _request(settings, "GET", path, None, guarded=guarded)
+    return answer if isinstance(answer, dict) else None
 
 
 def _request(
-    settings: Settings, method: str, path: str, body: dict[str, Any] | None
-) -> dict[str, Any] | None:
+    settings: Settings,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None,
+    *,
+    guarded: bool = True,
+    listed: bool = False,
+) -> dict[str, Any] | list[dict[str, Any]] | None:
     """Один запрос к сервису. Молчит в журнал и возвращает `None` при отказе.
 
     Сервис не настроен — уходим сразу и без записи: у разработчика он обычно
@@ -212,7 +273,7 @@ def _request(
             answer = http.request(
                 method,
                 f"{base}{path}",
-                headers={"X-Service-Token": settings.notify.token},
+                headers={"X-Service-Token": settings.notify.token} if guarded else {},
                 json=body,
             )
         if answer.status_code >= 400:
@@ -223,7 +284,12 @@ def _request(
                 answer=answer.text[:300],
             )
             return None
-        return dict(answer.json()) if answer.content else {}
+        if not answer.content:
+            return [] if listed else {}
+        found = answer.json()
+        if listed:
+            return [dict(one) for one in found] if isinstance(found, list) else []
+        return dict(found)
     except (httpx.HTTPError, ValueError) as exc:
         # Именно предупреждение, а не ошибка: платформа работает дальше, и
         # красная строка в журнале звала бы чинить то, что чинится само.
