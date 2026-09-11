@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { cardsApi, type Card } from "@/api/cards";
+import { ApiError } from "@/api/client";
 import { PageHeader } from "@/shell/AppShell";
 import {
   Button,
@@ -155,6 +156,12 @@ function Row({
   const [asking, setAsking] = useState(false);
   const [amount, setAmount] = useState("");
   const [winner, setWinner] = useState("");
+  // Сумма участия — отдельным полем от суммы итогов. Их спрашивают в разное
+  // время и на разных вкладках, и одно поле на двоих означало бы, что
+  // недописанная цена победителя уезжает в подачу.
+  const [bid, setBid] = useState("");
+  const [naming, setNaming] = useState(false);
+  const [trouble, setTrouble] = useState("");
 
   const move = useMutation({
     mutationFn: (to: "awaiting" | "won" | "lost") => cardsApi.move(card.id, to),
@@ -167,6 +174,17 @@ function Row({
       setAsking(false);
       onDone(fresh);
     },
+  });
+  const submit = useMutation({
+    mutationFn: () => cardsApi.submit(card.id, Number(bid)),
+    onSuccess: (fresh) => {
+      setNaming(false);
+      setTrouble("");
+      setBid("");
+      onDone(fresh);
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не отметилось"),
   });
 
   return (
@@ -215,11 +233,20 @@ function Row({
         {tab === "soon" && card.can.includes("awaiting") && (
           <Button
             variant="primary"
-            disabled={move.isPending}
-            onClick={() => move.mutate("awaiting")}
+            disabled={submit.isPending}
+            onClick={() => setNaming((open) => !open)}
           >
-            Подали
+            {naming ? "Не подавали" : "Подали"}
           </Button>
+        )}
+
+        {tab === "awaiting" && card.bid_amount !== null && (
+          <span
+            className="text-sm tabular-nums text-ink"
+            title="За сколько подали заявку"
+          >
+            подали за {money(card.bid_amount)} ₸
+          </span>
         )}
 
         {tab === "awaiting" && (
@@ -282,6 +309,52 @@ function Row({
           </span>
         )}
       </div>
+
+      {naming && (
+        /* Сумму спрашиваем до отметки, а не после. Отметка без суммы — это то
+           же самое «подали», ради замены которого всё и делалось: за сколько
+           заходили, спрашивают, когда пришли итоги, и вспомнить через месяц
+           уже некому. */
+        <div className="flex flex-wrap items-center gap-2 border-t border-hairline bg-plane px-4 py-2.5">
+          <span className="text-[12.5px] text-ink-secondary">
+            За сколько участвуем
+          </span>
+          <input
+            value={bid}
+            autoFocus
+            inputMode="numeric"
+            onChange={(event) =>
+              setBid(event.target.value.replace(/[^\d]/g, ""))
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && Number(bid) > 0) submit.mutate();
+              if (event.key === "Escape") setNaming(false);
+            }}
+            placeholder="8 660 625"
+            className={cx(
+              "w-40 rounded-[8px] border border-hairline bg-surface px-2.5 py-1.5",
+              "text-sm tabular-nums text-ink placeholder:text-ink-muted",
+              "focus:border-series-1 focus:outline-none",
+            )}
+          />
+          <span className="text-[12.5px] text-ink-muted">₸</span>
+          {card.amount !== null && (
+            <span className="text-[11.5px] text-ink-muted">
+              объявлено {money(card.amount)} ₸
+            </span>
+          )}
+          <Button
+            variant="primary"
+            disabled={!(Number(bid) > 0) || submit.isPending}
+            onClick={() => submit.mutate()}
+          >
+            {submit.isPending ? "Отмечаем…" : "Подал"}
+          </Button>
+          {trouble && (
+            <span className="text-[12.5px] text-critical">{trouble}</span>
+          )}
+        </div>
+      )}
 
       {asking && (
         <div className="flex flex-wrap items-center gap-2 border-t border-hairline bg-plane px-4 py-2.5">

@@ -19,6 +19,7 @@ from platform_api.db.models import (
     ApprovalKind,
     ApprovalState,
     Department,
+    DiscussionStage,
     LotCard,
     LotStatus,
     Organization,
@@ -1317,3 +1318,196 @@ def test_fail_zadachi_otdela_vidny_tselikom(db: DbSession, app_client: TestClien
     # И тот же список, суженный до одного человека: это и есть отбор «на ком».
     его = app_client.get(f"/api/cards/tasks?department=supply&assignee={чужой.id}").json()
     assert [one["id"] for one in его] == [one["id"] for one in все]
+
+
+def test_fail_podannaya_zayavka_vidna_ne_tolko_po_otmetke(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Лот, отправленный сразу в «Договор», считается поданным.
+
+    Отметка времени ставится переводом в «Ждём итоги», а переводить можно
+    откуда угодно куда угодно — это снято намеренно, процесс ещё меняется.
+    По одной отметке такой лот выглядел бы неподанным, и прошедший срок на нём
+    красился бы красным: «приём закрыт, а мы не подали» — про закупку, по
+    которой уже заключён договор.
+    """
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+
+    assert cards.submitted(card) is False
+
+    card.status = LotStatus.CONTRACT
+    assert cards.submitted(card) is True
+    # Время подачи при этом не выдумывается: по придуманному потом считают
+    # сроки, и лучше пусто, чем неправда.
+    assert card.submitted_at is None
+
+    card.status = LotStatus.SKIPPED
+    assert cards.submitted(card) is False
+
+
+def test_fail_podacha_trebuet_summy_i_zapominaet_eyo(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Подача — это сумма и отметка, а не одно нажатие.
+
+    Раньше лот переводили в «Ждём итоги», и всё, что о подаче оставалось, —
+    время перевода. За сколько заходили, держали в голове; спрашивают это
+    ровно тогда, когда пришли итоги, и вспомнить через месяц уже некому.
+    """
+    card_id = _завести(db, org, кто)
+
+    with pytest.raises(SpokenError, match="сумму"):
+        cards.submit(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.MANAGER,
+            amount=Decimal("0"),
+            user_id=кто,
+        )
+
+    подан = cards.submit(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        amount=Decimal("8500000"),
+        user_id=кто,
+    )
+
+    assert подан.bid_amount == Decimal("8500000")
+    assert подан.submitted_at is not None
+    assert подан.status is LotStatus.AWAITING
+    assert cards.submitted(подан) is True
+
+
+def test_fail_povtornaya_otmetka_pravit_summu_no_ne_vremya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Ошиблись разрядом — сумму поправляют, а «когда подали» не меняется.
+
+    Время подачи — это факт, а не поле ввода: по нему потом считают сроки
+    обжалования и спорят с заказчиком.
+    """
+    card_id = _завести(db, org, кто)
+    первый = cards.submit(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        amount=Decimal("850000"),
+        user_id=кто,
+    )
+    было = первый.submitted_at
+
+    поправлен = cards.submit(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        amount=Decimal("8500000"),
+        user_id=кто,
+    )
+
+    assert поправлен.bid_amount == Decimal("8500000")
+    assert поправлен.submitted_at == было
+
+
+def test_fail_otmetka_ne_vozvrashchaet_lot_nazad(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Лот, уехавший в «Договор», отметка подачи назад не тянет.
+
+    Сумму вписывают задним числом — её стали спрашивать позже, чем завели
+    лот, — и возвращать его в «Ждём итоги» значило бы стирать работу, которую
+    человек уже отметил.
+    """
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+    card.status = LotStatus.CONTRACT
+    db.flush()
+
+    подан = cards.submit(
+        db,
+        organization_id=org.id,
+        card_id=card.id,
+        role=Role.MANAGER,
+        amount=Decimal("8500000"),
+        user_id=кто,
+    )
+
+    assert подан.status is LotStatus.CONTRACT
+    assert подан.bid_amount == Decimal("8500000")
+
+
+def test_fail_podachu_otmechaet_menedzher(db: DbSession, org: Organization, кто: uuid.UUID) -> None:
+    """Подпись под заявкой от имени компании — не то право, которое даётся
+    заодно с доступом к ценам."""
+    card_id = _завести(db, org, кто)
+
+    with pytest.raises(SpokenError, match="нельзя"):
+        cards.submit(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.BUYER,
+            amount=Decimal("8500000"),
+            user_id=кто,
+        )
+
+
+def test_fail_prosrochennoe_govorit_na_skolko(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Прошедший срок называет опоздание, а не сам факт.
+
+    Разница в работе большая, а выглядела одинаково: задача, просроченная на
+    двадцать минут, догоняется сегодня, а просроченная на три дня означает,
+    что её вообще никто не видел. Пока обе показывались как «срок прошёл»,
+    очередь отдела сортировали на глаз по дате заведения.
+    """
+    момент = utcnow()
+
+    слова, горит, поздно = cards.time_left(момент - timedelta(hours=3, minutes=20), момент)
+    assert поздно is True
+    assert горит is False
+    assert слова == "просрочено на 3 ч. 20 мин."
+
+    давно, _, _ = cards.time_left(момент - timedelta(days=2, hours=4), момент)
+    assert давно == "просрочено на 2 дн. 4 ч."
+
+    осталось, горит, поздно = cards.time_left(момент + timedelta(minutes=40), момент)
+    assert (осталось, горит, поздно) == ("40 мин.", True, False)
+
+
+def test_fail_obsuzhdenie_zakryto_peredachey_yuristam(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Передали юристам — обсуждение своё отработало.
+
+    Дальше работа не у нас: у юристов на неё стоит своя задача и свой кружок.
+    Держать оба незакрытыми значит показывать одну работу дважды — и на
+    планёрке спрашивать про обсуждение, которое давно ушло.
+    """
+    from platform_api.db.models import Discussion
+
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+    обсуждение = Discussion(
+        organization_id=org.id,
+        module=card.module,
+        row_id=card.row_id,
+        code=card.code,
+        title=card.title,
+        stage=DiscussionStage.DRAFTING,
+    )
+    db.add(обсуждение)
+    db.flush()
+
+    отметки = {mark.desk: mark.done for mark in cards.desk_marks(card, talk=обсуждение)}
+    assert отметки["discussion"] is False
+
+    обсуждение.stage = DiscussionStage.WITH_LAWYERS
+    отметки = {mark.desk: mark.done for mark in cards.desk_marks(card, talk=обсуждение)}
+    assert отметки["discussion"] is True

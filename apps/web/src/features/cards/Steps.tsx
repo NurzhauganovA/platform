@@ -27,15 +27,16 @@ import {
   FLOW,
   type Card,
   type Department,
+  type DiscussionStage,
   type Job,
   type Person,
 } from "@/api/cards";
 import { ApiError } from "@/api/client";
-import { Card as Panel, cx } from "@/ui";
+import { Card as Panel, cx, money } from "@/ui";
 import { NewTask } from "./NewTask";
 import { Node, TaskCard, TaskLine } from "./StepRail";
 import type { Mark } from "./StepRail";
-import { Avatar, Chip, Clock, heat, shortName, stamp } from "./kit";
+import { Avatar, Chip, Clock, Passed, shortName, stamp } from "./kit";
 
 /** Каким по счёту идёт разбор. По нему видно, пройден он или нет. */
 const ANALYSIS_STEP = FLOW.findIndex((step) => step.key === "analysis") + 1;
@@ -49,6 +50,110 @@ const ANALYSIS_STEP = FLOW.findIndex((step) => step.key === "analysis") + 1;
  * «5 открыто», а по узлам их набиралось два. Числу, которое не сходится с тем,
  * что под ним, перестают верить целиком.
  */
+/**
+ * Подача: сумма участия и отметка о ней.
+ *
+ * Сумму спрашиваем до отметки, а не после. Раньше подача была одним нажатием,
+ * и всё, что о ней оставалось, — время перевода; за сколько заходили, держали
+ * в голове и в переписке. Спрашивают это ровно тогда, когда пришли итоги:
+ * насколько промахнулись и с какой маржой брали бы. Через месяц вспомнить
+ * некому.
+ *
+ * После отметки на месте кнопки стоит сама сумма. Лот знает о подаче
+ * постоянно — по ней же красится срок приёма: зелёным, если подали, красным,
+ * если срок прошёл, а мы нет.
+ */
+function Bid({ card, onDone }: { card: Card; onDone: (fresh: Card) => void }) {
+  const [naming, setNaming] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [trouble, setTrouble] = useState("");
+
+  const submit = useMutation({
+    mutationFn: () => cardsApi.submit(card.id, Number(amount)),
+    onSuccess: (fresh) => {
+      setNaming(false);
+      setAmount("");
+      setTrouble("");
+      onDone(fresh);
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не отметилось"),
+  });
+
+  if (card.submitted) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-good">
+        <span aria-hidden>✓</span>
+        {card.bid_amount !== null
+          ? `Подали за ${money(card.bid_amount)} ₸`
+          : "Заявка подана"}
+      </span>
+    );
+  }
+
+  if (!card.can.includes("awaiting")) return null;
+
+  if (!naming) {
+    return (
+      <button
+        type="button"
+        onClick={() => setNaming(true)}
+        className="text-series-1 hover:underline"
+      >
+        Отметить подачу →
+      </button>
+    );
+  }
+
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      <input
+        value={amount}
+        autoFocus
+        inputMode="numeric"
+        aria-label="За сколько участвуем"
+        onChange={(event) =>
+          setAmount(event.target.value.replace(/[^\d]/g, ""))
+        }
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && Number(amount) > 0) submit.mutate();
+          if (event.key === "Escape") setNaming(false);
+        }}
+        placeholder="за сколько, ₸"
+        className={cx(
+          "w-[124px] rounded-[7px] border border-hairline bg-surface px-2 py-1",
+          "text-[12px] tabular-nums text-ink placeholder:text-ink-muted",
+          "focus:border-series-1 focus:outline-none",
+        )}
+      />
+      <button
+        type="button"
+        disabled={!(Number(amount) > 0) || submit.isPending}
+        onClick={() => submit.mutate()}
+        className={cx(
+          "rounded-[7px] bg-ink px-2.5 py-1 text-[12px] font-medium text-surface",
+          "transition disabled:opacity-40",
+        )}
+      >
+        {submit.isPending ? "…" : "Подал"}
+      </button>
+      <button
+        type="button"
+        onClick={() => setNaming(false)}
+        className="text-[11.5px] text-ink-muted hover:text-ink"
+      >
+        отмена
+      </button>
+      {trouble && (
+        <span className="text-[11.5px] text-critical">{trouble}</span>
+      )}
+    </span>
+  );
+}
+
+/** Этапы, на которых обсуждение своё отработало. */
+const DISCUSSION_DONE: DiscussionStage[] = ["lawyers", "sent", "not_needed"];
+
 const DESKS: { desk: Department; title: string }[] = [
   { desk: "legal", title: "Юрист" },
   { desk: "supply", title: "Снабжение" },
@@ -57,7 +162,17 @@ const DESKS: { desk: Department; title: string }[] = [
   { desk: "approval", title: "Согласование" },
 ];
 
-export function Steps({ card, people }: { card: Card; people: Person[] }) {
+export function Steps({
+  card,
+  people,
+  onDone,
+}: {
+  card: Card;
+  people: Person[];
+  /** Свежая карточка после действия. Не просто «обнови»: подача меняет и
+   *  статус, и признак «подали», и сумму — их отдаёт сам ответ. */
+  onDone: (fresh: Card) => void;
+}) {
   const cache = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [openTask, setOpenTask] = useState<string | null>(null);
@@ -144,8 +259,7 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
 
   const mayAdd = card.can.includes("task");
   const talk = card.discussion;
-  const writing =
-    talk?.writing === "queued" || talk?.writing === "running";
+  const writing = talk?.writing === "queued" || talk?.writing === "running";
   const analysisDone = card.step > ANALYSIS_STEP;
 
   return (
@@ -160,18 +274,18 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
             открыто · {closed.length} закрыто
           </span>
           {mayAdd && (
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className={cx(
-              "h-7 shrink-0 rounded-[7px] border border-baseline bg-surface px-2.5",
-              "text-[12.5px] font-medium whitespace-nowrap text-ink transition hover:bg-plane",
-              "focus-visible:outline focus-visible:outline-2",
-              "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
-            )}
-          >
-            Новая задача
-          </button>
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className={cx(
+                "h-7 shrink-0 rounded-[7px] border border-baseline bg-surface px-2.5",
+                "text-[12.5px] font-medium whitespace-nowrap text-ink transition hover:bg-plane",
+                "focus-visible:outline focus-visible:outline-2",
+                "focus-visible:-outline-offset-2 focus-visible:outline-series-1",
+              )}
+            >
+              Новая задача
+            </button>
           )}
         </div>
 
@@ -185,16 +299,18 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
             open={opened("discussion")}
             onToggle={() => toggle("discussion")}
             onOpenTask={setOpenTask}
+            // Галочка, когда своё обсуждение сделало: замечание передано
+            // юристам, отправлено заказчику или признано ненужным. Дальше
+            // работа не у нас — у юристов стоит своя задача и свой кружок, и
+            // держать оба синими значит показывать одну работу дважды.
             mark={
-              writing
-                ? "active"
-                : !talk
+              !talk
                 ? "idle"
-                : talk.stage === "sent"
+                : DISCUSSION_DONE.includes(talk.stage)
                   ? "done"
-                  : talk.overdue || talk.burning
-                    ? "hot"
-                    : "active"
+                  : writing
+                    ? "active"
+                    : undefined
             }
             right={
               // Пока модель пишет, срок неважен: вопрос к узлу в этот момент
@@ -206,6 +322,15 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
               ) : talk ? (
                 talk.stage === "sent" ? (
                   <Chip tone="ok">Отправлено</Chip>
+                ) : talk.overdue ? (
+                  // Нулями и красным, как у приёма заявок: срок обсуждения
+                  // прошёл, а замечание заказчику не ушло. Снять требование
+                  // после срока уже нечем — вопрос к узлу именно этот.
+                  <Passed
+                    submitted={false}
+                    missed="Срок обсуждения прошёл, замечание заказчику не отправлено"
+                    className="text-[11.5px]"
+                  />
                 ) : talk.deadline ? (
                   <Clock due={talk.deadline} />
                 ) : null
@@ -278,14 +403,15 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
             onOpenTask={setOpenTask}
             // Собранные подписи важнее сроков задач: без них статус недоступен,
             // и узел «сделан» именно по ним.
-            mark={card.approved ? "done" : undefined}
+            mark={card.submitted ? "done" : card.approved ? "done" : undefined}
             right={
-              card.approve_by ? (
+              card.approve_by && !card.submitted ? (
                 <span className="text-[11.5px] whitespace-nowrap text-ink-muted tabular-nums">
                   подписи до {stamp(card.approve_by)}
                 </span>
               ) : undefined
             }
+            meta={<Bid card={card} onDone={onDone} />}
           />
         </Panel>
 
@@ -293,11 +419,7 @@ export function Steps({ card, people }: { card: Card; people: Person[] }) {
       </div>
 
       {adding && (
-        <NewTask
-          card={card}
-          people={people}
-          onClose={() => setAdding(false)}
-        />
+        <NewTask card={card} people={people} onClose={() => setAdding(false)} />
       )}
     </>
   );
@@ -349,21 +471,19 @@ function Rung({
     .sort((a, b) => (b.done_at || "").localeCompare(a.done_at || ""));
 
   const near = live[0];
+  // Правило то же, что у точек отделов в списке лотов, и это намеренно: строка
+  // списка и правый столбец карточки должны говорить о лоте одно и то же.
+  // Закончил — если задачи были и ни одной не осталось открытой; отсутствие
+  // задач вовсе — не готовность, а «руки не дошли».
   const own: Mark =
-    mark ??
-    (live.length
-      ? heat(near?.due_at) === "hot"
-        ? "hot"
-        : "active"
-      : mine.length
-        ? "done"
-        : "idle");
+    mark ?? (live.length ? "active" : mine.length ? "done" : "idle");
 
   return (
     <Node
       first={first}
       last={last}
       mark={own}
+      count={live.length}
       title={title}
       open={open}
       onToggle={onToggle}
@@ -385,14 +505,14 @@ function Rung({
              а спрашивает он именно это: «2/3» читается сразу и не требует
              арифметики. Что означают числа, сказано словами в своде наверху
              колонки. */
-          <span className="flex flex-wrap items-center gap-x-2">
-            <span title={`${done.length} из ${mine.length} задач закрыто`}>
-              <b className="font-semibold text-ink">{done.length}</b>/
-              {mine.length}
-            </span>
-            {live.some((task) => !task.taken_at) && (
-              <Chip tone="blue">есть свободная</Chip>
-            )}
+          /* Плашки «есть свободная» рядом с долей больше нет. Она отвечала на
+             тот же вопрос, что и сами строки задач под узлом: у каждой
+             написано, свободна она или у кого. Плашка повторяла это сводкой,
+             занимала место в узкой рельсе и при трёх задачах говорила «есть
+             свободная», не называя какая. */
+          <span title={`${done.length} из ${mine.length} задач закрыто`}>
+            <b className="font-semibold text-ink">{done.length}</b>/
+            {mine.length}
           </span>
         ) : null
       }

@@ -686,21 +686,12 @@ def _time_left(row: Discussion, now: datetime) -> tuple[str, bool, bool]:
     if row.deadline is None or row.stage is DiscussionStage.SENT:
         return "", False, False
 
-    left = row.deadline - now
-    seconds = int(left.total_seconds())
-    if seconds <= 0:
-        return "срок прошёл", False, True
+    # Тот же расчёт, что у лотов и задач: «просрочено на 3 ч. 20 мин.», а не
+    # «срок прошёл». Двадцать минут опоздания догоняются сегодня, три дня —
+    # означают, что замечание вообще никто не открывал.
+    from platform_api.modules.cards import time_left as _left
 
-    hours, rest = divmod(seconds, 3600)
-    minutes = rest // 60
-    if hours >= 24:
-        days, hours = divmod(hours, 24)
-        words = f"{days} дн. {hours} ч."
-    elif hours:
-        words = f"{hours} ч. {minutes} мин."
-    else:
-        words = f"{minutes} мин."
-    return words, left <= BURNING, False
+    return _left(row.deadline, now)
 
 
 __all__ = [

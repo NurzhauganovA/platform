@@ -15,6 +15,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { remarks as api, type Remark, type Stage } from "@/api/remarks";
 import { ApiError } from "@/api/client";
 import { Badge, Button, Card as Panel, Pair, cx, money } from "@/ui";
+import { Passed } from "@/features/cards/kit";
 import { Board, Peek, type BoardColumn } from "@/ui/board";
 import { OutcomeWord, STAGE_RULE, WritingNote } from "./marks";
 
@@ -134,13 +135,15 @@ function Left({ remark }: { remark: Remark }) {
   if (!remark.left) {
     return <span className="text-[11px] text-ink-muted">—</span>;
   }
-  if (remark.overdue) {
+  if (remark.overdue)
     return (
-      <span className="text-[11px] text-ink-muted line-through">
-        срок прошёл
-      </span>
+      <Passed
+        submitted={remark.stage === "sent"}
+        done="Срок прошёл, но замечание заказчику отправлено"
+        missed="Срок обсуждения прошёл, замечание заказчику не отправлено"
+        className="text-[11px]"
+      />
     );
-  }
   return (
     <span
       className={cx(

@@ -40,6 +40,7 @@ import {
   cx,
   money,
 } from "@/ui";
+import { Passed } from "./kit";
 
 type Tab = "burning" | "mine" | "unowned" | "all" | LotStatus;
 
@@ -406,7 +407,15 @@ function Desks({ card }: { card: Card }) {
                 : "border border-hairline text-ink-muted",
           )}
         >
-          {desk.done ? "✓" : desk.open_tasks > 0 ? String(desk.open_tasks) : ""}
+          {/* Больше девяти в кружок не влезает: «12» в круге восемнадцати
+              точек читается как «2». Точное число — в подсказке. */}
+          {desk.done
+            ? "✓"
+            : desk.open_tasks > 9
+              ? "9+"
+              : desk.open_tasks > 0
+                ? String(desk.open_tasks)
+                : ""}
           <span className="sr-only">
             {desk.title}
             {desk.done ? " — закончено" : " — не закончено"}
@@ -421,13 +430,8 @@ function Deadline({ card }: { card: Card }) {
   if (!card.left) {
     return <span className="text-sm text-ink-muted">—</span>;
   }
-  if (card.overdue) {
-    return (
-      <span className="text-sm text-ink-muted line-through decoration-baseline">
-        срок прошёл
-      </span>
-    );
-  }
+  if (card.overdue)
+    return <Passed submitted={card.submitted} className="text-sm" />;
   return (
     <span
       className={cx(

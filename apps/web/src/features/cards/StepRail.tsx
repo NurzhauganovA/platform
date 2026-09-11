@@ -42,6 +42,7 @@ export type Mark = "done" | "active" | "hot" | "idle";
  */
 export function Node({
   mark,
+  count = 0,
   title,
   right,
   meta,
@@ -54,6 +55,8 @@ export function Node({
   children,
 }: {
   mark: Mark;
+  /** Сколько задач отдела ещё висит. Ноль — кружок пустой. */
+  count?: number;
   title: string;
   /** Что справа от названия: срок, плашка состояния или слово. */
   right?: ReactNode;
@@ -80,19 +83,44 @@ export function Node({
             last ? "bottom-[calc(100%-15px)]" : "bottom-0",
           )}
         />
+        {/* Те же три состояния, что у точек отделов в списке лотов: серое —
+            до отдела не дошли, синее с числом — столько задач висит, зелёное
+            с галочкой — отдел закончил. Раньше здесь было четыре цвета и ни
+            одного числа: красный и синий отличались только оттенком, а
+            «сколько там задач» приходилось раскрывать узел.
+
+            Число внутри кружка, а не рядом: рельса узкая, и подпись сбоку
+            уезжала под название отдела. */}
         <span
+          title={
+            mark === "done"
+              ? "Отдел закончил"
+              : count > 0
+                ? `Задач в работе: ${count}`
+                : "Ещё не начинали"
+          }
           className={cx(
-            "relative z-[1] flex h-[17px] w-[17px] items-center justify-center rounded-full bg-surface",
+            "relative z-[1] flex h-[18px] w-[18px] items-center justify-center rounded-full bg-surface",
+            "text-[9.5px] leading-none font-bold",
             mark === "done"
               ? "border-[1.5px] border-good/50 bg-good/10 text-good"
-              : mark === "active"
-                ? "border-4 border-series-1"
-                : mark === "hot"
-                  ? "border-4 border-critical"
-                  : "border-[1.5px] border-baseline",
+              : count > 0
+                ? "border-[1.5px] border-series-1 bg-series-1/10 text-series-1"
+                : "border-[1.5px] border-baseline text-transparent",
           )}
         >
-          {mark === "done" && <Tick />}
+          {/* Больше девяти в кружок не влезает: «12» в круге восемнадцати
+              точек читается как «2». Дальше — «9+», а точное число стоит на
+              самой строке отдела долей «3 из 12». */}
+          {mark === "done" ? (
+            <Tick />
+          ) : count > 9 ? (
+            "9+"
+          ) : count > 0 ? (
+            count
+          ) : (
+            ""
+          )}
         </span>
       </div>
 
@@ -184,7 +212,14 @@ export function TaskLine({ task, onOpen }: { task: Job; onOpen: () => void }) {
         >
           {task.title}
         </span>
-        <span className="mt-px block truncate text-[11.5px] text-ink-muted">
+        <span
+          className={cx(
+            "mt-px block truncate text-[11.5px]",
+            !done && !task.taken_at
+              ? "font-medium text-series-1"
+              : "text-ink-muted",
+          )}
+        >
           {done
             ? `${(task.done_by || "закрыта").split(" ")[0]}${task.done_at ? ` · ${stamp(task.done_at)}` : ""}`
             : task.taken_at

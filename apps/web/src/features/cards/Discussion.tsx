@@ -28,7 +28,7 @@ import { remarks as api, type Remark, type Stage } from "@/api/remarks";
 import { ApiError } from "@/api/client";
 import type { Card } from "@/api/cards";
 import { Button, Card as Panel, EmptyState, Spinner, cx } from "@/ui";
-import { BarHead, BarTitle, Chip, Note, stamp } from "./kit";
+import { BarHead, BarTitle, Chip, Note, Passed, stamp } from "./kit";
 import { SpecHint } from "./SpecHint";
 
 /**
@@ -191,17 +191,28 @@ export function Discussion({ card }: { card: Card }) {
         <BarHead>
           <Chip tone={sent ? "ok" : "calm"}>{data.stage_name}</Chip>
 
-          <Note className="tabular-nums">
-            {sent
-              ? [data.sent_at && stamp(data.sent_at), whatNext(data)]
-                  .filter(Boolean)
-                  .join(" · ")
-              : data.left
-                ? data.overdue
-                  ? "срок прошёл"
-                  : `осталось ${data.left}`
-                : "срок не назначен"}
-          </Note>
+          {/* Прошедший срок — нулями и цветом, как у приёма заявок. Вопрос к
+              нему тот же: успели или нет. Красное значит, что замечание
+              заказчику так и не ушло, — а обсуждение затем и заводят, чтобы
+              снять требование до подачи; после срока снимать его уже нечем.
+              Зелёное с галочкой — ушло, и ответа ждём. */}
+          {!sent && data.overdue ? (
+            <Passed
+              submitted={false}
+              missed="Срок обсуждения прошёл, замечание заказчику не отправлено"
+              className="text-[11.5px]"
+            />
+          ) : (
+            <Note className="tabular-nums">
+              {sent
+                ? [data.sent_at && stamp(data.sent_at), whatNext(data)]
+                    .filter(Boolean)
+                    .join(" · ")
+                : data.left
+                  ? `осталось ${data.left}`
+                  : "срок не назначен"}
+            </Note>
+          )}
 
           {busy && (
             <span className="flex items-center gap-1.5 text-[12.5px] text-ink-secondary">

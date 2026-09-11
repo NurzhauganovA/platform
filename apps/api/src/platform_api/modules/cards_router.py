@@ -31,7 +31,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from platform_api.auth.dependencies import CurrentUser, Db, require_roles
@@ -171,7 +171,14 @@ class CardOut(BaseModel):
     won_amount: float | None
     winner: str
     started_at: str
+    bid_amount: float | None = None
+    """За сколько подали заявку. Пусто — не подавали."""
+
     submitted_at: str
+    submitted: bool = False
+    """Подана ли заявка. Шире, чем `submitted_at`: лот, отправленный сразу в
+    «Договор», отметки не получил, а заявка по нему подавалась."""
+
     finished_at: str
 
     approvals: list[SignOut]
@@ -364,6 +371,16 @@ class TakeIn(BaseModel):
     пустым» в JSON приходят одинаково, и возврат в очередь молча брал задачу на
     того, кто нажал «Вернуть отделу», — кнопка делала обратное написанному.
     """
+
+
+class SubmitIn(BaseModel):
+    """Сумма, за которую участвуем.
+
+    Обязательна и строго больше нуля: подача без суммы — это та же отметка
+    «подали», ради замены которой всё и делалось.
+    """
+
+    amount: Decimal = Field(gt=0, description="За сколько подали заявку")
 
 
 class ResultIn(BaseModel):
@@ -1159,6 +1176,38 @@ def post_sign(
             kind=body.kind,
             state=body.state,
             note=body.note,
+        )
+    )
+    db.commit()
+    return _card_out(_one(db, identity, card_id))
+
+
+@router.post("/{card_id}/submit", summary="Отметить подачу заявки")
+def post_submit(
+    card_id: uuid.UUID,
+    body: SubmitIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Guard = None,
+) -> CardOut:
+    """Отмечает поданную заявку и запоминает, за сколько подали.
+
+    Сумма обязательна. Подача была одним нажатием, и всё, что о ней
+    оставалось, — время перевода; за сколько заходили, спрашивают ровно тогда,
+    когда пришли итоги, и вспомнить это через месяц уже некому.
+
+    С этого момента лот знает о подаче постоянно — по признаку, а не по
+    состоянию: переводить его можно откуда угодно куда угодно, и «Договор»
+    говорит о подаче лишь косвенно.
+    """
+    _act(
+        lambda: cards.submit(
+            db,
+            organization_id=identity.organization.id,
+            card_id=card_id,
+            role=identity.role,
+            amount=body.amount,
+            user_id=identity.user.id,
         )
     )
     db.commit()

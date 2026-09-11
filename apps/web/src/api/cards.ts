@@ -93,11 +93,28 @@ export type Card = {
   approve_overdue: boolean;
 
   note: string;
+  /**
+   * За сколько подали заявку. Пусто — не подавали.
+   *
+   * Наша цена участия: не цена закупки (`amount`, объявлена заказчиком) и не
+   * цена победителя (`won_amount`). Три разные суммы, и путать их дорого — по
+   * первой считают маржу, по третьей понимают, насколько промахнулись.
+   */
+  bid_amount: number | null;
   won_amount: number | null;
   winner: string;
   /** Когда лот взяли в работу. Первый вопрос к залежавшейся карточке. */
   started_at: string;
   submitted_at: string;
+  /**
+   * Подана ли заявка.
+   *
+   * Шире, чем отметка времени: переводить лот можно откуда угодно куда угодно,
+   * и отправленный сразу в «Договор» отметки не получил — а договор без
+   * участия не заключают. Считает сервер: второй такой же расчёт здесь
+   * разошёлся бы с первым.
+   */
+  submitted: boolean;
   finished_at: string;
 
   approvals: Sign[];
@@ -375,6 +392,16 @@ export const cardsApi = {
     api.post<Job>(`/api/cards/tasks/${taskId}/take`, { release: true }),
 
   /** Цена, с которой выиграли, или победитель, если выиграли не мы. */
+  /**
+   * Отмечает подачу и запоминает, за сколько подали.
+   *
+   * Сумма обязательна: подача без неё — это та же отметка «подали», ради
+   * замены которой всё и делалось. Спрашивают её ровно тогда, когда пришли
+   * итоги, и вспомнить через месяц уже некому.
+   */
+  submit: (cardId: string, amount: number) =>
+    api.post<Card>(`/api/cards/${cardId}/submit`, { amount }),
+
   result: (cardId: string, won_amount: number | null, winner = "") =>
     api.post<Card>(`/api/cards/${cardId}/result`, { won_amount, winner }),
 

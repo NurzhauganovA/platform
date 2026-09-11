@@ -103,6 +103,42 @@ FLOW: tuple[LotStatus, ...] = (
 # до «Завершён», «Проиграли» или «Отменён», получает `finished_at`.
 _FINAL = frozenset({LotStatus.DONE, LotStatus.LOST, LotStatus.CANCELLED})
 
+# Состояния, в которые лот попадает уже после поданной заявки. «Проиграли» в
+# их числе: проиграть можно только то, в чём участвовал.
+_AFTER_SUBMIT = frozenset(
+    {
+        LotStatus.AWAITING,
+        LotStatus.WON,
+        LotStatus.LOST,
+        LotStatus.CONTRACT,
+        LotStatus.FULFILLING,
+        LotStatus.AWAITING_PAYMENT,
+        LotStatus.DONE,
+    }
+)
+
+
+def submitted(card: LotCard) -> bool:
+    """Подана ли заявка по лоту.
+
+    Не по одной отметке времени. `submitted_at` ставится переводом в «Ждём
+    итоги», а переводить можно откуда угодно куда угодно — это снято
+    намеренно, процесс в компании ещё меняется. Лот, отправленный сразу в
+    «Договор», отметки не получил, хотя заявка по нему, очевидно, подавалась:
+    договор без участия не заключают.
+
+    Отсюда два признака вместо одного: отметка, если она есть, и состояние,
+    в которое без поданной заявки не попадают. Отметку при этом не
+    дорисовываем задним числом — время подачи мы не знаем, а придуманное
+    время хуже отсутствующего: по нему потом считают сроки.
+
+    Первый признак теперь ставит человек: тендерщик вводит сумму участия и
+    жмёт «Подал» (`submit`). Второй остался для лотов, заведённых до этого, и
+    для тех, кого перевели сразу дальше по пути.
+    """
+    return card.submitted_at is not None or card.status in _AFTER_SUBMIT
+
+
 TRANSITIONS: dict[LotStatus, tuple[LotStatus, ...]] = {
     status: tuple(other for other in LotStatus if other is not status) for status in LotStatus
 }
@@ -413,7 +449,14 @@ class Card:
     started_at: str
     """Когда лот взяли в работу. Первый вопрос к залежавшейся карточке."""
 
+    bid_amount: Decimal | None
+    """За сколько подали заявку. Пусто — не подавали или подали до того, как
+    сумму стали спрашивать."""
+
     submitted_at: str
+    submitted: bool
+    """Подана ли заявка. Считает сервер: правило шире одной отметки времени, и
+    второй такой же расчёт в браузере разошёлся бы с первым."""
     finished_at: str
 
     approvals: tuple[Sign, ...]
@@ -725,6 +768,63 @@ def sign(
         actor_id=user_id,
         role=role,
         detail=note,
+    )
+    db.flush()
+    db.refresh(card)
+    return card
+
+
+def submit(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    card_id: uuid.UUID,
+    role: Role,
+    amount: Decimal,
+    user_id: uuid.UUID | None = None,
+) -> LotCard:
+    """Отмечает поданную заявку и запоминает, за сколько подали.
+
+    **Сумма обязательна, и это главное в этой команде.** Подача до сих пор
+    была одним нажатием: лот переводили в «Ждём итоги», и всё, что о ней
+    оставалось, — время перевода. За сколько заходили, держали в голове и в
+    переписке, а спрашивают это ровно тогда, когда итоги пришли: насколько
+    промахнулись и с какой маржой брали бы. Через месяц вспомнить некому.
+
+    Отметка ставится здесь, а не выводится из состояния. Переводить лот можно
+    откуда угодно куда угодно — это снято намеренно, — и состояние «Договор»
+    говорит о подаче лишь косвенно. Здесь же человек нажал «Подал» и назвал
+    сумму: дальше лот знает об этом постоянно, и срок приёма красится по этому
+    признаку, а не по догадке.
+
+    Повторная подача не заводит вторую: сумма поправляется, время остаётся
+    первым. Поправляют её обычно сразу — ошиблись разрядом, — а «когда подали»
+    от этого не меняется.
+    """
+    card = _required(db, organization_id, card_id)
+    if role not in _RUNS:
+        raise SpokenError("Отмечать подачу вам нельзя: это делает менеджер")
+    if amount <= 0:
+        raise SpokenError("Назовите сумму, за которую участвуем: без неё подача не считается")
+
+    was = card.submitted_at
+    card.bid_amount = amount
+    card.submitted_at = was or utcnow()
+    card.participation = Participation.YES
+    # Двигаем по пути, а не выставляем жёстко: лот мог уже уехать дальше —
+    # например, сразу в «Договор», — и возвращать его в «Ждём итоги» значит
+    # стирать то, что человек уже отметил.
+    order = {status: place for place, status in enumerate(FLOW)}
+    if order.get(card.status, -1) < order[LotStatus.AWAITING]:
+        card.status = LotStatus.AWAITING
+    trace(
+        db,
+        card_id=card.id,
+        kind="submit",
+        title="Отметил подачу" if was else "Подал заявку",
+        actor_id=user_id,
+        role=role,
+        detail=f"{amount:,.0f} ₸".replace(",", " "),
     )
     db.flush()
     db.refresh(card)
@@ -1351,6 +1451,15 @@ def _job(
     )
 
 
+_TALK_DONE = frozenset(
+    {
+        DiscussionStage.WITH_LAWYERS,
+        DiscussionStage.SENT,
+        DiscussionStage.NOT_NEEDED,
+    }
+)
+"""Этапы, на которых обсуждение своё отработало."""
+
 DESK_MARKS: tuple[tuple[Department, str], ...] = (
     (Department.DISCUSSION, "Обсуждение"),
     (Department.ANALYSIS, "Разбор"),
@@ -1392,8 +1501,12 @@ def desk_marks(card: LotCard, *, talk: Discussion | None = None) -> tuple[DeskMa
     лотов точками и в карточке галочками. Два расчёта разошлись бы на первом же
     правиле — а правила у отделов разные и не выводятся одно из другого:
 
-    * **Обсуждение** закончено, когда замечание отправлено. Не когда написано:
-      написанный и не отправленный текст — это работа, которую ещё делают.
+    * **Обсуждение** закончено, когда своё оно отработало: замечание передано
+      юристам, отправлено заказчику или признано ненужным. Именно передано, а
+      не отправлено: дальше работа не у нас — у юристов на неё стоит своя
+      задача и свой кружок, и держать оба незакрытыми значит показывать одну
+      работу дважды. Написанный и не отправленный текст закрытым не считается:
+      это работа, которую ещё делают.
     * **Разбор** закончен, когда лот прошёл этот этап пути. Таблица к этому
       моменту собрана, но собранная таблица сама по себе не значит, что решение
       принято, — а точка отвечает именно за «отдел отпустил лот дальше».
@@ -1411,7 +1524,7 @@ def desk_marks(card: LotCard, *, talk: Discussion | None = None) -> tuple[DeskMa
         mine = [task for task in card.tasks if task.department is desk]
         live = sum(1 for task in mine if task.state is TaskState.OPEN)
         if desk is Department.DISCUSSION:
-            done = talk is not None and talk.stage is DiscussionStage.SENT
+            done = talk is not None and talk.stage in _TALK_DONE
         elif desk is Department.ANALYSIS:
             done = analysis_done
         else:
@@ -1497,7 +1610,9 @@ def _shown(
         won_amount=card.won_amount,
         winner=card.winner,
         started_at=card.created_at.isoformat() if card.created_at else "",
+        bid_amount=card.bid_amount,
         submitted_at=card.submitted_at.isoformat() if card.submitted_at else "",
+        submitted=submitted(card),
         finished_at=card.finished_at.isoformat() if card.finished_at else "",
         approvals=signs,
         approved=_all_signed(card),
@@ -1969,24 +2084,32 @@ def people(db: DbSession, rows: Sequence[LotCard] | Sequence[Task]) -> dict[uuid
 
 
 def time_left(when: datetime | None, now: datetime) -> tuple[str, bool, bool]:
-    """Сколько осталось, словами. Возвращает ещё «горит» и «просрочено»."""
+    """Сколько осталось, словами. Возвращает ещё «горит» и «просрочено».
+
+    У прошедшего срока — насколько опоздали, а не «срок прошёл». Разница в
+    работе большая: задача, просроченная на двадцать минут, догоняется сегодня,
+    а просроченная на три дня означает, что её вообще никто не видел. Пока обе
+    выглядели одинаково, очередь отдела сортировали на глаз по дате заведения.
+    """
     if when is None:
         return "", False, False
     left = when - now
     seconds = int(left.total_seconds())
     if seconds <= 0:
-        return "срок прошёл", False, True
+        return f"просрочено на {_words(-seconds)}", False, True
+    return _words(seconds), left <= BURNING, False
 
-    hours, rest = divmod(seconds, 3600)
+
+def _words(seconds: int) -> str:
+    """Промежуток словами: «2 дн. 4 ч.», «3 ч. 20 мин.», «15 мин.»."""
+    hours, rest = divmod(max(seconds, 0), 3600)
     minutes = rest // 60
     if hours >= 24:
         days, hours = divmod(hours, 24)
-        words = f"{days} дн. {hours} ч."
-    elif hours:
-        words = f"{hours} ч. {minutes} мин."
-    else:
-        words = f"{minutes} мин."
-    return words, left <= BURNING, False
+        return f"{days} дн. {hours} ч."
+    if hours:
+        return f"{hours} ч. {minutes} мин."
+    return f"{minutes} мин."
 
 
 __all__ = [

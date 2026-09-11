@@ -13,6 +13,7 @@
 
 import { cx } from "@/ui";
 import type { Outcome, Remark, Stage } from "@/api/remarks";
+import { Passed } from "@/features/cards/kit";
 
 /**
  * Полоса этапа — вертикальная черта слева у строки списка.
@@ -84,13 +85,15 @@ export function Deadline({ remark }: { remark: Remark }) {
   if (!remark.left) {
     return <span className="text-sm text-ink-muted tabular-nums">—</span>;
   }
-  if (remark.overdue) {
+  if (remark.overdue)
     return (
-      <span className="text-sm text-ink-muted line-through decoration-baseline">
-        срок прошёл
-      </span>
+      <Passed
+        submitted={remark.stage === "sent"}
+        done="Срок прошёл, но замечание заказчику отправлено"
+        missed="Срок обсуждения прошёл, замечание заказчику не отправлено"
+        className="text-sm"
+      />
     );
-  }
   return (
     <span
       className={cx(

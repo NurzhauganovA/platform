@@ -19,7 +19,7 @@ import {
 } from "@/api/cards";
 import { ApiError } from "@/api/client";
 import { Button, Input, cx } from "@/ui";
-import { stamp } from "./kit";
+import { Passed, stamp } from "./kit";
 import { StatusModal } from "./StatusModal";
 
 /**
@@ -192,41 +192,41 @@ function Deadline({ card }: { card: Card }) {
   return (
     <>
       {/* Подпись над числом: «15:57:42» само по себе не говорит, до чего это.
-          До конца приёма, а не до подписей — их срок строкой правее. */}
+          Точная дата и минута — в подписи самого числа при наведении.
+
+          Строки с обеими датами под отсчётом больше нет. «приём до 10.09,
+          15:33 · подписи до 10.09, 13:33» повторяло то, что и так тикало
+          рядом, а второе число было про срок сбора подписей — его мы
+          посчитаем иначе, и держать на экране заготовку от прошлого способа
+          значит объяснять её каждому новому сотруднику. */}
       <span className="w-[190px] shrink-0">
-        <span className="block text-[11.5px] text-ink-muted">
+        <span
+          className="block text-[11.5px] text-ink-muted"
+          title={`Приём заявок до ${stamp(card.deadline)}`}
+        >
           До конца приёма заявок
         </span>
-        <span
-          className={cx(
-            "mt-1 block text-[27px] leading-none font-semibold tracking-[-0.03em] tabular-nums",
-            step.text,
-          )}
-        >
-          {left === 0 ? "приём закрыт" : clock(left)}
-        </span>
-      </span>
-
-      {/* Обе даты одной строкой. Подписи собирают на два часа раньше приёма, и
-          держать это число в другом месте экрана значит заставить человека
-          складывать в уме на срочной работе.
-
-          Полосы пройденного под ними больше нет. Она показывала долю от
-          взятия в работу до окончания приёма — величину, которой никто не
-          пользуется: решают по остатку слева, а он и так набран крупно. Зато
-          сама полоса тянулась во всю ширину и притягивала взгляд к тому, что
-          ничего не решает; освободившееся место отдано датам, набранным
-          крупнее — их читают вторым взглядом, но читают. */}
-      <span className="min-w-[120px] flex-1">
-        <span className="block text-[13.5px] leading-snug text-ink-secondary tabular-nums">
-          приём до <b className="font-semibold text-ink">{stamp(card.deadline)}</b>
-          {card.approve_by && (
-            <>
-              {" · подписи до "}
-              <b className="font-semibold text-ink">{stamp(card.approve_by)}</b>
-            </>
-          )}
-        </span>
+        {/* Нулями, а не словами «приём закрыт»: то же место, та же ширина, и
+            цвет отвечает на вопрос, который по закрытому приёму задают всегда
+            — успели или нет. Красное значит, что заявку мы так и не подали;
+            зелёное с галочкой — подали, и лот ждёт итогов. */}
+        {left === 0 ? (
+          <span className="mt-1 block">
+            <Passed
+              submitted={card.submitted}
+              className="text-[27px] leading-none tracking-[-0.03em]"
+            />
+          </span>
+        ) : (
+          <span
+            className={cx(
+              "mt-1 block text-[27px] leading-none font-semibold tracking-[-0.03em] tabular-nums",
+              step.text,
+            )}
+          >
+            {clock(left)}
+          </span>
+        )}
       </span>
     </>
   );
@@ -259,9 +259,9 @@ const HOUR = 60 * 60 * 1000;
  * неё, а на спецификацию.
  */
 function urgency(left: number): { text: string } {
-    if (left < 12 * HOUR) return { text: "text-critical" };
-    if (left < 24 * HOUR) return { text: "text-warning" };
-    return { text: "text-ink" };
+  if (left < 12 * HOUR) return { text: "text-critical" };
+  if (left < 24 * HOUR) return { text: "text-warning" };
+  return { text: "text-ink" };
 }
 
 /**

@@ -39,7 +39,7 @@ export function Rail({
     <div className="space-y-2.5">
       {/* Свод задач ушёл в рельсу: он был числом по трём отделам, а рельса
           показывает ход целиком, и два свода на одном экране расходятся. */}
-      <Steps card={card} people={people} />
+      <Steps card={card} people={people} onDone={onDone} />
       <People card={card} people={people} onDone={onDone} />
     </div>
   );

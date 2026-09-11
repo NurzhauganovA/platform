@@ -320,7 +320,9 @@ def test_fail_proshedshiy_srok_vidno_otdelno(
         user_id=кто,
     )
     assert карточка.overdue and not карточка.burning
-    assert карточка.left == "срок прошёл"
+    # Не «срок прошёл», а насколько опоздали: час догоняется сегодня, три дня
+    # означают, что замечание вообще никто не открывал.
+    assert карточка.left == "просрочено на 1 ч. 0 мин."
 
 
 def test_fail_knopki_sovpadayut_s_pravami(db: DbSession, org: Organization, кто: uuid.UUID) -> None:

@@ -21,6 +21,7 @@ import { TaskWindow } from "./TaskWindow";
 import { PageHeader } from "@/shell/AppShell";
 import { ApiError } from "@/api/client";
 import { Card as Panel, EmptyState, Page, Spinner, Tabs, cx } from "@/ui";
+import { stamp } from "./kit";
 
 type Tab = "mine" | "queue" | "all" | "closed";
 
@@ -371,16 +372,21 @@ function JobRow({ job, onOpen }: { job: Job; onOpen: () => void }) {
             </span>
           </span>
 
+          {/* Просроченное — красным и с числом: сервер говорит, на сколько
+              опоздали. Разница в работе большая, а выглядела одинаково:
+              задача, просроченная на двадцать минут, догоняется сегодня, а
+              просроченная на три дня означает, что её вообще никто не видел.
+              Серое зачёркнутое «срок прошёл» не различало ни того, ни
+              другого, и очередь отдела сортировали на глаз. */}
           {job.left && job.state === "open" && (
             <span
               className={cx(
                 "shrink-0 text-sm tabular-nums whitespace-nowrap",
-                job.overdue
-                  ? "text-ink-muted line-through decoration-baseline"
-                  : job.burning
-                    ? "font-semibold text-critical"
-                    : "text-ink-secondary",
+                job.overdue || job.burning
+                  ? "font-semibold text-critical"
+                  : "text-ink-secondary",
               )}
+              title={job.due_at ? `Срок: ${stamp(job.due_at)}` : undefined}
             >
               {job.left}
             </span>
@@ -389,7 +395,17 @@ function JobRow({ job, onOpen }: { job: Job; onOpen: () => void }) {
           {/* Кто держит задачу — в самой строке: очередь отдела читают
               глазами сверху вниз, и «свободна» должно быть видно без
               открытия. */}
-          <span className="shrink-0 text-xs text-ink-muted">
+          <span
+            className={cx(
+              "shrink-0 text-xs",
+              // Свободная задача — синим: это не состояние покоя, а
+              // приглашение взять. Серым она читалась как «тут ничего нет» и
+              // терялась среди имён — в очереди отдела ищут глазами именно её.
+              job.state === "open" && !job.assignee
+                ? "font-medium text-series-1"
+                : "text-ink-muted",
+            )}
+          >
             {job.state !== "open"
               ? "закрыта"
               : job.assignee

@@ -22,6 +22,7 @@ import {
 } from "@/api/cards";
 import { ApiError } from "@/api/client";
 import { Badge, Button, Card as Panel, Pair, cx, money } from "@/ui";
+import { Passed } from "./kit";
 import { Board, Peek, type BoardColumn } from "@/ui/board";
 
 /** Цвет точки у заголовка колонки. Место в процессе, а не важность. */
@@ -182,13 +183,8 @@ function Face({ lot }: { lot: Lot }) {
  */
 function Left({ lot }: { lot: Lot }) {
   if (!lot.left) return <span className="text-[11px] text-ink-muted">—</span>;
-  if (lot.overdue) {
-    return (
-      <span className="text-[11px] text-ink-muted line-through">
-        срок прошёл
-      </span>
-    );
-  }
+  if (lot.overdue)
+    return <Passed submitted={lot.submitted} className="text-[11px]" />;
   return (
     <span
       className={cx(
