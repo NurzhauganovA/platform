@@ -217,21 +217,24 @@ def test_идущий_разбор_виден_снаружи(
 def test_фоновая_работа_двигает_статус_вперёд(
     db: DbSession, org: Organization, кто: uuid.UUID, лот: Any
 ) -> None:
-    """Замечание написано — лот в «Обсуждении», разбор собран — «На разборе».
+    """Замечание написано или разбор собран — лот «В работе».
 
-    Человек эти переводы всё равно делал, только позже и не всегда: лот с
+    Человек этот перевод всё равно делал, только позже и не всегда: лот с
     готовым разбором неделю числился новым, и на планёрке его считали
     нетронутым.
+
+    Второй прогон ничего не двигает: обсуждение и разбор идут внутри одного
+    состояния, и «уже там» — это не работа, а тишина.
     """
     from platform_api.db.models import LotStatus
 
     assert лот.status is LotStatus.NEW
 
-    assert cards.advance(db, card=лот, to=LotStatus.DISCUSSION, why="написано") is True
-    assert лот.status is LotStatus.DISCUSSION
+    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="написано") is True
+    assert лот.status is LotStatus.WORK
 
-    assert cards.advance(db, card=лот, to=LotStatus.ANALYSIS, why="разобрано") is True
-    assert лот.status is LotStatus.ANALYSIS
+    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="разобрано") is False
+    assert лот.status is LotStatus.WORK
 
 
 def test_назад_статус_не_откатывается(
@@ -247,7 +250,7 @@ def test_назад_статус_не_откатывается(
 
     cards.advance(db, card=лот, to=LotStatus.APPROVAL, why="ушёл вперёд")
 
-    assert cards.advance(db, card=лот, to=LotStatus.DISCUSSION, why="поздно") is False
+    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="поздно") is False
     assert лот.status is LotStatus.APPROVAL
 
 
@@ -262,11 +265,11 @@ def test_сошедший_с_дистанции_не_двигается(
     """
     from platform_api.db.models import LotStatus
 
-    лот.status = LotStatus.SKIPPED
+    лот.status = LotStatus.DONE
     db.flush()
 
-    assert cards.advance(db, card=лот, to=LotStatus.ANALYSIS, why="разобрано") is False
-    assert лот.status is LotStatus.SKIPPED
+    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="разобрано") is False
+    assert лот.status is LotStatus.DONE
 
 
 def test_перевод_прогоном_помечен_машиной(
@@ -279,7 +282,7 @@ def test_перевод_прогоном_помечен_машиной(
     """
     from platform_api.db.models import LotEvent, LotStatus
 
-    cards.advance(db, card=лот, to=LotStatus.DISCUSSION, why="написано")
+    cards.advance(db, card=лот, to=LotStatus.WORK, why="написано")
 
     запись = (
         db.execute(select(LotEvent).where(LotEvent.card_id == лот.id, LotEvent.kind == "moved"))

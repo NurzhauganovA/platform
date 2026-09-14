@@ -19,7 +19,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { cardsApi, type Card } from "@/api/cards";
-import { Card as Panel, EmptyState, Spinner, Tabs } from "@/ui";
+import { Card as Panel, EmptyState, Spinner, Tabs, cx } from "@/ui";
 import { Discussion } from "./Discussion";
 import { ChatDock } from "./ChatDock";
 import { Files } from "./Files";
@@ -35,6 +35,16 @@ export function CardPage() {
   // Первым — обсуждение: оно пишется под срок. Данные закупки вкладкой
   // быть перестали: их открывают панелью справа с любой вкладки.
   const [tab, setTab] = useState<Tab>("discussion");
+  // Развёрнут ли правый столбец. Запоминается: тот, кто работает в таблице
+  // разбора, работает в ней весь день, и сворачивать рельсу на каждом лоте
+  // заново — это нажатие, которое делают тридцать раз.
+  const [rail, setRail] = useState(
+    () => window.localStorage.getItem(RAIL) !== "0",
+  );
+  const foldRail = (next: boolean) => {
+    setRail(next);
+    window.localStorage.setItem(RAIL, next ? "1" : "0");
+  };
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["card", id],
@@ -116,6 +126,36 @@ export function CardPage() {
           <span className="ml-auto flex shrink-0 items-center gap-[7px]">
             <LotFacts card={data} />
             <PortalLink card={data} />
+            {/* Свернуть столбец задач — как меню слева. Кнопка в шапке, а не
+                на самом столбце: свёрнутый, он занимает ноль ширины, и
+                разворачивать его было бы нечем. */}
+            <button
+              type="button"
+              onClick={() => foldRail(!rail)}
+              aria-expanded={rail}
+              title={rail ? "Свернуть задачи" : "Развернуть задачи"}
+              className={cx(
+                "flex h-7 items-center gap-1.5 rounded-[7px] border border-hairline",
+                "bg-surface px-[9px] text-[12.5px] text-ink transition hover:bg-plane",
+                "max-[1040px]:hidden",
+              )}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <path
+                  d="M4 5.5h16v13H4zM15 5.5v13"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {rail ? "Скрыть задачи" : "Задачи"}
+            </button>
             <Link
               to="/work/lots"
               className="flex h-7 items-center rounded-[7px] border border-hairline bg-surface px-[11px] text-[12.5px] font-medium text-ink transition hover:bg-plane"
@@ -125,7 +165,14 @@ export function CardPage() {
           </span>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_352px] max-[1040px]:grid-cols-1">
+        <div
+          className={cx(
+            "grid min-h-0 flex-1 max-[1040px]:grid-cols-1",
+            rail
+              ? "grid-cols-[minmax(0,1fr)_352px]"
+              : "grid-cols-[minmax(0,1fr)_0]",
+          )}
+        >
           {/* Левая колонка со своей прокруткой; полоса подписей прилипает к её
               низу, а не к низу окна. */}
           <div className="flex min-w-0 flex-col overflow-auto">
@@ -176,10 +223,18 @@ export function CardPage() {
           </div>
 
           {/* Правая колонка своим фоном и своей прокруткой — как отдельная
-              поверхность: она про ход лота, а не про то, что открыто слева. */}
-          <aside className="overflow-auto border-l border-hairline bg-plane/60 p-3 max-[1040px]:border-t max-[1040px]:border-l-0">
-            <Rail card={data} people={people ?? []} onDone={refresh} />
-          </aside>
+              поверхность: она про ход лота, а не про то, что открыто слева.
+
+              Сворачивается, как и меню слева. Таблица разбора на сорок
+              позиций с двумя нашими столбцами не влезает в остаток ширины на
+              ноутбуке: человек тянет её вбок, а рельса в это время показывает
+              то, что он уже прочитал. Свёрнутое состояние запоминается — тот,
+              кто работает в таблице, работает в ней весь день. */}
+          {rail && (
+            <aside className="overflow-auto border-l border-hairline bg-plane/60 p-3 max-[1040px]:border-t max-[1040px]:border-l-0">
+              <Rail card={data} people={people ?? []} onDone={refresh} />
+            </aside>
+          )}
         </div>
       </div>
 
@@ -189,6 +244,8 @@ export function CardPage() {
     </>
   );
 }
+
+const RAIL = "fintend:card-rail";
 
 type Tab =
   | "discussion"

@@ -70,7 +70,7 @@ export function ApprovalPage() {
   const all = useMemo(
     () =>
       (data ?? []).filter(
-        (item) => item.status === "approval" || item.status === "ready",
+        (item) => item.status === "approval" || item.status === "submission",
       ),
     [data],
   );

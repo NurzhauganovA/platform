@@ -416,7 +416,11 @@ export function SpecSheet({
             <Button variant="secondary" onClick={() => addRow(draft)}>
               + Строка
             </Button>
-            {!supply && <ToSupply card={card} handed={draft.handed} />}
+            {supply ? (
+              <SupplyMoves card={card} />
+            ) : (
+              <ToSupply card={card} handed={draft.handed} />
+            )}
           </div>
         </Panel>
       )}
@@ -986,6 +990,137 @@ function freeKey(taken: string[], prefix: string): string {
  * сейчас. Назначить конкретного человека отсюда нельзя намеренно: кто свободен,
  * в отделе знают лучше.
  */
+/**
+ * Чем снабжение заканчивает свою часть.
+ *
+ * Две двери, и обе ведут дальше по пути. «Всё нашёл» — таблица заполнена,
+ * поставщики и сроки стоят, дальше предподачная проверка. «Вернуть на разбор» —
+ * товара по позиции нет или цена не набирается: разбирать это должен тот, кто
+ * считал участие, и молча оставить лот у себя значит спрятать плохую новость
+ * до планёрки.
+ *
+ * Обе двери заводят задачу, а не просто меняют состояние. Отдел узнаёт о
+ * работе из своей очереди; перевод без задачи — это тишина, в которой лот
+ * стоит до тех пор, пока кто-нибудь не откроет его сам.
+ */
+function SupplyMoves({ card }: { card: Card }) {
+  const cache = useQueryClient();
+  const [trouble, setTrouble] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [why, setWhy] = useState("");
+
+  const { data: tasks } = useQuery({
+    queryKey: ["card-tasks", card.id, "all"],
+    queryFn: () => cardsApi.tasks({ card_id: card.id, state: "all" }),
+    staleTime: 15_000,
+  });
+
+  // Своё уже отдали — второй раз не предлагаем: две одинаковые задачи в
+  // очереди означают, что одну из них кто-то сделает зря.
+  const passed = (tasks ?? []).some(
+    (task) =>
+      task.state === "open" &&
+      (task.department === "analysis" || task.department === "submission"),
+  );
+
+  const done = useMutation({
+    mutationFn: () =>
+      cardsApi.addTask(card.id, {
+        title: `Предподачная проверка · ${card.code}`,
+        department: "submission",
+        body:
+          "Снабжение нашло товар: поставщики, закупочные цены и сроки стоят в " +
+          "таблице «Снабжение». Сверьте с разбором и соберите заявку.",
+      }),
+    onSuccess: finish,
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  const back = useMutation({
+    mutationFn: () =>
+      cardsApi.addTask(card.id, {
+        title: `Актуализация разбора · ${card.code}`,
+        department: "analysis",
+        body:
+          why.trim() ||
+          "Снабжение вернуло разбор: по части позиций товара нет или цена не набирается.",
+      }),
+    onSuccess: () => {
+      setAsking(false);
+      setWhy("");
+      finish();
+    },
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
+  function finish() {
+    setTrouble("");
+    void cache.invalidateQueries({ queryKey: ["card-tasks", card.id] });
+    void cache.invalidateQueries({ queryKey: ["card", card.id] });
+  }
+
+  if (asking) {
+    return (
+      <span className="ml-auto flex flex-wrap items-center gap-2">
+        <input
+          value={why}
+          autoFocus
+          onChange={(event) => setWhy(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && why.trim()) back.mutate();
+            if (event.key === "Escape") setAsking(false);
+          }}
+          placeholder="Что не сходится: позиция, цена, срок"
+          className={cx(
+            "min-w-64 flex-1 rounded-[8px] border border-hairline bg-surface px-2.5 py-1.5",
+            "text-[13px] text-ink placeholder:text-ink-muted",
+            "focus:border-series-1 focus:outline-none",
+          )}
+        />
+        <Button variant="ghost" onClick={() => setAsking(false)}>
+          Отмена
+        </Button>
+        <Button
+          variant="primary"
+          disabled={!why.trim() || back.isPending}
+          onClick={() => back.mutate()}
+        >
+          {back.isPending ? "Возвращаем…" : "Вернуть"}
+        </Button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="ml-auto flex flex-wrap items-center gap-2.5">
+      <Note>
+        {passed
+          ? "Передано дальше — задача в очереди отдела."
+          : "Нашли всё — на предподачную проверку; нет — обратно на разбор с причиной."}
+      </Note>
+      {trouble && (
+        <span className="text-[12.5px] text-critical">{trouble}</span>
+      )}
+      <Button
+        variant="secondary"
+        disabled={passed || back.isPending}
+        onClick={() => setAsking(true)}
+      >
+        Вернуть на разбор
+      </Button>
+      <Button
+        variant="primary"
+        disabled={passed || done.isPending}
+        onClick={() => done.mutate()}
+      >
+        {done.isPending ? "Передаём…" : "Всё нашёл"}
+      </Button>
+    </span>
+  );
+}
+
 function ToSupply({ card, handed }: { card: Card; handed: boolean }) {
   const cache = useQueryClient();
   const [trouble, setTrouble] = useState("");
@@ -1011,9 +1146,12 @@ function ToSupply({ card, handed }: { card: Card; handed: boolean }) {
     mutationFn: async () => {
       await sheetApi.handover(card.id);
       return cardsApi.addTask(card.id, {
-        title: `Найти товар и подтвердить цены · ${card.code}`,
+        title: `Актуализация снабжением · ${card.code}`,
         department: "supply",
-        body: "Разбор спецификации собран и передан таблицей во вкладку «Снабжение». Нужны поставщик, цена и срок поставки.",
+        body:
+          "Разбор собран и передан таблицей во вкладку «Снабжение». Нужны " +
+          "поставщик, закупочная цена и срок по каждой позиции. Нашли всё — " +
+          "кнопка «Всё нашёл» там же; не сходится — «Вернуть на разбор».",
         due_at: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
       });
     },

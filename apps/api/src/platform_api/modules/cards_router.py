@@ -21,7 +21,6 @@ from typing import Annotated, BinaryIO
 
 from fastapi import (
     APIRouter,
-    Depends,
     File,
     Form,
     HTTPException,
@@ -34,7 +33,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from platform_api.auth.dependencies import CurrentUser, Db, require_roles
+from platform_api.auth.dependencies import CurrentUser, Db, requires_crm
 from platform_api.config import Settings
 from platform_api.db.models import (
     ApprovalKind,
@@ -43,9 +42,9 @@ from platform_api.db.models import (
     Job,
     JobStatus,
     LotCard,
+    LotOutcome,
     LotStatus,
     Participation,
-    Role,
     TaskState,
     User,
 )
@@ -66,29 +65,17 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/cards", tags=["Лоты в работе"])
 
-# Карточку видят те, кто с лотами работает: у каждого отдела в ней своё, и
-# запирать снабжение от лота, который оно же и снабжает, незачем.
+# Карточку видят те, у кого есть право на карточки лотов: у каждого отдела в
+# ней своё, и запирать снабжение от лота, который оно же и снабжает, незачем.
 #
-# Список явный, а не «все вошедшие». Роли прибавляются — бухгалтер, кладовщик,
-# — и новая не должна получать доступ к работе с закупками просто потому, что
-# её завели. Наблюдателя здесь нет намеренно: он смотрит отчёты, а карточка
-# это стол с задачами и подписями.
+# Правом, а не списком ролей. Роли заводит администратор — «снабженец без
+# цен», «стажёр», — и список имён новую роль не знает: она получила бы отказ
+# здесь, хотя право на карточки ей выдали. У наблюдателя этого права нет
+# намеренно: он смотрит отчёты, а карточка это стол с задачами и подписями.
 #
-# `Depends` обязателен. Без него FastAPI принимает проверку за обычный
-# параметр запроса: она не выполняется, а `_guard` вылезает в схеме API
-# отдельным полем. Тем же способом ломается любая проверка прав в проекте.
-requires_crm = Depends(
-    require_roles(
-        Role.MANAGER,
-        Role.ANALYST,
-        Role.BUYER,
-        Role.LAWYER,
-        Role.TECHNOLOGIST,
-        Role.ASSEMBLER,
-        Role.HEAD,
-        Role.COMMERCIAL,
-    )
-)
+# `Depends` обязателен (он внутри `requires_crm`). Без него FastAPI принимает
+# проверку за обычный параметр запроса: она не выполняется, а `_guard` вылезает
+# в схеме API отдельным полем. Тем же способом ломается любая проверка прав.
 Guard = Annotated[None, requires_crm]
 
 
@@ -151,6 +138,10 @@ class CardOut(BaseModel):
     step: int
     participation: str
     skip_reason: str
+    outcome: str
+    """Итог протокола: `none` — не участвовали, `won`, `lost`."""
+
+    outcome_name: str
 
     manager: str
     manager_id: str
@@ -197,6 +188,10 @@ class TaskOut(BaseModel):
     card_id: str
     card_code: str
     card_title: str
+    card_amount: float | None = None
+    """Сумма закупки: за что берётся человек, решают деньги и срок."""
+
+    card_customer: str = ""
     department: str
     department_name: str
     title: str
@@ -386,11 +381,14 @@ class SubmitIn(BaseModel):
 class ResultIn(BaseModel):
     """Чем кончилась подача.
 
-    Цена и победитель приходят вместе со статусом: отмечать «проиграли», а
-    потом отдельным действием вписывать, кому и за сколько, значит получить
-    сотню проигранных лотов без единой цифры — а именно по ним и смотрят, с
-    кем соревнуемся.
+    Цена и победитель приходят вместе с итогом: отмечать «проиграли», а потом
+    отдельным действием вписывать, кому и за сколько, значит получить сотню
+    проигранных лотов без единой цифры — а именно по ним и смотрят, с кем
+    соревнуемся.
     """
+
+    outcome: LotOutcome | None = None
+    """Итог по протоколу. Пусто — правим только суммы, не трогая итог."""
 
     won_amount: Decimal | None = None
     winner: str = ""
@@ -1100,21 +1098,26 @@ def _start_discussion(
     *,
     to: LotStatus,
 ) -> uuid.UUID | None:
-    """Перевели в «Обсуждение» — заводим его и зовём модель писать.
+    """Перевели «В работу» — заводим обсуждение и зовём модель писать.
 
     Раньше перевод менял только состояние карточки. Человек переводил лот,
     шёл в раздел обсуждений и своего лота там не находил: обсуждение заводила
     отдельная кнопка в разборе строки портала, и её надо было отыскать и
     нажать. Два способа сделать одно и то же, из которых работал один.
 
+    Ловится «В работе», а не бывшее «Обсуждение»: отдельного состояния под
+    обсуждение больше нет — оно идёт внутри работы вместе с разбором и юристом.
+    Повторный перевод туда же ничего не заводит: `start.ensure` возвращает уже
+    заведённое, и модель второй раз не зовут.
+
     Только для портала. На тендерный отбор обсуждение не распространяется:
     туда закупки приходят папкой по почте, обсуждать их не с кем.
 
-    Ошибка здесь перевод не отменяет. Лот действительно перешёл в обсуждение,
-    и откатывать это из-за недоступной базы портала значит врать о состоянии;
+    Ошибка здесь перевод не отменяет. Лот действительно перешёл в работу, и
+    откатывать это из-за недоступной базы портала значит врать о состоянии;
     обсуждение потом заводится кнопкой, как и раньше.
     """
-    if to is not LotStatus.DISCUSSION or card.module != "goszakup":
+    if to is not LotStatus.WORK or card.module != "goszakup":
         return None
     try:
         made = start.ensure(
@@ -1233,6 +1236,7 @@ def post_result(
             organization_id=identity.organization.id,
             card_id=card_id,
             role=identity.role,
+            outcome=body.outcome,
             won_amount=body.won_amount,
             winner=body.winner,
             user_id=identity.user.id,

@@ -12,7 +12,7 @@
  * хотя не идёт никуда.
  */
 
-import { FLOW, OFF_TRACK, type Card } from "@/api/cards";
+import { FLOW, offTrack, type Card } from "@/api/cards";
 import { cx } from "@/ui";
 
 const OFF_WORDS: Record<string, { title: string; why: string }> = {
@@ -22,7 +22,7 @@ const OFF_WORDS: Record<string, { title: string; why: string }> = {
 };
 
 export function Flow({ card }: { card: Card }) {
-  if (OFF_TRACK.includes(card.status)) {
+  if (offTrack(card)) {
     const words = OFF_WORDS[card.status];
     return (
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-[10px] border border-hairline bg-plane px-4 py-3">

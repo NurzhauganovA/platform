@@ -149,6 +149,8 @@ def test_fail_menyu_sovpadaet_s_pravami() -> None:
         # Уведомления — тоже только администратору: за экраном почты всех
         # сотрудников и то, кто из них что себе отключил.
         "/work/notifications": (Role.ADMIN,),
+        # Сотрудники и роли — тоже только администратору.
+        "/work/people": (Role.ADMIN,),
         "/work/submit": CRM,
     }
     расхождения: list[str] = []

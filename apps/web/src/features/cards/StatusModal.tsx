@@ -16,46 +16,27 @@ import { Input, cx } from "@/ui";
 
 export const STATUS_NAMES: Record<LotStatus, string> = {
   new: "Новый",
-  discussion: "Обсуждение",
-  analysis: "На разборе",
+  work: "В работе",
   approval: "На согласовании",
-  ready: "Готов к участию",
-  awaiting: "Ожидаем итоги",
-  won: "Выиграли",
-  contract: "Договор",
-  fulfilling: "Исполнение",
-  awaiting_payment: "Ожидаем оплату",
-  done: "Завершён",
-  skipped: "Не участвуем",
-  lost: "Проиграли",
-  cancelled: "Отменён",
+  submission: "Подача",
+  waiting: "Ожидание протокола итогов",
+  done: "Завершённый",
 };
 
 const ABOUT: Record<LotStatus, string> = {
   new: "взяли в работу, ещё не смотрели",
-  discussion: "замечание к техспецификации",
-  analysis: "себестоимость, товар, решение",
+  work: "обсуждение, разбор, юрист, технолог, снабжение",
   approval: "собираем пять подписей",
-  ready: "подписи собраны, можно подавать",
-  awaiting: "заявка подана",
-  won: "победили",
-  contract: "подписываем договор",
-  fulfilling: "везём и поставляем",
-  awaiting_payment: "поставили, ждём деньги",
-  done: "деньги получены",
-  skipped: "решили пропустить",
-  lost: "выиграл другой",
-  cancelled: "заказчик отменил закупку",
+  submission: "подписи собраны, готовим и подаём заявку",
+  waiting: "заявка подана, ждём протокол",
+  done: "работа кончилась; чем — в итоге протокола",
 };
 
+// Группы остались, хотя состояний шесть: они отвечают на «до подачи или
+// после», и человек ищет нужное глазами по этой границе, а не по алфавиту.
 const GROUPS: { title: string; keys: LotStatus[] }[] = [
-  { title: "Подготовка", keys: ["new", "discussion", "analysis", "approval"] },
-  { title: "Участие", keys: ["ready", "awaiting", "won"] },
-  {
-    title: "Исполнение",
-    keys: ["contract", "fulfilling", "awaiting_payment", "done"],
-  },
-  { title: "Сошли с дистанции", keys: ["skipped", "lost", "cancelled"] },
+  { title: "До подачи", keys: ["new", "work", "approval"] },
+  { title: "Подача и итоги", keys: ["submission", "waiting", "done"] },
 ];
 
 export function StatusModal({
@@ -177,12 +158,15 @@ function Choice({
   const signed = card.approvals.filter(
     (sign) => sign.state === "approved",
   ).length;
+  // Правило осталось одно и оно про деньги: подавать без пяти подписей — это
+  // участие в закупке, товара под которую нет. Стояло оно на «Готов к
+  // участию»; теперь на «Подаче» — состоянии, из которого заявка и уходит.
+  // Причину спрашивает решение об участии, а не перевод: состояния «Не
+  // участвуем» больше нет.
   const why =
-    status === "ready" && !allowed && !here
+    status === "submission" && !allowed && !here
       ? `нужны все пять подписей — сейчас ${signed}`
-      : status === "skipped" && allowed
-        ? "спросит причину: без неё не переведётся"
-        : "";
+      : "";
 
   return (
     <button

@@ -19,7 +19,7 @@ import { auth } from "@/api/tender";
 import {
   cardsApi,
   FLOW,
-  OFF_TRACK,
+  offTrack,
   type Card,
   type Job,
   type LotStatus,
@@ -48,31 +48,22 @@ const TABS: { key: Tab; title: string }[] = [
   { key: "burning", title: "Горит" },
   { key: "mine", title: "Мои" },
   { key: "unowned", title: "Ничьи" },
-  { key: "discussion", title: "Обсуждение" },
-  { key: "analysis", title: "Разбор" },
+  { key: "work", title: "В работе" },
   { key: "approval", title: "Согласование" },
-  { key: "ready", title: "Готовы" },
-  { key: "awaiting", title: "Ждём итоги" },
-  { key: "contract", title: "Договор" },
+  { key: "submission", title: "Подача" },
+  { key: "waiting", title: "Протокол" },
+  { key: "done", title: "Завершённые" },
   { key: "all", title: "Все" },
 ];
 
 /** Цвет полосы слева. Отмечает не важность, а место в процессе. */
 const RULE: Record<LotStatus, string> = {
   new: "bg-baseline",
-  discussion: "bg-series-5",
-  analysis: "bg-series-1",
+  work: "bg-series-1",
   approval: "bg-series-4",
-  ready: "bg-series-3",
-  awaiting: "bg-series-2",
-  won: "bg-good",
-  lost: "bg-hairline",
-  contract: "bg-series-3",
-  fulfilling: "bg-series-3",
-  awaiting_payment: "bg-series-4",
+  submission: "bg-series-3",
+  waiting: "bg-series-2",
   done: "bg-hairline",
-  skipped: "bg-hairline",
-  cancelled: "bg-hairline",
 };
 
 export function LotsPage() {
@@ -290,7 +281,7 @@ function Head() {
 }
 
 function Row({ card }: { card: Card }) {
-  const off = OFF_TRACK.includes(card.status);
+  const off = offTrack(card);
   return (
     <li className="border-b border-hairline last:border-0">
       <Link
@@ -333,10 +324,29 @@ function Row({ card }: { card: Card }) {
           >
             {card.status_name}
           </span>
-          {card.step > 0 && (
-            <span className="mt-0.5 block text-xs text-ink-muted tabular-nums">
-              шаг {card.step} из {FLOW.length}
+          {/* У завершённого вместо номера шага — итог протокола: шаг у него
+              последний у всех, а вопрос к такому лоту один — чем кончилось.
+              «Не участвовали» и «Проиграли» при этом разные вещи: первое мы
+              решили сами, второе проиграли по цене. */}
+          {card.status === "done" ? (
+            <span
+              className={cx(
+                "mt-0.5 block truncate text-xs",
+                card.outcome === "won"
+                  ? "font-medium text-good"
+                  : "text-ink-muted",
+              )}
+            >
+              {card.outcome === "none" && card.participation === "no"
+                ? "не участвовали"
+                : card.outcome_name.toLowerCase()}
             </span>
+          ) : (
+            card.step > 0 && (
+              <span className="mt-0.5 block text-xs text-ink-muted tabular-nums">
+                шаг {card.step} из {FLOW.length}
+              </span>
+            )
           )}
         </span>
 

@@ -38,8 +38,8 @@ import { Node, TaskCard, TaskLine } from "./StepRail";
 import type { Mark } from "./StepRail";
 import { Avatar, Chip, Clock, Passed, shortName, stamp } from "./kit";
 
-/** Каким по счёту идёт разбор. По нему видно, пройден он или нет. */
-const ANALYSIS_STEP = FLOW.findIndex((step) => step.key === "analysis") + 1;
+/** Каким по счёту идёт работа отделов. Пройдена — лот ушёл дальше «В работе». */
+const ANALYSIS_STEP = FLOW.findIndex((step) => step.key === "work") + 1;
 
 /**
  * Узлы между разбором и подачей: имя и чей он. Порядок — порядок работы.
@@ -80,18 +80,34 @@ function Bid({ card, onDone }: { card: Card; onDone: (fresh: Card) => void }) {
       setTrouble(error instanceof ApiError ? error.message : "Не отметилось"),
   });
 
-  if (card.submitted) {
+  // Поправить сумму можно и после отметки. Лот попадает в «Ждём итоги» и через
+  // «Изменить статус» — тогда отметка есть, а суммы нет вовсе; да и ошибиться
+  // разрядом при вводе проще простого. Служба это умеет с самого начала:
+  // повторная отметка правит сумму и не трогает время подачи. Пока кнопка
+  // пропадала вместе с отметкой, единственный способ вписать сумму был через
+  // базу.
+  if (card.submitted && !naming) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-good">
+      <span className="inline-flex flex-wrap items-center gap-x-1.5 text-good">
         <span aria-hidden>✓</span>
         {card.bid_amount !== null
           ? `Подали за ${money(card.bid_amount)} ₸`
-          : "Заявка подана"}
+          : "Заявка подана, сумма не вписана"}
+        <button
+          type="button"
+          onClick={() => {
+            setAmount(card.bid_amount !== null ? String(card.bid_amount) : "");
+            setNaming(true);
+          }}
+          className="text-ink-muted underline decoration-hairline underline-offset-2 hover:text-ink"
+        >
+          {card.bid_amount === null ? "вписать" : "поправить"}
+        </button>
       </span>
     );
   }
 
-  if (!card.can.includes("awaiting")) return null;
+  if (!card.submitted && !card.can.includes("awaiting")) return null;
 
   if (!naming) {
     return (
@@ -303,14 +319,17 @@ export function Steps({
             // юристам, отправлено заказчику или признано ненужным. Дальше
             // работа не у нас — у юристов стоит своя задача и свой кружок, и
             // держать оба синими значит показывать одну работу дважды.
+            // Отметка задаётся всегда, без «решай сам по задачам». Оставленная
+            // пустой, она отдавала узел общему правилу: закрытая задача отдела
+            // «Обсуждение» красила кружок зелёным, хотя замечание ещё писали, —
+            // а точка того же отдела в списке лотов оставалась пустой, потому
+            // что сервер считает по этапу. Один лот, два разных ответа.
             mark={
               !talk
                 ? "idle"
                 : DISCUSSION_DONE.includes(talk.stage)
                   ? "done"
-                  : writing
-                    ? "active"
-                    : undefined
+                  : "active"
             }
             right={
               // Пока модель пишет, срок неважен: вопрос к узлу в этот момент

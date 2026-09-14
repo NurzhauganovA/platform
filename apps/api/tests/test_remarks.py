@@ -537,3 +537,36 @@ def test_fail_slova_etapov_v_kartochke_te_zhe() -> None:
     from platform_api.modules import cards, remarks
 
     assert cards.DISCUSSION_STAGE_NAMES == remarks.STAGE_NAMES
+
+
+def test_fail_u_nenuzhnogo_obsuzhdeniya_sroka_net(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """«Обсуждать нечего» — и срок перестаёт что-либо значить.
+
+    Просроченный срок у такого замечания красил строку красным «не отправили»,
+    хотя отправлять было незачем: требования заказчика нас устраивают. Кружок
+    отдела в карточке при этом стоял зелёным — одна строка давала два разных
+    ответа про один лот.
+    """
+    remark_id = _завести(db, org, deadline_in=-timedelta(hours=5))
+    remarks.move(
+        db,
+        organization_id=org.id,
+        remark_id=remark_id,
+        role=Role.ANALYST,
+        user_id=кто,
+        to=DiscussionStage.NOT_NEEDED,
+    )
+
+    карточка = remarks.one(
+        db,
+        organization_id=org.id,
+        remark_id=remark_id,
+        role=Role.ANALYST,
+        user_id=кто,
+    )
+
+    assert карточка.left == ""
+    assert карточка.overdue is False
+    assert карточка.burning is False

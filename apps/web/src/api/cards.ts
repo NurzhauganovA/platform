@@ -10,21 +10,25 @@ import { api } from "@/api/client";
 import type { Preview } from "@/api/worklist";
 
 /** Где лот в сквозном процессе. Порядок объявления — порядок жизни. */
+/**
+ * Где лот в сквозном процессе. Шесть состояний, а не четырнадцать.
+ *
+ * Работа отделов — обсуждение, разбор, юрист, технолог, снабжение — идёт
+ * внутри «В работе»: они работают параллельно и в любом порядке, а статус,
+ * который движется по ним по очереди, врёт ровно в тот момент, когда юрист
+ * пишет замечание, а снабжение уже ищет товар.
+ */
 export type LotStatus =
-  | "new"
-  | "discussion"
-  | "analysis"
-  | "approval"
-  | "ready"
-  | "awaiting"
-  | "won"
-  | "lost"
-  | "contract"
-  | "fulfilling"
-  | "awaiting_payment"
-  | "done"
-  | "skipped"
-  | "cancelled";
+  "new" | "work" | "approval" | "submission" | "waiting" | "done";
+
+/**
+ * Чем кончилась закупка по протоколу итогов.
+ *
+ * Отдельно от статуса: завершённый лот бывает выигранным, проигранным и
+ * никаким. Пустой итог — это «не участвовали», а не «неизвестно»: заявку не
+ * подали, протокола по нам нет.
+ */
+export type LotOutcome = "none" | "won" | "lost";
 
 export type Participation = "maybe" | "yes" | "no";
 
@@ -75,6 +79,8 @@ export type Card = {
   step: number;
   participation: Participation;
   skip_reason: string;
+  outcome: LotOutcome;
+  outcome_name: string;
 
   manager: string;
   manager_id: string;
@@ -168,6 +174,10 @@ export type Job = {
   card_id: string;
   card_code: string;
   card_title: string;
+  /** Сумма закупки: за что взяться, человек решает по деньгам и сроку. */
+  card_amount: number | null;
+  /** Заказчик: по нему узнают тех, с кем уже работали. */
+  card_customer: string;
   department: Department;
   department_name: string;
   title: string;
@@ -402,8 +412,17 @@ export const cardsApi = {
   submit: (cardId: string, amount: number) =>
     api.post<Card>(`/api/cards/${cardId}/submit`, { amount }),
 
-  result: (cardId: string, won_amount: number | null, winner = "") =>
-    api.post<Card>(`/api/cards/${cardId}/result`, { won_amount, winner }),
+  result: (
+    cardId: string,
+    won_amount: number | null,
+    winner = "",
+    outcome?: LotOutcome,
+  ) =>
+    api.post<Card>(`/api/cards/${cardId}/result`, {
+      won_amount,
+      winner,
+      outcome,
+    }),
 
   files: (cardId: string) =>
     api.get<Attachment[]>(`/api/cards/${cardId}/files`),
@@ -457,20 +476,37 @@ export const cardsApi = {
 /** Шаги пути в том порядке, в каком лот их проходит. */
 export const FLOW: { key: LotStatus; title: string; short: string }[] = [
   { key: "new", title: "Новый", short: "Новый" },
-  { key: "discussion", title: "Обсуждение", short: "Обсужд." },
-  { key: "analysis", title: "На разборе", short: "Разбор" },
+  { key: "work", title: "В работе", short: "В работе" },
   { key: "approval", title: "На согласовании", short: "Соглас." },
-  { key: "ready", title: "Готов к участию", short: "Готов" },
-  { key: "awaiting", title: "Ожидаем итоги", short: "Итоги" },
-  { key: "won", title: "Выиграли", short: "Выигр." },
-  { key: "contract", title: "Договор", short: "Договор" },
-  { key: "fulfilling", title: "Исполнение", short: "Исполн." },
-  { key: "awaiting_payment", title: "Ожидаем оплату", short: "Оплата" },
-  { key: "done", title: "Завершён", short: "Готово" },
+  { key: "submission", title: "Подача", short: "Подача" },
+  { key: "waiting", title: "Ожидание протокола итогов", short: "Протокол" },
+  { key: "done", title: "Завершённый", short: "Готово" },
 ];
 
-/** Сошёл с дистанции: полоса хода для него не рисуется. */
-export const OFF_TRACK: LotStatus[] = ["skipped", "lost", "cancelled"];
+/**
+ * Лот, по которому работа кончилась не участием.
+ *
+ * Полоса хода для него не рисуется: шагов дальше нет. Отдельного состояния
+ * под это больше нет — есть завершённый лот, по которому решили не
+ * участвовать либо пришёл протокол.
+ */
+export function offTrack(card: {
+  status: LotStatus;
+  outcome: LotOutcome;
+  participation: Participation;
+}): boolean {
+  return (
+    card.participation === "no" ||
+    (card.status === "done" && card.outcome !== "won")
+  );
+}
+
+/** Итоги протокола — то, чем закупка кончилась. */
+export const OUTCOMES: { key: LotOutcome; title: string }[] = [
+  { key: "none", title: "Не участвовали" },
+  { key: "won", title: "Выиграли" },
+  { key: "lost", title: "Проиграли" },
+];
 
 // --- разбор спецификации таблицей -----------------------------------------
 

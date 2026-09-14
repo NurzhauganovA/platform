@@ -17,6 +17,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session as DbSession
 
+from platform_api.auth.permissions import Permission
 from platform_api.auth.service import Identity, resolve_session
 from platform_api.config import Settings, get_settings
 from platform_api.db.models import Role
@@ -66,16 +67,20 @@ def get_current_identity(
 CurrentUser = Annotated[Identity, Depends(get_current_identity)]
 
 
-def require_roles(*roles: Role) -> Callable[[Identity], Identity]:
-    """Пускает только перечисленные роли.
+def requires(permission: Permission) -> Callable[[Identity], Identity]:
+    """Пускает тех, у кого есть право.
 
-    Администратор проходит везде — он и так управляет доступами, и запирать
-    его от раздела значит заставить выдать себе роль, чтобы посмотреть.
+    Право, а не имя роли. Роли заводит администратор, и проверка, перечисляющая
+    их по именам, новую роль не знает: она не упомянута нигде и получает отказ
+    везде. Право же выдаётся роли на экране и спрашивается здесь.
+
+    Администратор проходит всюду (`Identity.can`) — он и так распоряжается
+    доступами, и запирать его от раздела значит заставить выдать себе роль,
+    чтобы посмотреть.
     """
-    allowed = {Role.ADMIN, *roles}
 
     def guard(identity: CurrentUser) -> Identity:
-        if identity.role not in allowed:
+        if not identity.can(permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Недостаточно прав для этого раздела",
@@ -87,7 +92,7 @@ def require_roles(*roles: Role) -> Callable[[Identity], Identity]:
 
 # Готовые проверки под задачи, а не под роли. Читается на эндпоинте как
 # требование к делу: «сюда пускаем тех, кому положено видеть деньги».
-requires_admin = Depends(require_roles())
+requires_admin = Depends(requires(Permission.ADMIN))
 
 # Наборы ролей объявлены здесь и отсюда же берутся пунктами меню
 # (`NavItem.roles` через `names`). Раздельные списки в модулях и в проверках
@@ -145,10 +150,11 @@ def names(*roles: Role) -> tuple[str, ...]:
     return tuple(role.value for role in roles)
 
 
-requires_money = Depends(require_roles(*MONEY))
-requires_sourcing = Depends(require_roles(*SOURCING))
-requires_read = Depends(require_roles(*READS))
-requires_remarks = Depends(require_roles(*REMARKS))
+requires_money = Depends(requires(Permission.MONEY))
+requires_sourcing = Depends(requires(Permission.SOURCING))
+requires_read = Depends(requires(Permission.READ))
+requires_remarks = Depends(requires(Permission.REMARKS))
+requires_crm = Depends(requires(Permission.CRM))
 
 
 __all__ = [
@@ -162,8 +168,9 @@ __all__ = [
     "get_current_identity",
     "get_db",
     "names",
-    "require_roles",
+    "requires",
     "requires_admin",
+    "requires_crm",
     "requires_money",
     "requires_read",
     "requires_remarks",

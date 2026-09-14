@@ -33,6 +33,7 @@ import {
 import { CodesPage } from "@/features/goszakup/CodesPage";
 import { ProfilePage } from "@/features/profile/ProfilePage";
 import { NotifyPage } from "@/features/notify/NotifyPage";
+import { PeoplePage } from "@/features/people/PeoplePage";
 import { AuditPage } from "@/features/audit/AuditPage";
 import { GoszakupPage } from "@/features/worklist/GoszakupPage";
 import { RemarkPage } from "@/features/remarks/RemarkPage";
@@ -108,6 +109,7 @@ function Routing() {
         <Route path="work/approval" element={<ApprovalPage />} />
         <Route path="work/audit" element={<AuditPage />} />
         <Route path="work/notifications" element={<NotifyPage />} />
+        <Route path="work/people" element={<PeoplePage />} />
         <Route path="work/submit" element={<SubmitPage />} />
         <Route path="goszakup/lots" element={<GoszakupPage />} />
         <Route path="goszakup/codes" element={<CodesPage />} />

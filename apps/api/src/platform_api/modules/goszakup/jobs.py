@@ -315,7 +315,7 @@ def _to_discussion(ctx: JobContext, remark_id: Any) -> None:
     cards.advance(
         ctx.db,
         card=card,
-        to=LotStatus.DISCUSSION,
+        to=LotStatus.WORK,
         why="Модель написала замечание",
     )
 
@@ -406,7 +406,7 @@ def build_sheet(
         cards.advance(
             ctx.db,
             card=card,
-            to=LotStatus.ANALYSIS,
+            to=LotStatus.WORK,
             why="Модель разобрала спецификацию",
         )
     ctx.db.commit()

@@ -5,7 +5,6 @@ from __future__ import annotations
 from platform_api.auth.dependencies import (
     CurrentUser,
     Db,
-    require_roles,
     requires_admin,
     requires_money,
     requires_read,
@@ -18,7 +17,6 @@ __all__ = [
     "CurrentUser",
     "Db",
     "Identity",
-    "require_roles",
     "requires_admin",
     "requires_money",
     "requires_read",

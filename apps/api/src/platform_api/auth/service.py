@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from platform_api.auth import passwords
+from platform_api.auth.permissions import BUILT_IN, ROLE_NAMES, Permission
 from platform_api.db.base import utcnow
 from platform_api.db.models import Membership, Organization, Role, Session, User
 from platform_api.logging import get_logger
@@ -42,16 +43,40 @@ class AuthError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Identity:
-    """Кто пришёл с запросом."""
+    """Кто пришёл с запросом и что ему можно."""
 
     user: User
     organization: Organization
     role: Role
+    """Встроенная роль. При своей роли здесь «Наблюдатель» — самое безопасное
+    значение: место, которое ещё смотрит на роль, а не на права, даст меньше
+    доступа, а не больше."""
+
     session_id: uuid.UUID
+
+    permissions: frozenset[Permission] = frozenset()
+    """Что человеку можно. Считается при разборе сессии: у встроенной роли — по
+    коду, у своей — по её списку прав.
+
+    Проверки спрашивают право, а не имя роли. Иначе своя роль не была бы
+    известна ни одной проверке и получала бы отказ везде."""
+
+    role_key: str = ""
+    """Ключ роли как её видит человек: встроенный или свой. Для показа и для
+    журнала — не для проверок."""
+
+    role_title: str = ""
+    """Название роли по-русски."""
+
+    def can(self, permission: Permission) -> bool:
+        """Есть ли право. Администратор проходит везде — он и так
+        распоряжается доступами, и запирать его от раздела значит заставить
+        выдать себе роль, чтобы посмотреть."""
+        return Permission.ADMIN in self.permissions or permission in self.permissions
 
     @property
     def is_admin(self) -> bool:
-        return self.role is Role.ADMIN
+        return Permission.ADMIN in self.permissions
 
 
 def hash_token(token: str) -> str:
@@ -181,11 +206,41 @@ def resolve_session(db: DbSession, token: str) -> Identity | None:
         revoke_session(db, session)
         return None
 
+    return identity_of(membership, session.id)
+
+
+def identity_of(membership: Membership, session_id: uuid.UUID) -> Identity:
+    """Собирает права по роли — встроенной или своей.
+
+    Одно место на весь разбор: права считаются здесь, и ни одна проверка не
+    выясняет их сама. Своя роль при этом не «добавка» к встроенной, а замена:
+    выданная человеку, она отвечает за его доступ целиком — иначе «роль без
+    цен» оставляла бы цены от прежней роли.
+    """
+    own = membership.custom_role
+    if own is not None:
+        known = {item.value for item in Permission}
+        return Identity(
+            user=membership.user,
+            organization=membership.organization,
+            role=membership.role,
+            session_id=session_id,
+            # Неизвестные права молча отбрасываются: право могли убрать из кода
+            # вместе с местом, которое его проверяло, и падать на старой записи
+            # роли значит закрыть платформу для всех, кому её выдали.
+            permissions=frozenset(Permission(item) for item in own.permissions if item in known),
+            role_key=own.key,
+            role_title=own.title,
+        )
+
     return Identity(
-        user=user,
+        user=membership.user,
         organization=membership.organization,
         role=membership.role,
-        session_id=session.id,
+        session_id=session_id,
+        permissions=BUILT_IN.get(membership.role, frozenset()),
+        role_key=membership.role.value,
+        role_title=ROLE_NAMES.get(membership.role, membership.role.value),
     )
 
 

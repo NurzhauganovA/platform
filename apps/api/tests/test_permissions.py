@@ -11,10 +11,10 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from platform_api.auth import passwords
-from platform_api.auth.dependencies import require_roles, requires_money, requires_sourcing
+from platform_api.auth.dependencies import requires_admin, requires_money, requires_sourcing
 from platform_api.auth.service import open_session
 from platform_api.config import Settings
 from platform_api.db.models import Membership, Organization, Role, User
@@ -36,7 +36,7 @@ def guarded_app(app: FastAPI) -> FastAPI:
     def sourcing() -> dict[str, str]:
         return {"поставщик": "eco-service.kz"}
 
-    @router.get("/admin", dependencies=[Depends(require_roles())])
+    @router.get("/admin", dependencies=[requires_admin])
     def admin() -> dict[str, str]:
         return {"ключ": "настройки"}
 
@@ -331,3 +331,327 @@ def test_fail_vygruzka_bez_servisa_otkazyvaet_slovami(
     ответ = app_client.post("/api/notify/sync")
 
     assert ответ.status_code == 409, ответ.text
+
+
+def test_fail_prava_vstroennyh_roley_sovpadayut_s_prezhnimi_naborami() -> None:
+    """Перевод ролей на права ничего не раздал и ничего не отобрал.
+
+    Раньше каждая проверка перечисляла роли. Теперь роль — это набор прав, а
+    проверка спрашивает право; словарь `BUILT_IN` — перевод прежних наборов на
+    новый язык, и любое расхождение здесь означает, что кто-то молча получил
+    доступ к себестоимости или его потерял.
+
+    Проверяется в обе стороны: и что право есть у тех, у кого было, и что его
+    нет у остальных. Односторонняя проверка пропустила бы самое дорогое —
+    лишнее право у лишней роли.
+    """
+    from platform_api.auth.dependencies import CRM, MONEY, READS, REMARKS, SOURCING
+    from platform_api.auth.permissions import BUILT_IN, Permission
+
+    было: dict[Permission, tuple[Role, ...]] = {
+        Permission.MONEY: MONEY,
+        Permission.READ: READS,
+        Permission.SOURCING: SOURCING,
+        Permission.REMARKS: REMARKS,
+        Permission.CRM: CRM,
+    }
+    for право, набор in было.items():
+        стало = {role for role in Role if право in BUILT_IN[role]}
+        assert стало == set(набор), f"{право} разошлось: было {set(набор)}, стало {стало}"
+
+    # Решение об участии: менеджер, руководитель, коммерческий и администратор.
+    решают = {role for role in Role if Permission.DECIDE in BUILT_IN[role]}
+    assert решают == {Role.ADMIN, Role.MANAGER, Role.HEAD, Role.COMMERCIAL}
+
+    # Подписи: одна роль — одна подпись, плюс администратор.
+    from platform_api.db.models import ApprovalKind
+    from platform_api.modules.cards import SIGNS
+
+    пары = {
+        ApprovalKind.MANAGER: Permission.SIGN_MANAGER,
+        ApprovalKind.SUPPLY: Permission.SIGN_SUPPLY,
+        ApprovalKind.LEGAL: Permission.SIGN_LEGAL,
+        ApprovalKind.TECHNOLOGIST: Permission.SIGN_TECHNOLOGIST,
+        ApprovalKind.ASSEMBLER: Permission.SIGN_ASSEMBLER,
+    }
+    for kind, право in пары.items():
+        стало = {role for role in Role if право in BUILT_IN[role]}
+        assert стало == set(SIGNS[kind]), f"{kind} разошлась: {стало} против {set(SIGNS[kind])}"
+
+
+def test_fail_u_kazhdogo_prava_est_imya_i_poyasnenie() -> None:
+    """Право без имени показалось бы человеку как «sign.technologist».
+
+    Список прав человек видит на экране роли и по нему решает, что выдать.
+    Строка вида `money` там означает, что выдавать будут наугад.
+    """
+    from platform_api.auth.permissions import PERMISSION_ABOUT, PERMISSION_NAMES, Permission
+
+    assert all(право in PERMISSION_NAMES for право in Permission)
+    assert all(право in PERMISSION_ABOUT for право in Permission)
+    assert all(PERMISSION_NAMES[право].strip() for право in Permission)
+
+
+def test_fail_lyudi_i_roli_tolko_administratoru(db: DbSession, app_client: TestClient) -> None:
+    """За экраном людей почты сотрудников и право выдать себе любое из прав.
+
+    Вопрос «кто может видеть себестоимость» задаёт не тот, кому её не
+    показывают.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.MANAGER)
+    db.commit()
+
+    assert app_client.get("/api/people").status_code == 403
+    assert app_client.get("/api/people/roles").status_code == 403
+    assert app_client.post("/api/people/roles", json={"key": "x", "title": "X"}).status_code == 403
+
+
+def test_fail_svoya_rol_daet_prava_i_zabiraet_lishnie(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Своя роль отвечает за доступ целиком, а не добавляет к встроенной.
+
+    Иначе «роль без цен» оставляла бы цены от прежней роли — то есть не
+    делала бы ровно того, ради чего её заводят.
+    """
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    заведена = app_client.post(
+        "/api/people/roles",
+        json={
+            "key": "supply_no_money",
+            "title": "Снабженец без цен",
+            "description": "Ищет товар, цен не видит",
+            "permissions": ["crm", "sourcing", "нет-такого-права"],
+        },
+    )
+    assert заведена.status_code == 201, заведена.text
+    # Неизвестное право молча отброшено: список закрыт кодом, и выдать
+    # несуществующее нельзя.
+    assert заведена.json()["permissions"] == ["crm", "sourcing"]
+
+    человек = app_client.post(
+        "/api/people",
+        json={
+            "email": "supply@fintend.kz",
+            "full_name": "Снабженец",
+            "role": "supply_no_money",
+            "password": "закупки-2026-каратау",
+        },
+    )
+    assert человек.status_code == 201, человек.text
+    assert человек.json()["role_title"] == "Снабженец без цен"
+
+    # Входим им самим и проверяем, что права именно те.
+    app_client.post("/api/auth/logout")
+    вход = app_client.post(
+        "/api/auth/login",
+        json={"email": "supply@fintend.kz", "password": "закупки-2026-каратау"},
+    )
+    assert вход.status_code == 200, вход.text
+
+    assert app_client.get("/api/cards").status_code == 200
+    # Себестоимости у роли нет — и раздел с ней закрыт.
+    assert app_client.get("/api/skstore/export").status_code == 403
+    # Людьми управлять тоже нельзя: право администратора не выдавали.
+    assert app_client.get("/api/people").status_code == 403
+    del org
+
+
+def test_fail_zanyatuyu_rol_ne_ubirayut(db: DbSession, app_client: TestClient) -> None:
+    """Удалённая роль молча оставила бы человека с правами наблюдателя.
+
+    Он приходит утром, не находит своих разделов и идёт выяснять, что
+    сломалось. Сначала переводят людей, потом убирают роль.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    app_client.post(
+        "/api/people/roles",
+        json={"key": "trainee", "title": "Стажёр", "permissions": ["read"]},
+    )
+    app_client.post(
+        "/api/people",
+        json={
+            "email": "trainee@fintend.kz",
+            "role": "trainee",
+            "password": "закупки-2026-каратау",
+        },
+    )
+
+    отказ = app_client.delete("/api/people/roles/trainee")
+
+    assert отказ.status_code == 409
+    assert "Переведите" in отказ.json()["detail"]
+
+
+def test_fail_vstroennuyu_rol_ne_pravyat(db: DbSession, app_client: TestClient) -> None:
+    """На правах встроенных ролей держатся проверки по всей платформе.
+
+    «Убрал деньги у тендерщика» означало бы, что половина экранов опустела у
+    всех сразу — и выяснялось бы это на работающей платформе.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    отказ = app_client.patch("/api/people/roles/analyst", json={"permissions": []})
+
+    assert отказ.status_code == 409
+    assert "Встроенную" in отказ.json()["detail"]
+
+
+def test_fail_sebya_ne_vyklyuchayut(db: DbSession, app_client: TestClient) -> None:
+    """Администратор, оставшийся без прав, их себе не вернёт — а другого в
+    маленькой компании может не быть вовсе."""
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.ADMIN)
+    я = app_client.get("/api/auth/me").json()
+    db.commit()
+
+    отказ = app_client.delete(f"/api/people/{я['id']}")
+    смена = app_client.patch(f"/api/people/{я['id']}", json={"role": "viewer"})
+
+    assert отказ.status_code == 409
+    assert смена.status_code == 409
+    del org
+
+
+def test_fail_udalennyy_chelovek_ne_unosit_istoriyu(db: DbSession, app_client: TestClient) -> None:
+    """Запись удалили — подпись и лента остались, и с именем.
+
+    «Кто это одобрил» спрашивают через полгода, когда закупка вышла в убыток, и
+    человек к тому времени мог уйти. Имя лежит копией рядом со ссылкой: ссылка
+    при удалении обнуляется, а имя нет.
+    """
+    from decimal import Decimal
+
+    from platform_api.db.models import ApprovalKind, ApprovalState
+    from platform_api.modules import cards
+    from tests.conftest import sign_in
+
+    org = sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    завели = app_client.post(
+        "/api/people",
+        json={
+            "email": "uhodit@fintend.kz",
+            "full_name": "Ушёл Уволившийся",
+            "role": "manager",
+            "password": "закупки-2026-каратау",
+        },
+    )
+    assert завели.status_code == 201, завели.text
+    кто = uuid.UUID(завели.json()["id"])
+
+    card = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="лот-с-подписью",
+        snapshot=cards.Snapshot(code="GZ777", title="Компьютеры", amount=Decimal("1000")),
+        by=кто,
+    )
+    cards.sign(
+        db,
+        organization_id=org.id,
+        card_id=card.id,
+        role=Role.MANAGER,
+        user_id=кто,
+        kind=ApprovalKind.MANAGER,
+        state=ApprovalState.APPROVED,
+    )
+    db.commit()
+
+    убрали = app_client.delete(f"/api/people/{кто}?purge=true")
+    assert убрали.status_code == 204, убрали.text
+    assert app_client.get("/api/people").json() != []
+
+    показ = app_client.get(f"/api/cards/{card.id}").json()
+    подпись = next(one for one in показ["approvals"] if one["kind"] == "manager")
+    assert подпись["state"] == "approved"
+    assert подпись["by"] == "Ушёл Уволившийся"
+
+    лента = app_client.get(f"/api/cards/{card.id}/history").json()
+    assert any(item["actor"] == "Ушёл Уволившийся" for item in лента["events"])
+    # Лот остался, но стал ничьим: вести его больше некому, и это правда.
+    assert показ["owner"] == ""
+
+
+def test_fail_poslednego_administratora_ne_udalyayut(db: DbSession, app_client: TestClient) -> None:
+    """Платформа без администратора остаётся без управления доступами, и
+    вернуть их можно только руками в базе."""
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    я = app_client.get("/api/auth/me").json()
+    другой = app_client.post(
+        "/api/people",
+        json={
+            "email": "vtoroy@fintend.kz",
+            "role": "admin",
+            "password": "закупки-2026-каратау",
+        },
+    )
+    assert другой.status_code == 201, другой.text
+    db.commit()
+
+    # Второго администратора удалить можно: первый остаётся.
+    assert app_client.delete(f"/api/people/{другой.json()['id']}?purge=true").status_code == 204
+    # А себя — нет, и не потому что «себя», а потому что последнего.
+    отказ = app_client.delete(f"/api/people/{я['id']}?purge=true")
+    assert отказ.status_code == 409
+
+
+def test_fail_zanyatuyu_rol_ubirayut_tolko_naprosheno(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Роль носят люди — по умолчанию отказываем и называем число.
+
+    Люди на ней остаются в платформе и получают права наблюдателя: человек
+    приходит утром, не находит своих разделов и идёт выяснять, что сломалось.
+    Решает администратор: перевести их самому или снять роль вместе со всеми.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    app_client.post(
+        "/api/people/roles",
+        json={"key": "podryad", "title": "Подрядчик", "permissions": ["crm"]},
+    )
+    человек = app_client.post(
+        "/api/people",
+        json={
+            "email": "podryad@fintend.kz",
+            "role": "podryad",
+            "password": "закупки-2026-каратау",
+        },
+    )
+    assert человек.status_code == 201, человек.text
+
+    отказ = app_client.delete("/api/people/roles/podryad")
+    assert отказ.status_code == 409
+    assert "1 чел" in отказ.json()["detail"]
+
+    убрали = app_client.delete("/api/people/roles/podryad?force=true")
+    assert убрали.status_code == 204
+
+    # Человек остался в платформе и стал наблюдателем.
+    остался = next(
+        one for one in app_client.get("/api/people").json() if one["email"] == "podryad@fintend.kz"
+    )
+    assert остался["role"] == "viewer"
+    assert остался["is_active"] is True

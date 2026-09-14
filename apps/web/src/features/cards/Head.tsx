@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   cardsApi,
-  OFF_TRACK,
+  offTrack,
   type ApprovalKind,
   type Card,
   type LotStatus,
@@ -65,10 +65,10 @@ export function Summary({
   const press = (to: LotStatus) => {
     setTrouble("");
     setOpen(false);
-    // «Не участвуем» без причины — вопрос без ответа через месяц. Спрашиваем
-    // до перехода, а не отказом после.
-    if (to === "skipped") setAsking(to);
-    else move.mutate({ to, reason: "" });
+    // Причину спрашивает решение об участии, а не перевод: отдельного
+    // состояния «Не участвуем» больше нет — лот просто завершается, а почему,
+    // записывается решением рядом.
+    move.mutate({ to, reason: "" });
   };
 
   return (
@@ -82,7 +82,7 @@ export function Summary({
           className={cx(
             "inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-[7px] px-2.5",
             "text-[12.5px] font-medium",
-            OFF_TRACK.includes(card.status)
+            offTrack(card)
               ? "bg-plane text-ink-secondary"
               : "bg-plane text-ink",
           )}
@@ -93,10 +93,22 @@ export function Summary({
             aria-hidden
             className={cx(
               "h-[7px] w-[7px] rounded-full",
-              OFF_TRACK.includes(card.status) ? "bg-ink-muted" : "bg-ink",
+              offTrack(card) ? "bg-ink-muted" : "bg-ink",
             )}
           />
           {card.status_name}
+          {/* Итог рядом со статусом, а не вместо: «Завершённый» отвечает
+              «где», итог — «чем кончилось», и на планёрке спрашивают второе. */}
+          {card.status === "done" && card.outcome !== "none" && (
+            <span
+              className={cx(
+                "ml-1 font-semibold",
+                card.outcome === "won" ? "text-good" : "text-ink-muted",
+              )}
+            >
+              · {card.outcome_name}
+            </span>
+          )}
         </span>
 
         <Deadline card={card} />

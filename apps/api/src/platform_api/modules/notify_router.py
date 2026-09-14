@@ -29,9 +29,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from platform_api.auth.dependencies import CurrentUser, Db, require_roles
+from platform_api.auth.dependencies import CurrentUser, Db, requires
+from platform_api.auth.permissions import Permission
 from platform_api.config import Settings
-from platform_api.db.models import Membership, Role, User
+from platform_api.db.models import Membership, User
 from platform_api.logging import get_logger
 from platform_api.modules import notify
 
@@ -39,7 +40,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/notify", tags=["Уведомления"])
 
-OnlyAdmin = Annotated[None, Depends(require_roles(Role.ADMIN))]
+OnlyAdmin = Annotated[None, Depends(requires(Permission.ADMIN))]
 
 
 class ServiceOut(BaseModel):

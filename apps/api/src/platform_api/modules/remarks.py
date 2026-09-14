@@ -677,13 +677,23 @@ def _can(row: Discussion, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
     return tuple(allowed)
 
 
+_NO_DEADLINE = frozenset({DiscussionStage.SENT, DiscussionStage.NOT_NEEDED})
+"""Этапы, на которых срок обсуждения уже ничего не значит."""
+
+
 def _time_left(row: Discussion, now: datetime) -> tuple[str, bool, bool]:
     """Сколько осталось до конца обсуждения, словами.
 
     Отправленному замечанию остаток не считается: срок нужен, чтобы успеть
     написать, а написанное и отправленное уже успело.
+
+    Ненужному — тоже. «Обсуждать нечего» означает, что требования заказчика нас
+    устраивают и отправлять нечего; просроченный срок у такого замечания красил
+    строку красным «не отправили», хотя отправлять было незачем — а кружок
+    отдела в карточке в это же время стоял зелёным. Одна строка давала два
+    разных ответа про один лот.
     """
-    if row.deadline is None or row.stage is DiscussionStage.SENT:
+    if row.deadline is None or row.stage in _NO_DEADLINE:
         return "", False, False
 
     # Тот же расчёт, что у лотов и задач: «просрочено на 3 ч. 20 мин.», а не

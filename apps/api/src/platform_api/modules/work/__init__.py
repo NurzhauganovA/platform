@@ -97,6 +97,16 @@ module = ModuleSpec(
             roles=("admin",),
         ),
         NavItem(
+            title="Сотрудники",
+            path="/work/people",
+            icon="settings",
+            group="Работа",
+            # Только администратору: за экраном почты всех сотрудников, их роли
+            # и право выдать себе любое из прав. Вопрос «кто может видеть
+            # себестоимость» задаёт не тот, кому её не показывают.
+            roles=("admin",),
+        ),
+        NavItem(
             title="Уведомления",
             path="/work/notifications",
             icon="bell",

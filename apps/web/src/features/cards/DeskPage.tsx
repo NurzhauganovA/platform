@@ -20,7 +20,15 @@ import { cardsApi, type Department, type Job } from "@/api/cards";
 import { TaskWindow } from "./TaskWindow";
 import { PageHeader } from "@/shell/AppShell";
 import { ApiError } from "@/api/client";
-import { Card as Panel, EmptyState, Page, Spinner, Tabs, cx } from "@/ui";
+import {
+  Card as Panel,
+  EmptyState,
+  Page,
+  Spinner,
+  Tabs,
+  cx,
+  money,
+} from "@/ui";
 import { stamp } from "./kit";
 
 type Tab = "mine" | "queue" | "all" | "closed";
@@ -367,8 +375,21 @@ function JobRow({ job, onOpen }: { job: Job; onOpen: () => void }) {
             >
               {job.title}
             </span>
+            {/* Про какую закупку задача: название, сумма, заказчик. Раньше
+                стояло одно название, и «за что взяться» решали, открывая лоты
+                по одному: деньги и заказчик — это ровно то, по чему снабженец
+                выбирает, чем заняться до обеда. */}
             <span className="mt-0.5 block truncate text-xs text-ink-muted">
               {job.card_title}
+              {job.card_amount !== null && (
+                <>
+                  {" · "}
+                  <span className="tabular-nums text-ink-secondary">
+                    {money(job.card_amount)} ₸
+                  </span>
+                </>
+              )}
+              {job.card_customer && ` · ${job.card_customer}`}
             </span>
           </span>
 

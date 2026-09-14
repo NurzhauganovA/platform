@@ -22,14 +22,15 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import String, func, or_, select
 
-from platform_api.auth.dependencies import CurrentUser, Db, require_roles
-from platform_api.db.models import AuditEntry, Role, User
+from platform_api.auth.dependencies import CurrentUser, Db, requires
+from platform_api.auth.permissions import Permission
+from platform_api.db.models import AuditEntry, User
 
 # Префикс без `/api`: роутер подключается внутрь общего, у которого он уже
 # есть. Свой полный путь дал бы `/api/api/audit`.
 router = APIRouter(prefix="/audit", tags=["Журнал"])
 
-OnlyAdmin = Annotated[None, Depends(require_roles(Role.ADMIN))]
+OnlyAdmin = Annotated[None, Depends(requires(Permission.ADMIN))]
 
 PAGE = 50
 """Сколько записей на странице. Полсотни — экран с прокруткой на один поворот

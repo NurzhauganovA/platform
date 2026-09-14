@@ -135,7 +135,7 @@ def test_fail_bez_vsekh_podpisey_ne_gotov(db: DbSession, org: Organization, кт
         card_id=card_id,
         role=Role.ANALYST,
         user_id=кто,
-        to=LotStatus.ANALYSIS,
+        to=LotStatus.WORK,
     )
     cards.move(
         db,
@@ -152,7 +152,7 @@ def test_fail_bez_vsekh_podpisey_ne_gotov(db: DbSession, org: Organization, кт
             card_id=card_id,
             role=Role.MANAGER,
             user_id=кто,
-            to=LotStatus.READY,
+            to=LotStatus.SUBMISSION,
         )
 
     _подписать_всё(db, org, card_id, кто)
@@ -162,12 +162,12 @@ def test_fail_bez_vsekh_podpisey_ne_gotov(db: DbSession, org: Organization, кт
         card_id=card_id,
         role=Role.MANAGER,
         user_id=кто,
-        to=LotStatus.READY,
+        to=LotStatus.SUBMISSION,
     )
     карточка = cards.one(
         db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто
     )
-    assert карточка.status == LotStatus.READY.value
+    assert карточка.status == LotStatus.SUBMISSION.value
     assert карточка.approved
 
 
@@ -218,7 +218,7 @@ def test_fail_perevesti_mozhno_kuda_ugodno(
     Проверяется крайний случай: из последнего состояния обратно в первое.
     """
     card_id = _завести(db, org, кто)
-    for to in (LotStatus.DONE, LotStatus.NEW, LotStatus.AWAITING_PAYMENT):
+    for to in (LotStatus.DONE, LotStatus.NEW, LotStatus.DONE):
         card = cards.move(
             db,
             organization_id=org.id,
@@ -247,7 +247,7 @@ def test_fail_gotov_k_uchastiyu_vsyo_ravno_trebuet_podpisey(
             card_id=card_id,
             role=Role.ADMIN,
             user_id=кто,
-            to=LotStatus.READY,
+            to=LotStatus.SUBMISSION,
         )
 
 
@@ -255,30 +255,39 @@ def test_fail_ne_uchastvuem_trebuet_prichiny(
     db: DbSession, org: Organization, кто: uuid.UUID
 ) -> None:
     """Через месяц по тем же заказчикам решают заново, и «почему тогда прошли
-    мимо» — рабочий вопрос."""
+    мимо» — рабочий вопрос.
+
+    Причину спрашивает решение об участии, а не перевод состояния: отдельного
+    «Не участвуем» в статусах больше нет — лот просто завершается, а почему,
+    записано решением рядом.
+    """
     card_id = _завести(db, org, кто)
-    with pytest.raises(SpokenError, match="почему"):
-        cards.move(
+    with pytest.raises(SpokenError, match="причину"):
+        cards.decide(
             db,
             organization_id=org.id,
             card_id=card_id,
             role=Role.HEAD,
+            participation=Participation.NO,
             user_id=кто,
-            to=LotStatus.SKIPPED,
         )
 
-    cards.move(
+    cards.decide(
         db,
         organization_id=org.id,
         card_id=card_id,
         role=Role.HEAD,
-        user_id=кто,
-        to=LotStatus.SKIPPED,
+        participation=Participation.NO,
         reason="Товара нет и не будет к сроку",
+        user_id=кто,
     )
     карточка = cards.one(db, organization_id=org.id, card_id=card_id, role=Role.HEAD, user_id=кто)
     assert карточка.participation == Participation.NO.value
     assert "Товара нет" in карточка.skip_reason
+    # Работа кончилась — лот завершён, а итога протокола по нему нет: заявку
+    # мы не подавали.
+    assert карточка.status == LotStatus.DONE.value
+    assert карточка.outcome == "none"
 
 
 def test_fail_gotov_ne_predlagaetsya_bez_podpisey(
@@ -292,7 +301,7 @@ def test_fail_gotov_ne_predlagaetsya_bez_podpisey(
         card_id=card_id,
         role=Role.ANALYST,
         user_id=кто,
-        to=LotStatus.ANALYSIS,
+        to=LotStatus.WORK,
     )
     cards.move(
         db,
@@ -303,11 +312,11 @@ def test_fail_gotov_ne_predlagaetsya_bez_podpisey(
         to=LotStatus.APPROVAL,
     )
     без = cards.one(db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто)
-    assert LotStatus.READY.value not in без.can
+    assert LotStatus.SUBMISSION.value not in без.can
 
     _подписать_всё(db, org, card_id, кто)
     с = cards.one(db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто)
-    assert LotStatus.READY.value in с.can
+    assert LotStatus.SUBMISSION.value in с.can
 
 
 def test_fail_zadacha_popadaet_v_ochered_otdela(
@@ -325,7 +334,7 @@ def test_fail_zadacha_popadaet_v_ochered_otdela(
         card_id=card_id,
         role=Role.LAWYER,
         user_id=кто,
-        to=LotStatus.DISCUSSION,
+        to=LotStatus.WORK,
     )
     задача = cards.add_task(
         db,
@@ -334,12 +343,14 @@ def test_fail_zadacha_popadaet_v_ochered_otdela(
         created_by=кто,
         title="  Написать   замечание  ",
     )
-    assert задача.department is Department.DISCUSSION
+    # «В работе» держат разом четыре отдела, и какой из них «тот самый», по
+    # статусу не сказать. Разбор — потому что с него начинают.
+    assert задача.department is Department.ANALYSIS
     # Название сжимается: «Написать   замечание» с тремя пробелами в списке
     # выглядит опечаткой, а в поиске не находится.
     assert задача.title == "Написать замечание"
 
-    очередь = cards.tasks(db, organization_id=org.id, department=Department.DISCUSSION)
+    очередь = cards.tasks(db, organization_id=org.id, department=Department.ANALYSIS)
     assert [item.id for item in очередь] == [str(задача.id)]
     assert очередь[0].card_code == "GZ000001"
 
@@ -391,7 +402,7 @@ def test_fail_soshedshie_s_distantsii_vnizu(
         card_id=отменённый.id,
         role=Role.MANAGER,
         user_id=кто,
-        to=LotStatus.CANCELLED,
+        to=LotStatus.DONE,
     )
 
     список = cards.listing(db, organization_id=org.id, role=Role.MANAGER, user_id=кто)
@@ -414,22 +425,24 @@ def test_fail_shag_puti_viden_chislom(db: DbSession, org: Organization, кто: 
         card_id=card_id,
         role=Role.ANALYST,
         user_id=кто,
-        to=LotStatus.ANALYSIS,
+        to=LotStatus.WORK,
     )
     дальше = cards.one(db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто)
-    assert дальше.step == cards.FLOW.index(LotStatus.ANALYSIS) + 1
+    assert дальше.step == cards.FLOW.index(LotStatus.WORK) + 1
 
+    # Завершённый — последний шаг пути, а не сход с него: чем именно кончилось,
+    # говорит итог протокола, и «ноль шагов» у него означало бы, что лот никуда
+    # не дошёл.
     cards.move(
         db,
         organization_id=org.id,
         card_id=card_id,
         role=Role.HEAD,
         user_id=кто,
-        to=LotStatus.SKIPPED,
-        reason="дорого",
+        to=LotStatus.DONE,
     )
-    сошёл = cards.one(db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто)
-    assert сошёл.step == 0
+    конец = cards.one(db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто)
+    assert конец.step == len(cards.FLOW)
 
 
 def test_fail_kod_kartochki_ustoychivyy_a_ne_nomer_zakupki(
@@ -604,10 +617,10 @@ def test_fail_nomer_zakupki_i_nomer_lota_eto_raznoe(
 def _довести_до_podachi(
     db: DbSession, org: Organization, card_id: uuid.UUID, кто: uuid.UUID
 ) -> None:
-    for role, to in ((Role.ANALYST, LotStatus.ANALYSIS), (Role.ANALYST, LotStatus.APPROVAL)):
+    for role, to in ((Role.ANALYST, LotStatus.WORK), (Role.ANALYST, LotStatus.APPROVAL)):
         cards.move(db, organization_id=org.id, card_id=card_id, role=role, user_id=кто, to=to)
     _подписать_всё(db, org, card_id, кто)
-    for to in (LotStatus.READY, LotStatus.AWAITING):
+    for to in (LotStatus.SUBMISSION, LotStatus.WAITING):
         cards.move(
             db, organization_id=org.id, card_id=card_id, role=Role.MANAGER, user_id=кто, to=to
         )
@@ -683,7 +696,7 @@ def test_fail_perevod_v_obsuzhdenie_zavodit_ego_sam(
 
     monkeypatch.setattr(cards_router.start, "ensure", запомнить)
 
-    answer = app_client.post(f"/api/cards/{card_id}/move", json={"to": "discussion", "reason": ""})
+    answer = app_client.post(f"/api/cards/{card_id}/move", json={"to": "work", "reason": ""})
 
     assert answer.status_code == 200
     assert called == ["81468165-ЗЦП1"], "Обсуждение по лоту не завелось"
@@ -711,10 +724,10 @@ def test_fail_perevod_ne_lomaetsya_ot_nedostupnogo_portala(
 
     monkeypatch.setattr(cards_router.start, "ensure", упасть)
 
-    answer = app_client.post(f"/api/cards/{card_id}/move", json={"to": "discussion", "reason": ""})
+    answer = app_client.post(f"/api/cards/{card_id}/move", json={"to": "work", "reason": ""})
 
     assert answer.status_code == 200
-    assert answer.json()["status"] == "discussion"
+    assert answer.json()["status"] == "work"
 
 
 def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestClient) -> None:
@@ -737,7 +750,7 @@ def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestCl
         card_id=card_id,
         role=Role.MANAGER,
         user_id=who,
-        to=LotStatus.ANALYSIS,
+        to=LotStatus.WORK,
     )
     db.commit()
 
@@ -748,7 +761,7 @@ def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestCl
     assert len(body["events"]) >= 2, "Взятие в работу и перевод обязаны быть в ленте"
 
     moved = next(item for item in body["events"] if item["kind"] == "moved")
-    assert moved["to_status"] == "analysis"
+    assert moved["to_status"] == "work"
     assert moved["from_status"] == "new"
     assert moved["by_machine"] is False
 
@@ -757,7 +770,7 @@ def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestCl
     assert body["workers"][0]["actions"] >= 2
 
     # Этапы: сколько лот простоял на каждом. Без них не видно, где застряло.
-    assert [stage["status"] for stage in body["stages"]] == ["new", "analysis"]
+    assert [stage["status"] for stage in body["stages"]] == ["new", "work"]
     assert body["stages"][-1]["running"] is True
 
 
@@ -910,11 +923,11 @@ def test_fail_progon_dvigaet_lot_tolko_vperyod(
     _завести(db, org, кто)
     card = _карточка(db, org)
 
-    assert cards.advance(db, card=card, to=LotStatus.ANALYSIS, why="разбор собран") is True
-    assert card.status is LotStatus.ANALYSIS
+    assert cards.advance(db, card=card, to=LotStatus.WORK, why="разбор собран") is True
+    assert card.status is LotStatus.WORK
 
     card.status = LotStatus.APPROVAL
-    assert cards.advance(db, card=card, to=LotStatus.ANALYSIS, why="разбор собран") is False
+    assert cards.advance(db, card=card, to=LotStatus.WORK, why="разбор собран") is False
     assert card.status is LotStatus.APPROVAL
 
 
@@ -924,10 +937,10 @@ def test_fail_soshedshiy_s_distantsii_progonom_ne_dvigaetsya(
     """«Не участвуем» — решение человека, и фоновая задача его не пересматривает."""
     _завести(db, org, кто)
     card = _карточка(db, org)
-    card.status = LotStatus.SKIPPED
+    card.status = LotStatus.DONE
 
-    assert cards.advance(db, card=card, to=LotStatus.DISCUSSION, why="замечание готово") is False
-    assert card.status is LotStatus.SKIPPED
+    assert cards.advance(db, card=card, to=LotStatus.WORK, why="замечание готово") is False
+    assert card.status is LotStatus.DONE
 
 
 def test_fail_tot_zhe_fayl_v_druguyu_papku_pereezzhaet_i_govorit_ob_etom(
@@ -1323,27 +1336,36 @@ def test_fail_zadachi_otdela_vidny_tselikom(db: DbSession, app_client: TestClien
 def test_fail_podannaya_zayavka_vidna_ne_tolko_po_otmetke(
     db: DbSession, org: Organization, кто: uuid.UUID
 ) -> None:
-    """Лот, отправленный сразу в «Договор», считается поданным.
+    """Завершённый с итогом считается поданным, без итога — нет.
 
-    Отметка времени ставится переводом в «Ждём итоги», а переводить можно
-    откуда угодно куда угодно — это снято намеренно, процесс ещё меняется.
-    По одной отметке такой лот выглядел бы неподанным, и прошедший срок на нём
-    красился бы красным: «приём закрыт, а мы не подали» — про закупку, по
-    которой уже заключён договор.
+    Отметка времени ставится нажатием «Подал», а переводить лот можно откуда
+    угодно куда угодно — это снято намеренно. Лот, отправленный сразу в
+    «Завершённый» с итогом «Выиграли», отметки не получил: выиграть, не подавая
+    заявку, нельзя.
+
+    Обратное тоже важно: в «Завершённом» лежат и лоты, которые мы решили
+    пропустить. По ним протокола нет, и красный срок на них — правда.
     """
+    from platform_api.db.models import LotOutcome
+
     _завести(db, org, кто)
     card = _карточка(db, org)
 
     assert cards.submitted(card) is False
 
-    card.status = LotStatus.CONTRACT
+    card.status = LotStatus.DONE
+    card.outcome = LotOutcome.WON
     assert cards.submitted(card) is True
     # Время подачи при этом не выдумывается: по придуманному потом считают
     # сроки, и лучше пусто, чем неправда.
     assert card.submitted_at is None
 
-    card.status = LotStatus.SKIPPED
+    card.outcome = LotOutcome.NONE
     assert cards.submitted(card) is False
+
+    # Ожидание протокола — это уже поданная заявка, без всякого итога.
+    card.status = LotStatus.WAITING
+    assert cards.submitted(card) is True
 
 
 def test_fail_podacha_trebuet_summy_i_zapominaet_eyo(
@@ -1378,7 +1400,7 @@ def test_fail_podacha_trebuet_summy_i_zapominaet_eyo(
 
     assert подан.bid_amount == Decimal("8500000")
     assert подан.submitted_at is not None
-    assert подан.status is LotStatus.AWAITING
+    assert подан.status is LotStatus.WAITING
     assert cards.submitted(подан) is True
 
 
@@ -1425,7 +1447,7 @@ def test_fail_otmetka_ne_vozvrashchaet_lot_nazad(
     """
     _завести(db, org, кто)
     card = _карточка(db, org)
-    card.status = LotStatus.CONTRACT
+    card.status = LotStatus.DONE
     db.flush()
 
     подан = cards.submit(
@@ -1437,7 +1459,7 @@ def test_fail_otmetka_ne_vozvrashchaet_lot_nazad(
         user_id=кто,
     )
 
-    assert подан.status is LotStatus.CONTRACT
+    assert подан.status is LotStatus.DONE
     assert подан.bid_amount == Decimal("8500000")
 
 
@@ -1511,3 +1533,127 @@ def test_fail_obsuzhdenie_zakryto_peredachey_yuristam(
     обсуждение.stage = DiscussionStage.WITH_LAWYERS
     отметки = {mark.desk: mark.done for mark in cards.desk_marks(card, talk=обсуждение)}
     assert отметки["discussion"] is True
+
+
+def test_fail_zadacha_nesyot_dannye_zakupki(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """В очереди отдела у задачи видны деньги и заказчик.
+
+    За что взяться, человек решает по сумме и сроку. Пока в строке стояло одно
+    название, он открывал лоты по одному — по десятку на каждое утро.
+    """
+    card_id = _завести(db, org, кто)
+    задача = cards.add_task(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        title="Найти товар",
+        department=Department.SUPPLY,
+        created_by=кто,
+    )
+
+    одна = cards.task(db, organization_id=org.id, task_id=задача.id)
+
+    assert одна.card_amount == Decimal("8660625")
+    assert одна.card_customer == "ГУ Управление"
+
+
+def test_fail_kody_bez_veduschih_nuley(db: DbSession, org: Organization, кто: uuid.UUID) -> None:
+    """«GZ2», а не «GZ000002».
+
+    Код называют вслух на планёрке и пишут в переписке, а «GZ000002» человек
+    читает по слогам и пересчитывает нули, чтобы не спутать с «GZ000020».
+    Нули стояли ради выравнивания столбиком и сортировки как текст:
+    выравнивание держит моноширинный шрифт, а по коду ничего не сортируется —
+    списки идут по сроку.
+
+    Тендерная приставка не тронута: «TN-00042» выдана давно, ею закупки
+    называют вслух, и менять её форму значило бы разослать всем новые имена
+    для того же самого.
+    """
+    from platform_api.modules import codes
+    from platform_api.modules.goszakup.start import CODE_PREFIX, CODE_SEPARATOR, CODE_WIDTH
+
+    выдано = codes.assign(
+        db,
+        "goszakup-код",
+        CODE_PREFIX,
+        ["лот-1", "лот-2"],
+        width=CODE_WIDTH,
+        separator=CODE_SEPARATOR,
+    )
+
+    assert sorted(выдано.values()) == ["GZ1", "GZ2"]
+
+    тендерный = codes.assign(db, "tender-код", "TN", ["дело-1"])
+    assert list(тендерный.values()) == ["TN-00001"]
+
+
+def test_fail_itog_otdelno_ot_statusa(db: DbSession, org: Organization, кто: uuid.UUID) -> None:
+    """Завершённый лот бывает выигранным, проигранным и никаким.
+
+    Пока итог стоял статусом, «Проиграли» и «Завершён» были
+    взаимоисключающими состояниями — хотя проигранный лот завершён ровно так
+    же, как выигранный. А лот, который мы прошли мимо, попадал в «Не
+    участвуем»: состояние, из которого он больше не двигался, хотя работа над
+    ним просто кончилась.
+    """
+    from platform_api.db.models import LotOutcome
+
+    card_id = _завести(db, org, кто)
+    cards.move(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        user_id=кто,
+        to=LotStatus.WAITING,
+    )
+
+    проигран = cards.result(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        outcome=LotOutcome.LOST,
+        won_amount=Decimal("7900000"),
+        winner="ТОО «Соседи»",
+        user_id=кто,
+    )
+
+    # Итог пришёл — закупка для нас кончилась: держать её в ожидании протокола
+    # после того, как он прочитан, значит каждое утро открывать лот впустую.
+    assert проигран.status is LotStatus.DONE
+    assert проигран.outcome is LotOutcome.LOST
+    assert проигран.finished_at is not None
+    assert проигран.won_amount == Decimal("7900000")
+    assert проигран.winner == "ТОО «Соседи»"
+
+
+def test_fail_shest_sostoyaniy_i_ni_odnogo_lishnego(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Шесть состояний, и работа отделов идёт внутри одного из них.
+
+    Прежние четырнадцать описывали путь по отделам: обсуждение, разбор,
+    готовность, договор, исполнение, оплата. На планёрке по ним отвечали не на
+    тот вопрос — они говорили, чья очередь, а спрашивают, где закупка.
+    """
+    from platform_api.db.models import LotStatus as Статус
+
+    assert [status.value for status in cards.FLOW] == [
+        "new",
+        "work",
+        "approval",
+        "submission",
+        "waiting",
+        "done",
+    ]
+    assert set(Статус) == set(cards.FLOW)
+    # У каждого состояния есть имя и есть кому его поставить: пропущенное имя
+    # показало бы человеку «LotStatus.WORK», а пропущенное право — кнопку,
+    # которая всегда отвечает отказом.
+    assert all(status in cards.STATUS_NAMES for status in Статус)
+    assert all(status in cards.ALLOWED for status in Статус)
+    assert all(status in cards.DEPARTMENT_OF for status in Статус)

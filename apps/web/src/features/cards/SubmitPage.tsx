@@ -163,9 +163,16 @@ function Row({
   const [naming, setNaming] = useState(false);
   const [trouble, setTrouble] = useState("");
 
-  const move = useMutation({
-    mutationFn: (to: "awaiting" | "won" | "lost") => cardsApi.move(card.id, to),
-    onSuccess: onDone,
+  // Итог протокола, а не перевод в состояние: «Выиграли» и «Проиграли»
+  // перестали быть шагами пути — это то, чем закупка кончилась. Одно действие
+  // ставит итог и завершает лот: протокол прочитан, ждать больше нечего.
+  const decide = useMutation({
+    mutationFn: (outcome: "won" | "lost") =>
+      cardsApi.result(card.id, null, "", outcome),
+    onSuccess: (fresh) => {
+      setAsking(true);
+      onDone(fresh);
+    },
   });
   const result = useMutation({
     mutationFn: () =>
@@ -230,7 +237,7 @@ function Row({
           </span>
         )}
 
-        {tab === "soon" && card.can.includes("awaiting") && (
+        {tab === "soon" && card.can.includes("waiting") && (
           <Button
             variant="primary"
             disabled={submit.isPending}
@@ -240,41 +247,47 @@ function Row({
           </Button>
         )}
 
-        {tab === "awaiting" && card.bid_amount !== null && (
-          <span
-            className="text-sm tabular-nums text-ink"
-            title="За сколько подали заявку"
-          >
-            подали за {money(card.bid_amount)} ₸
+        {tab === "awaiting" && (
+          <span className="flex items-baseline gap-1.5 text-sm">
+            {card.bid_amount !== null ? (
+              <span
+                className="tabular-nums text-ink"
+                title="За сколько подали заявку"
+              >
+                подали за {money(card.bid_amount)} ₸
+              </span>
+            ) : (
+              <span className="text-ink-muted">сумма не вписана</span>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setBid(card.bid_amount !== null ? String(card.bid_amount) : "");
+                setNaming((open) => !open);
+              }}
+              className="text-xs text-ink-muted underline decoration-hairline underline-offset-2 hover:text-ink"
+            >
+              {card.bid_amount === null ? "вписать" : "поправить"}
+            </button>
           </span>
         )}
 
         {tab === "awaiting" && (
           <span className="flex gap-1.5">
-            {card.can.includes("won") && (
-              <Button
-                variant="secondary"
-                disabled={move.isPending}
-                onClick={() => {
-                  move.mutate("won");
-                  setAsking(true);
-                }}
-              >
-                Выиграли
-              </Button>
-            )}
-            {card.can.includes("lost") && (
-              <Button
-                variant="ghost"
-                disabled={move.isPending}
-                onClick={() => {
-                  move.mutate("lost");
-                  setAsking(true);
-                }}
-              >
-                Проиграли
-              </Button>
-            )}
+            <Button
+              variant="secondary"
+              disabled={decide.isPending}
+              onClick={() => decide.mutate("won")}
+            >
+              Выиграли
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={decide.isPending}
+              onClick={() => decide.mutate("lost")}
+            >
+              Проиграли
+            </Button>
           </span>
         )}
 
@@ -282,10 +295,10 @@ function Row({
           <span className="flex items-baseline gap-3 text-sm">
             <span
               className={cx(
-                card.status === "lost" ? "text-ink-muted" : "text-good",
+                card.outcome === "lost" ? "text-ink-muted" : "text-good",
               )}
             >
-              {card.status_name}
+              {card.outcome_name}
             </span>
             {card.won_amount !== null && (
               <span className="tabular-nums text-ink">
@@ -394,10 +407,10 @@ function Row({
         </div>
       )}
 
-      {(move.error || result.error) && (
+      {(decide.error || result.error) && (
         <p className="border-t border-hairline px-4 py-2 text-sm text-critical">
-          {(move.error ?? result.error) instanceof Error
-            ? (move.error ?? result.error)!.message
+          {(decide.error ?? result.error) instanceof Error
+            ? (decide.error ?? result.error)!.message
             : "Не получилось"}
         </p>
       )}
@@ -406,16 +419,11 @@ function Row({
 }
 
 function belongs(card: Card, tab: Tab): boolean {
-  if (tab === "soon") return card.status === "ready";
-  if (tab === "awaiting") return card.status === "awaiting";
-  return [
-    "won",
-    "lost",
-    "contract",
-    "fulfilling",
-    "awaiting_payment",
-    "done",
-  ].includes(card.status);
+  if (tab === "soon") return card.status === "submission";
+  if (tab === "awaiting") return card.status === "waiting";
+  // Итоги — это завершённые с протоколом. Завершённые без протокола сюда не
+  // идут: по ним мы не участвовали, и в календаре подачи им делать нечего.
+  return card.status === "done" && card.outcome !== "none";
 }
 
 /**

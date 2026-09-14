@@ -16,7 +16,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   cardsApi,
   FLOW,
-  OFF_TRACK,
+  offTrack,
   type Card as Lot,
   type LotStatus,
 } from "@/api/cards";
@@ -28,42 +28,22 @@ import { Board, Peek, type BoardColumn } from "@/ui/board";
 /** Цвет точки у заголовка колонки. Место в процессе, а не важность. */
 const RULE: Record<LotStatus, string> = {
   new: "bg-baseline",
-  discussion: "bg-series-5",
-  analysis: "bg-series-1",
+  work: "bg-series-1",
   approval: "bg-series-4",
-  ready: "bg-series-3",
-  awaiting: "bg-series-2",
-  won: "bg-good",
-  lost: "bg-hairline",
-  contract: "bg-series-3",
-  fulfilling: "bg-series-3",
-  awaiting_payment: "bg-series-4",
+  submission: "bg-series-3",
+  waiting: "bg-series-2",
   done: "bg-hairline",
-  skipped: "bg-hairline",
-  cancelled: "bg-hairline",
 };
 
-const OFF_NAMES: Record<string, string> = {
-  skipped: "Пропускаем",
-  lost: "Проиграли",
-  cancelled: "Отменён",
-};
-
-const COLUMNS: BoardColumn<LotStatus>[] = [
-  ...FLOW.map((step) => ({
-    key: step.key,
-    title: step.title,
-    rule: RULE[step.key],
-  })),
-  ...OFF_TRACK.map((status, index) => ({
-    key: status,
-    title: OFF_NAMES[status] ?? status,
-    rule: RULE[status],
-    // Пунктиром и с отступом от основного пути: это не следующий шаг, а
-    // выход из него.
-    apart: index === 0,
-  })),
-];
+// Колонок ровно столько, сколько состояний. Отдельных «Пропускаем»,
+// «Проиграли» и «Отменён» больше нет: они были не шагами пути, а его итогом, и
+// теперь лежат в «Завершённом» с разным итогом протокола. Доска от этого стала
+// короче на три колонки, которые почти всегда пустовали.
+const COLUMNS: BoardColumn<LotStatus>[] = FLOW.map((step) => ({
+  key: step.key,
+  title: step.title,
+  rule: RULE[step.key],
+}));
 
 export function LotBoard({ lots }: { lots: Lot[] }) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -137,7 +117,7 @@ export function LotBoard({ lots }: { lots: Lot[] }) {
 
 /** Карточка на доске. Минимум: узнать лот и понять, горит ли он. */
 function Face({ lot }: { lot: Lot }) {
-  const off = OFF_TRACK.includes(lot.status);
+  const off = offTrack(lot);
   return (
     <>
       <div className="flex items-baseline gap-2">

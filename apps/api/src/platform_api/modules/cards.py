@@ -36,6 +36,7 @@ from platform_api.db.models import (
     LotEvent,
     LotFile,
     LotFolder,
+    LotOutcome,
     LotStatus,
     Membership,
     Participation,
@@ -68,75 +69,54 @@ APPROVE_BEFORE = timedelta(hours=2)
 
 STATUS_NAMES: dict[LotStatus, str] = {
     LotStatus.NEW: "Новый",
-    LotStatus.DISCUSSION: "Обсуждение",
-    LotStatus.ANALYSIS: "На разборе",
+    LotStatus.WORK: "В работе",
     LotStatus.APPROVAL: "На согласовании",
-    LotStatus.READY: "Готов к участию",
-    LotStatus.AWAITING: "Ожидаем итоги",
-    LotStatus.WON: "Выиграли",
-    LotStatus.LOST: "Проиграли",
-    LotStatus.CONTRACT: "Договор",
-    LotStatus.FULFILLING: "Исполнение",
-    LotStatus.AWAITING_PAYMENT: "Ожидаем оплату",
-    LotStatus.DONE: "Завершён",
-    LotStatus.SKIPPED: "Не участвуем",
-    LotStatus.CANCELLED: "Отменён",
+    LotStatus.SUBMISSION: "Подача",
+    LotStatus.WAITING: "Ожидание протокола итогов",
+    LotStatus.DONE: "Завершённый",
+}
+
+OUTCOME_NAMES: dict[LotOutcome, str] = {
+    LotOutcome.NONE: "Не участвовали",
+    LotOutcome.WON: "Выиграли",
+    LotOutcome.LOST: "Проиграли",
 }
 
 # Порядок хода. По нему рисуется полоса в карточке: человек должен видеть, где
 # лот стоит и сколько шагов до конца, а не одно слово без контекста.
 FLOW: tuple[LotStatus, ...] = (
     LotStatus.NEW,
-    LotStatus.DISCUSSION,
-    LotStatus.ANALYSIS,
+    LotStatus.WORK,
     LotStatus.APPROVAL,
-    LotStatus.READY,
-    LotStatus.AWAITING,
-    LotStatus.WON,
-    LotStatus.CONTRACT,
-    LotStatus.FULFILLING,
-    LotStatus.AWAITING_PAYMENT,
+    LotStatus.SUBMISSION,
+    LotStatus.WAITING,
     LotStatus.DONE,
 )
 
-# Тупики нужны для отметки времени окончания, а не для запрета: лот, доехавший
-# до «Завершён», «Проиграли» или «Отменён», получает `finished_at`.
-_FINAL = frozenset({LotStatus.DONE, LotStatus.LOST, LotStatus.CANCELLED})
-
-# Состояния, в которые лот попадает уже после поданной заявки. «Проиграли» в
-# их числе: проиграть можно только то, в чём участвовал.
-_AFTER_SUBMIT = frozenset(
-    {
-        LotStatus.AWAITING,
-        LotStatus.WON,
-        LotStatus.LOST,
-        LotStatus.CONTRACT,
-        LotStatus.FULFILLING,
-        LotStatus.AWAITING_PAYMENT,
-        LotStatus.DONE,
-    }
-)
+# Тупик один: дошедший до «Завершённого» получает `finished_at`. Чем именно
+# кончилось, говорит итог, а не статус.
+_FINAL = frozenset({LotStatus.DONE})
 
 
 def submitted(card: LotCard) -> bool:
     """Подана ли заявка по лоту.
 
-    Не по одной отметке времени. `submitted_at` ставится переводом в «Ждём
-    итоги», а переводить можно откуда угодно куда угодно — это снято
-    намеренно, процесс в компании ещё меняется. Лот, отправленный сразу в
-    «Договор», отметки не получил, хотя заявка по нему, очевидно, подавалась:
-    договор без участия не заключают.
+    Не по одной отметке времени. `submitted_at` ставит человек, нажимая «Подал»
+    и называя сумму участия, — но переводить лот можно откуда угодно куда
+    угодно, это снято намеренно, и лот, отправленный сразу в «Завершённый» с
+    итогом «Выиграли», отметки не получил. Выиграть, не подавая заявку, нельзя.
 
-    Отсюда два признака вместо одного: отметка, если она есть, и состояние,
-    в которое без поданной заявки не попадают. Отметку при этом не
-    дорисовываем задним числом — время подачи мы не знаем, а придуманное
-    время хуже отсутствующего: по нему потом считают сроки.
+    Завершённый сам по себе о подаче не говорит: там же лежат лоты, которые мы
+    решили пропустить. Отличает их итог — он и спрашивается.
 
-    Первый признак теперь ставит человек: тендерщик вводит сумму участия и
-    жмёт «Подал» (`submit`). Второй остался для лотов, заведённых до этого, и
-    для тех, кого перевели сразу дальше по пути.
+    Отметку задним числом не дорисовываем: время подачи мы не знаем, а
+    придуманное хуже отсутствующего — по нему потом считают сроки.
     """
-    return card.submitted_at is not None or card.status in _AFTER_SUBMIT
+    if card.submitted_at is not None:
+        return True
+    if card.status is LotStatus.WAITING:
+        return True
+    return card.status is LotStatus.DONE and card.outcome is not LotOutcome.NONE
 
 
 TRANSITIONS: dict[LotStatus, tuple[LotStatus, ...]] = {
@@ -165,19 +145,15 @@ _RUNS = frozenset({Role.ADMIN, Role.MANAGER})
 _DECIDES = frozenset({Role.ADMIN, Role.MANAGER, Role.HEAD, Role.COMMERCIAL})
 ALLOWED: dict[LotStatus, frozenset[Role]] = {
     LotStatus.NEW: _RUNS,
-    LotStatus.DISCUSSION: _RUNS | {Role.LAWYER, Role.ANALYST},
-    LotStatus.ANALYSIS: _RUNS | {Role.ANALYST},
+    # «В работе» объявляют те, кто в нём и работает: обсуждение заводит юрист,
+    # разбор — тендерщик, и бежать за менеджером ради перевода незачем.
+    LotStatus.WORK: _RUNS | {Role.LAWYER, Role.ANALYST},
     LotStatus.APPROVAL: _RUNS | {Role.ANALYST},
-    LotStatus.READY: _RUNS,
-    LotStatus.AWAITING: _RUNS,
-    LotStatus.WON: _RUNS,
-    LotStatus.LOST: _RUNS,
-    LotStatus.CONTRACT: _RUNS,
-    LotStatus.FULFILLING: _RUNS | {Role.BUYER},
-    LotStatus.AWAITING_PAYMENT: _RUNS,
-    LotStatus.DONE: _RUNS,
-    LotStatus.SKIPPED: _DECIDES,
-    LotStatus.CANCELLED: _RUNS,
+    LotStatus.SUBMISSION: _RUNS,
+    LotStatus.WAITING: _RUNS,
+    # Завершить может и тот, кто решает об участии: лот, который мы проходим
+    # мимо, закрывает руководитель, а не менеджер задним числом.
+    LotStatus.DONE: _DECIDES,
 }
 
 # Кто ставит какую подпись. Одна роль — одна подпись: если один человек может
@@ -285,19 +261,14 @@ DEPARTMENT_NAMES: dict[Department, str] = {
 # нужную очередь, когда её заводят с карточки без указания отдела.
 DEPARTMENT_OF: dict[LotStatus, Department] = {
     LotStatus.NEW: Department.ANALYSIS,
-    LotStatus.DISCUSSION: Department.DISCUSSION,
-    LotStatus.ANALYSIS: Department.ANALYSIS,
+    # «В работе» держат разом четыре отдела, и какой из них «тот самый», по
+    # статусу не сказать. Разбор — потому что с него начинают: он считает,
+    # берёмся ли вообще, и задача без указанного отдела чаще всего его.
+    LotStatus.WORK: Department.ANALYSIS,
     LotStatus.APPROVAL: Department.APPROVAL,
-    LotStatus.READY: Department.SUBMISSION,
-    LotStatus.AWAITING: Department.SUBMISSION,
-    LotStatus.WON: Department.SUBMISSION,
-    LotStatus.LOST: Department.SUBMISSION,
-    LotStatus.CONTRACT: Department.SUBMISSION,
-    LotStatus.FULFILLING: Department.SUPPLY,
-    LotStatus.AWAITING_PAYMENT: Department.SUBMISSION,
+    LotStatus.SUBMISSION: Department.SUBMISSION,
+    LotStatus.WAITING: Department.SUBMISSION,
     LotStatus.DONE: Department.SUBMISSION,
-    LotStatus.SKIPPED: Department.ANALYSIS,
-    LotStatus.CANCELLED: Department.ANALYSIS,
 }
 
 
@@ -375,6 +346,15 @@ class Job:
     """Кто поставил. Вопрос «а кто это придумал» задают ровно тогда, когда
     задача выглядит лишней, — и адресовать его нужно не исполнителю."""
 
+    card_amount: Decimal | None = None
+    """Сумма закупки по снимку карточки. Нужна в очереди отдела: за что взяться,
+    человек решает по деньгам и сроку, а до сих пор в строке стояло одно
+    название — за остальным он открывал лот по одному."""
+
+    card_customer: str = ""
+    """Заказчик. Отвечает на «чья это закупка»: по нему узнают тех, с кем уже
+    работали, и тех, с кем связываться не стоит."""
+
 
 @dataclass(frozen=True, slots=True)
 class Talk:
@@ -425,6 +405,8 @@ class Card:
 
     participation: str
     skip_reason: str
+    outcome: str
+    outcome_name: str
 
     manager: str
     manager_id: str
@@ -563,20 +545,26 @@ def move(
         )
     if role not in ALLOWED[to]:
         raise SpokenError(f"Перевести лот в «{STATUS_NAMES[to]}» вам нельзя")
-    if to is LotStatus.READY and not _all_signed(card):
+    # Запрет один, и он про деньги: подавать без пяти подписей — это участие в
+    # закупке, товара под которую нет. Стоял он на «Готов к участию»; теперь на
+    # «Подаче» — состоянии, из которого заявка и уходит.
+    if to is LotStatus.SUBMISSION and not _all_signed(card):
         raise SpokenError("Не все подписи под участием собраны")
-    if to is LotStatus.SKIPPED and not reason.strip():
-        raise SpokenError("Укажите, почему не участвуем: через месяц это спросят")
+    # Второй запрет — про причину — переехал в решение об участии (`decide`):
+    # состояния «Не участвуем» больше нет, а причина спрашивается там же, где
+    # принимается само решение.
 
     card.status = to
-    if to is LotStatus.SKIPPED:
-        card.participation = Participation.NO
-        card.skip_reason = reason.strip()[:2000]
-    if to is LotStatus.AWAITING:
+    if to is LotStatus.WAITING and card.submitted_at is None:
+        # Подачу отмечают кнопкой с суммой (`submit`), но лот переводят и
+        # руками. Отметку ставим и здесь: «ждём протокол» без поданной заявки
+        # не бывает, а красный срок на таком лоте означал бы, что мы не подали.
         card.submitted_at = utcnow()
     if to in _FINAL:
         card.finished_at = utcnow()
-    if to is not LotStatus.SKIPPED:
+    # Участие перестаёт быть «может быть» на любом шаге дальше нового: лот
+    # ведут, значит, участвуем. Отказ ставится решением, и его не трогаем.
+    if card.participation is not Participation.NO:
         card.participation = Participation.YES
     card.owner_id = user_id
     trace(
@@ -612,9 +600,9 @@ def advance(
     **Только вперёд и только по дорожке.** Порядок берётся из `FLOW`, и если
     лот уже дальше — прогон его не трогает: разбор досчитался через десять
     минут после того, как менеджер отправил лот на согласование, и откат туда,
-    где он был, стёр бы работу человека. Сошедший с дистанции — «Не участвуем»,
-    «Проиграли», «Отменён» — не двигается вовсе: там решение принято, и
-    фоновая задача его не пересматривает.
+    где он был, стёр бы работу человека. Завершённый и тот, по которому решили
+    не участвовать, не двигаются вовсе: там решение принято, и фоновая задача
+    его не пересматривает.
 
     **Прав тут не спрашивают, и это осознанно.** `ALLOWED` отвечает на вопрос
     «кому можно нажать кнопку», а здесь кнопки нет: перевод — следствие
@@ -624,7 +612,7 @@ def advance(
     """
     if card.status is to:
         return False
-    if card.status in _FINAL or card.status in {LotStatus.SKIPPED, LotStatus.CANCELLED}:
+    if card.status in _FINAL or card.participation is Participation.NO:
         return False
 
     order = {status: place for place, status in enumerate(FLOW)}
@@ -671,11 +659,16 @@ def trace(
 
     Роль записывается на момент действия: снабженец, ставший руководителем,
     подписывал за снабжение, и в ленте должно остаться так.
+
+    Имя — тоже копией. Ссылка на человека обнуляется, когда его запись удаляют,
+    и без имени лента превратилась бы в список действий без авторов: «перевёл в
+    „Подача“» без имени неотличимо от прогона по расписанию.
     """
     db.add(
         LotEvent(
             card_id=card_id,
             actor_id=actor_id,
+            actor_name=_name_of(db, actor_id),
             actor_role=role.value if role is not None else "",
             by_machine=by_machine,
             kind=kind,
@@ -685,6 +678,18 @@ def trace(
             to_status=moved_to.value if moved_to else "",
         )
     )
+
+
+def _name_of(db: DbSession, user_id: uuid.UUID | None) -> str:
+    """Имя человека для записи в историю. Пусто — действие без входа.
+
+    Читается из сессии, которая уже держит объект: за именем в базу второй раз
+    не идём, а если человека в ней нет вовсе, пустая строка честнее выдуманной.
+    """
+    if user_id is None:
+        return ""
+    found = db.get(User, user_id)
+    return (found.full_name or found.email) if found is not None else ""
 
 
 def decide(
@@ -711,7 +716,11 @@ def decide(
     card.participation = participation
     card.skip_reason = reason.strip()[:2000] if participation is Participation.NO else ""
     if participation is Participation.NO and card.status not in _FINAL:
-        card.status = LotStatus.SKIPPED
+        # Отдельного состояния «Не участвуем» больше нет: работа над лотом
+        # кончилась, и это «Завершённый» — с пустым итогом, потому что
+        # протокола по нам не будет. Отличает такие лоты само решение
+        # (`participation`) и причина рядом с ним.
+        card.status = LotStatus.DONE
         card.finished_at = utcnow()
     trace(
         db,
@@ -754,6 +763,9 @@ def sign(
         db.add(found)
     found.state = state
     found.by_id = user_id
+    # Имя копией: «кто это одобрил» спрашивают через полгода, когда человек мог
+    # уволиться и его запись удалить — ссылка к тому времени обнулена.
+    found.by_name = _name_of(db, user_id)
     found.decided_at = utcnow()
     found.note = note.strip()[:2000]
     trace(
@@ -812,11 +824,11 @@ def submit(
     card.submitted_at = was or utcnow()
     card.participation = Participation.YES
     # Двигаем по пути, а не выставляем жёстко: лот мог уже уехать дальше —
-    # например, сразу в «Договор», — и возвращать его в «Ждём итоги» значит
-    # стирать то, что человек уже отметил.
+    # например, сразу в «Завершённый» с итогом, — и возвращать его в ожидание
+    # протокола значит стирать то, что человек уже отметил.
     order = {status: place for place, status in enumerate(FLOW)}
-    if order.get(card.status, -1) < order[LotStatus.AWAITING]:
-        card.status = LotStatus.AWAITING
+    if order.get(card.status, -1) < order[LotStatus.WAITING]:
+        card.status = LotStatus.WAITING
     trace(
         db,
         card_id=card.id,
@@ -837,6 +849,7 @@ def result(
     organization_id: uuid.UUID,
     card_id: uuid.UUID,
     role: Role,
+    outcome: LotOutcome | None = None,
     won_amount: Decimal | None = None,
     winner: str = "",
     user_id: uuid.UUID | None = None,
@@ -856,6 +869,15 @@ def result(
     if role not in _RUNS:
         raise SpokenError("Записывать итоги подачи вам нельзя")
 
+    if outcome is not None:
+        # Итог и завершение — одно действие. Протокол пришёл, значит, закупка
+        # для нас кончилась: держать её в «Ожидании протокола» после того, как
+        # он прочитан, значит каждое утро открывать лот, чтобы убедиться, что
+        # там ничего нового.
+        card.outcome = outcome
+        if outcome is not LotOutcome.NONE:
+            card.status = LotStatus.DONE
+            card.finished_at = card.finished_at or utcnow()
     if won_amount is not None:
         card.won_amount = won_amount
     if winner.strip():
@@ -864,7 +886,11 @@ def result(
         db,
         card_id=card.id,
         kind="result",
-        title="Записал итоги подачи",
+        title=(
+            f"Записал итог: {OUTCOME_NAMES[outcome]}"
+            if outcome is not None
+            else "Записал итоги подачи"
+        ),
         actor_id=user_id,
         role=role,
         detail=winner,
@@ -1149,7 +1175,10 @@ def history(
         Event(
             id=str(item.id),
             at=item.created_at.isoformat(),
-            actor=name or ("платформа" if item.by_machine else "неизвестно кто"),
+            # Имя сегодняшнее, нет человека — записанное тогда, нет и его —
+            # честное «неизвестно кто». Копия нужна затем, что уволенного
+            # удаляют, а лента отвечает на «кто это сделал» и через полгода.
+            actor=name or item.actor_name or ("платформа" if item.by_machine else "неизвестно кто"),
             actor_id=str(item.actor_id) if item.actor_id else "",
             actor_role=item.actor_role,
             by_machine=item.by_machine,
@@ -1431,6 +1460,8 @@ def _job(
         card_id=str(row.card_id),
         card_code=card.code if card else "",
         card_title=card.title if card else "",
+        card_amount=card.amount if card else None,
+        card_customer=card.customer if card else "",
         department=row.department.value,
         department_name=DEPARTMENT_NAMES[row.department],
         title=row.title,
@@ -1517,7 +1548,10 @@ def desk_marks(card: LotCard, *, talk: Discussion | None = None) -> tuple[DeskMa
     """
     order = {status: place for place, status in enumerate(FLOW)}
     here = order.get(card.status, -1)
-    analysis_done = card.status in _FINAL or here > order.get(LotStatus.ANALYSIS, 0)
+    # Разбор закончен, когда лот вышел из «В работе»: отделы работают внутри
+    # этого статуса, и уход дальше означает, что разбор отпустил лот. Раньше
+    # проверялся собственный статус «На разборе» — его больше нет.
+    analysis_done = here > order[LotStatus.WORK]
 
     marks: list[DeskMark] = []
     for desk, title in DESK_MARKS:
@@ -1594,6 +1628,8 @@ def _shown(
         step=FLOW.index(card.status) + 1 if card.status in FLOW else 0,
         participation=card.participation.value,
         skip_reason=card.skip_reason,
+        outcome=card.outcome.value,
+        outcome_name=OUTCOME_NAMES[card.outcome],
         manager=known.get(card.manager_id, "") if card.manager_id else "",
         manager_id=str(card.manager_id) if card.manager_id else "",
         owner=known.get(card.owner_id, "") if card.owner_id else "",
@@ -1708,7 +1744,9 @@ def _sign(item: Approval, known: dict[uuid.UUID, str], *, role: Role) -> Sign:
         kind=item.kind.value,
         name=APPROVAL_NAMES[item.kind],
         state=item.state.value,
-        by=known.get(item.by_id, "") if item.by_id else "",
+        # Имя из ссылки, а нет её — из копии рядом. Копия остаётся, когда
+        # человека удалили: подпись должна остаться подписью.
+        by=(known.get(item.by_id) if item.by_id else None) or item.by_name,
         at=item.decided_at.isoformat() if item.decided_at else "",
         note=item.note,
         can_sign=role in SIGNS[item.kind],
@@ -1721,9 +1759,9 @@ def _can(card: LotCard, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
         status.value
         for status in TRANSITIONS[card.status]
         if role in ALLOWED[status]
-        # «Готов к участию» без всех подписей не предлагаем: кнопка, которая
-        # всегда отвечает отказом, читается как поломка, а не как правило.
-        and (status is not LotStatus.READY or _all_signed(card))
+        # «Подачу» без всех подписей не предлагаем: кнопка, которая всегда
+        # отвечает отказом, читается как поломка, а не как правило.
+        and (status is not LotStatus.SUBMISSION or _all_signed(card))
     ]
     if role in _DECIDES:
         allowed.append("decide")
