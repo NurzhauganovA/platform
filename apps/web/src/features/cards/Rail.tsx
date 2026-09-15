@@ -88,21 +88,66 @@ function People({
       setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
   });
 
+  const claim = useMutation({
+    mutationFn: () => cardsApi.claim(card.id),
+    onSuccess: onDone,
+    onError: (error) =>
+      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
+  });
+
   const may = card.can.includes("assign");
   const decides = card.can.includes("decide");
+  const free = card.can.includes("claim");
 
   return (
     <Panel className="overflow-hidden">
       <Kv label="Ведёт лот">
-        <Who
-          name={card.owner}
-          value={card.owner_id}
-          people={people}
-          may={may && !assign.isPending}
-          onChange={(id) =>
-            assign.mutate({ owner_id: id || null, change_owner: true })
-          }
-        />
+        {/* «Взять на себя» — у ничьего лота и у всех, кто с лотами работает.
+            Лот с портала берёт госзакупщик, но разбор считает не он: пока
+            владельцем ставился взявший, лот выглядел разобранным — в списке
+            стояло его имя, тендерщики видели занятую работу и проходили мимо,
+            а он ждал, что разберут.
+
+            Кнопкой, а не выбором из списка: раздавать работу — право
+            руководящее, и бежать за менеджером ради одной отметки значит
+            потерять день из двух, что даёт срок обсуждения. */}
+        {free ? (
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-ink-muted">ничьё</span>
+            <button
+              type="button"
+              disabled={claim.isPending}
+              onClick={() => claim.mutate()}
+              className={cx(
+                "rounded-[7px] bg-ink px-2.5 py-1 text-[12px] font-medium text-surface",
+                "transition disabled:opacity-40",
+              )}
+            >
+              {claim.isPending ? "Берём…" : "Взять на себя"}
+            </button>
+            {may && (
+              <Who
+                name=""
+                value=""
+                people={people}
+                may={!assign.isPending}
+                onChange={(id) =>
+                  assign.mutate({ owner_id: id || null, change_owner: true })
+                }
+              />
+            )}
+          </span>
+        ) : (
+          <Who
+            name={card.owner}
+            value={card.owner_id}
+            people={people}
+            may={may && !assign.isPending}
+            onChange={(id) =>
+              assign.mutate({ owner_id: id || null, change_owner: true })
+            }
+          />
+        )}
       </Kv>
 
       <Kv label="Менеджер">

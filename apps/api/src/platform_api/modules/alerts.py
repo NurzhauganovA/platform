@@ -43,7 +43,7 @@ TAKEN_DESKS = (Department.ANALYSIS, Department.DISCUSSION)
 
 
 def lot_opened(db: DbSession, settings: Settings, card: LotCard) -> None:
-    """Лот взяли в работу — зовём разбор и обсуждение.
+    """Лот взяли в работу — зовём разбор и обсуждение взять его на себя.
 
     Одной заявкой на всех: пять запросов вместо одного — это пять поводов для
     сервиса ответить отказом на середине.
@@ -58,6 +58,10 @@ def lot_opened(db: DbSession, settings: Settings, card: LotCard) -> None:
     for desk in TAKEN_DESKS:
         people.update(people_of(db, card.organization_id, desk))
     # Тому, кто лот и взял, сообщать нечего: он смотрит на него прямо сейчас.
+    # Ведущего у нового лота нет вовсе — его как раз и ищут этой рассылкой, —
+    # поэтому отбрасывается менеджер: лот с портала берёт он.
+    if card.manager_id:
+        people.discard(card.manager_id)
     if card.owner_id:
         people.discard(card.owner_id)
     if not people:
@@ -66,7 +70,7 @@ def lot_opened(db: DbSession, settings: Settings, card: LotCard) -> None:
     notify.about(
         settings,
         event="lot.assigned",
-        title="Новый лот в работе",
+        title="Новый лот — нужно взять на себя",
         body_text=_lot_lines(card),
         payload={
             "lot": card.title,

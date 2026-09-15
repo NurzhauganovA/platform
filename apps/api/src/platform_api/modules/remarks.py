@@ -44,6 +44,7 @@ from platform_api.db.models import (
 )
 from platform_api.errors import SpokenError
 from platform_api.logging import get_logger
+from platform_api.modules import markup
 
 logger = get_logger(__name__)
 
@@ -361,7 +362,10 @@ def save_text(
     if role not in ALLOWED[row.stage]:
         raise SpokenError("Править замечание на этом этапе вам нельзя")
 
-    clean = text.strip()
+    # Разметку вычищаем до проверки длины: из вставленного документа она бывает
+    # девять десятых объёма, и отказ «слишком длинное» приходил бы на текст,
+    # который после чистки укладывается втрое.
+    clean = markup.tidy(text)
     if len(clean) > MAX_TEXT:
         raise SpokenError("Замечание слишком длинное")
     row.text = clean

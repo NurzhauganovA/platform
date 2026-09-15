@@ -69,8 +69,8 @@ def _разобрать(db: DbSession, card: LotCard) -> None:
                     "demand": "не менее 8 ядер",
                     "brief": "Ядра: 8",
                     "price": "120000",
-                    "cost": "90000",
                     "ours": "Core i5-13400",
+                    "our_spec": "8 ядер, 2.5/4.7 ГГц",
                 },
             ),
         ],
@@ -99,8 +99,8 @@ def test_fail_variant_beryot_trebovaniya_no_ne_nashi_tseny(db: DbSession, card: 
     assert ячейки["demand"] == "не менее 8 ядер"
     assert ячейки["brief"] == "Ядра: 8"
     assert ячейки.get("price", "") == ""
-    assert ячейки.get("cost", "") == ""
     assert ячейки.get("ours", "") == ""
+    assert ячейки.get("our_spec", "") == ""
 
 
 def test_fail_pravka_varianta_ne_zadevaet_sosednego(db: DbSession, card: LotCard) -> None:
@@ -161,13 +161,23 @@ def test_fail_variantov_ne_bolshe_shesti(db: DbSession, card: LotCard) -> None:
         sheets.branch(db, card)
 
 
-def test_fail_stolbtsy_zavodyatsya_s_sebesom(db: DbSession, card: LotCard) -> None:
-    """Себестоимость стоит вплотную к цене: заработок считается из разницы."""
+def test_fail_stolbtsy_zavodyatsya_nashim_predlozheniem(db: DbSession, card: LotCard) -> None:
+    """Напротив требования заказчика — цена, наш товар и наш ТС.
+
+    Два столбца про наше предложение, а не один: «Наш товар» отвечает на «что
+    предлагаем», «Наш ТС» — на «подходит ли», и сверяют его со спецификацией
+    строка за строкой.
+
+    Себестоимости здесь больше нет: заполнять её было нечем — цены поставщиков
+    платформа по госзакупкам не знает, а снабжение работает в своей копии
+    таблицы, — и столбец стоял пустым во всех разборах.
+    """
     ключи = [column.key for column in sheets.default_columns()]
 
-    assert ключи == ["subject", "demand", "brief", "price", "cost", "ours"]
+    assert ключи == ["subject", "demand", "brief", "price", "ours", "our_spec"]
     названия = {column.key: column.title for column in sheets.hand_columns()}
     assert названия["ours"] == "Наш товар"
+    assert названия["our_spec"] == "Наш ТС"
 
 
 def test_fail_snabzhenie_poluchaet_kopiyu_a_ne_tu_zhe_tablicu(db: DbSession, card: LotCard) -> None:

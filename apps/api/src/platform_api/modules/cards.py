@@ -500,7 +500,15 @@ def open_card(
         status=LotStatus.NEW,
         participation=Participation.MAYBE,
         manager_id=by,
-        owner_id=by,
+        # Взявший не становится ведущим. Лот с портала берёт госзакупщик — он
+        # его нашёл и отвечает за него как менеджер, — но разбор считает не он.
+        # Пока владельцем ставился он сам, лот выглядел разобранным: в списке
+        # стояло его имя, тендерщики видели занятую работу и мимо неё
+        # проходили, а он ждал, что разберут.
+        #
+        # Ничьё — это приглашение: лот попадает во вкладку «Ничьи», тендерщики
+        # получают оповещение и берут его на себя кнопкой в карточке.
+        owner_id=None,
     )
     db.add(found)
     db.flush()
@@ -896,6 +904,47 @@ def result(
         detail=winner,
     )
     db.flush()
+    return card
+
+
+def claim(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    card_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role: Role,
+) -> LotCard:
+    """Берёт ничей лот на себя.
+
+    Отдельно от `assign`, и это не то же самое. `assign` — это «поручить
+    другому», право руководящее: менеджер раздаёт работу. А взять свободную
+    работу себе должен любой, кто её делает: тендерщик видит во вкладке «Ничьи»
+    лот, по которому пришло оповещение, и берёт его — бежать за менеджером
+    ради этого значит потерять день из двух, что даёт срок обсуждения.
+
+    Занятый лот не перехватывается. Двое, взявшие один лот, считают его
+    дважды, а узнают об этом на согласовании — когда сходятся две разные
+    себестоимости. Освободить его может тот, кто ведёт, или менеджер: для
+    этого есть `assign`.
+    """
+    card = _required(db, organization_id, card_id)
+    if card.owner_id is not None:
+        if card.owner_id == user_id:
+            return card
+        raise SpokenError("Лот уже ведёт другой сотрудник")
+
+    card.owner_id = user_id
+    trace(
+        db,
+        card_id=card.id,
+        kind="claimed",
+        title="Взял лот на себя",
+        actor_id=user_id,
+        role=role,
+    )
+    db.flush()
+    db.refresh(card)
     return card
 
 
@@ -1763,6 +1812,10 @@ def _can(card: LotCard, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
         # отвечает отказом, читается как поломка, а не как правило.
         and (status is not LotStatus.SUBMISSION or _all_signed(card))
     ]
+    # «Взять на себя» — у ничьего лота и у всех, кто с лотами работает: право
+    # руководящее здесь не нужно, работу берут себе сами.
+    if card.owner_id is None:
+        allowed.append("claim")
     if role in _DECIDES:
         allowed.append("decide")
     if role in {Role.ADMIN, Role.MANAGER}:

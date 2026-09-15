@@ -29,6 +29,7 @@ import { ApiError } from "@/api/client";
 import type { Card } from "@/api/cards";
 import { Button, Card as Panel, EmptyState, Spinner, cx } from "@/ui";
 import { BarHead, BarTitle, Chip, Note, Passed, stamp } from "./kit";
+import { Marked, RichText } from "./RichText";
 import { SpecHint } from "./SpecHint";
 
 /**
@@ -256,19 +257,26 @@ export function Discussion({ card }: { card: Card }) {
 
           {editable ? (
             <>
-              <textarea
+              {/* Поле с разметкой: ссылка на норму и цвет для спорного места.
+                  Замечание пишут под срок и правят по кругу — «вот этот пункт
+                  и есть сужение круга участников» надо чем-то отметить, а в
+                  простом поле всё выглядит одинаково.
+
+                  Разметка остаётся у нас. Заказчику текст уходит через портал
+                  руками, и туда его копируют — при копировании из поля цвет и
+                  ссылка не переносятся, уходит один текст. */}
+              <RichText
                 value={text}
-                onChange={(event) => setDraft(event.target.value)}
-                rows={12}
+                onChange={setDraft}
                 placeholder={
                   busy
                     ? "Модель пишет…"
                     : "Замечание пока пустое — напишите его"
                 }
                 className={cx(
-                  "mt-2.5 w-full resize-y rounded-[9px] border border-hairline bg-surface px-3 py-2.5",
-                  "text-[13.5px] leading-[1.65] text-ink placeholder:text-ink-muted",
-                  "focus:border-series-1 focus:outline-none",
+                  "mt-2.5 min-h-[260px] w-full rounded-[9px] border border-hairline bg-surface px-3 py-2.5",
+                  "text-[13.5px] leading-[1.65] text-ink",
+                  "focus:border-series-1",
                 )}
               />
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -392,8 +400,10 @@ export function Discussion({ card }: { card: Card }) {
  * вокруг — по ней видно, где кончается интерфейс и начинается документ.
  */
 function Doc({ text }: { text: string }) {
+  // Абзацы делятся и по переводу строки, и по `<br>`: текст, написанный
+  // моделью, приходит переводами строк, а правленный руками — разметкой поля.
   const paragraphs = text
-    .split(/\n\s*\n|\n/)
+    .split(/<br\s*\/?>|\n\s*\n|\n/i)
     .map((one) => one.trim())
     .filter(Boolean);
 
@@ -407,7 +417,10 @@ function Doc({ text }: { text: string }) {
             index > 0 && "mt-[11px]",
           )}
         >
-          {one}
+          {/* Показ через тот же разбор, что и сохранение: в разметке остаются
+              только ссылка и цвет, всё прочее вычищено. Иначе отправленное
+              замечание читалось бы с тегами вместо цвета. */}
+          <Marked html={one} />
         </p>
       ))}
     </div>

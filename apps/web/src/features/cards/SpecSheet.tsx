@@ -40,6 +40,7 @@ import { ApiError } from "@/api/client";
 import { jobsApi } from "@/api/jobs";
 import { Button, Card as Panel, Spinner, cx } from "@/ui";
 import { BarHead, BarTitle, Note } from "./kit";
+import { RichText } from "./RichText";
 
 /** Через сколько молчания сохранять правки. */
 const SETTLE_MS = 1200;
@@ -83,8 +84,11 @@ function sums(sheet: Sheet): Record<string, string> {
   return out;
 }
 
-/** Столбцы платформы, в которых лежат деньги. */
-const MONEY = new Set(["price", "cost"]);
+/** Столбцы платформы, в которых лежат деньги.
+
+    Себестоимости здесь больше нет: столбец убрали — заполнять его было нечем,
+    цены поставщиков платформа по госзакупкам не знает. */
+const MONEY = new Set(["price"]);
 
 /**
  * Число из ячейки. `null` — там не число.
@@ -112,8 +116,8 @@ function money(raw: string): number | null {
  */
 const HINTS: Record<string, string> = {
   price: "— ₸",
-  cost: "закупочная, ₸",
   ours: "марка и модель",
+  our_spec: "чем отвечает требованию",
 };
 
 export function SpecSheet({
@@ -918,47 +922,52 @@ function Cell({
   value: string;
   onChange: (value: string) => void;
 }) {
-  const box = useRef<HTMLTextAreaElement>(null);
   const own = column.filled_by === "hand";
   const wordy = column.key === DEMAND;
 
-  // Высота по содержимому, но не выше потолка у требования заказчика: там
-  // абзац на казахском и русском подряд, и ряд вырастал на треть экрана.
-  useEffect(() => {
-    const node = box.current;
-    if (!node) return;
-    node.style.height = "auto";
-    node.style.height = `${node.scrollHeight}px`;
-  }, [value, column.width]);
-
   return (
     <td className="px-2.5 py-2.5">
-      <textarea
-        ref={box}
+      {/* Поле с разметкой, а не простое. В ячейке пишут своими словами, и по
+          написанному работают другие: ссылка на страницу товара и красное «не
+          сходится по мощности» — это то, за чем в разбор и возвращаются. В
+          обычном поле всё выглядит одинаково, а выделить нечем.
+
+          Требование заказчика правится тем же полем, но выделять в нём можно
+          только цветом — переписывать дословный текст нельзя, по нему меряют
+          соответствие заявки, а вот отметить в нём спорную строку красным
+          нужно чаще всего. */}
+      <RichText
         value={value}
-        onChange={(event) => onChange(event.target.value)}
-        rows={1}
-        aria-label={column.title}
+        onChange={onChange}
         placeholder={
           own ? (HINTS[column.key] ?? column.title.toLowerCase()) : ""
         }
         className={cx(
-          "block w-full resize-none rounded-[7px] outline-none",
-          "placeholder:text-ink-muted",
+          // Поле в несколько строк, а не в одну. Раньше оно было высотой в
+          // строку и вело себя как узкий ввод: в «Наш ТС» пишут характеристики
+          // в столбик, и писать их в щель шириной в строку неудобно — человек
+          // не видит написанного выше.
+          //
+          // Растёт по содержимому и прокручивается, упёршись в потолок: без
+          // потолка требование заказчика на двух языках подряд вытягивает ряд
+          // на треть экрана.
+          "block w-full overflow-y-auto rounded-[7px] whitespace-pre-wrap",
           own
             ? cx(
+                "min-h-[58px] max-h-[220px]",
                 "border border-transparent bg-plane/70 px-[7px] py-[5px]",
-                "text-[12.5px] leading-[1.45] text-ink",
+                "text-[12.5px] leading-[1.5] text-ink",
                 "hover:border-hairline focus:border-series-1",
               )
             : wordy
               ? cx(
-                  "max-h-[176px] overflow-y-auto bg-transparent px-1 py-0.5",
+                  "min-h-[58px] max-h-[176px] bg-transparent px-1 py-0.5",
                   "text-[11.5px] leading-[1.55] text-ink-secondary",
                   "focus:bg-plane focus:text-ink",
                 )
               : cx(
-                  "bg-transparent px-1 py-0.5 text-[12.5px] leading-[1.45] text-ink",
+                  "min-h-[44px] max-h-[176px] bg-transparent px-1 py-0.5",
+                  "text-[12.5px] leading-[1.45] text-ink",
                   "focus:bg-plane",
                   column.key === BRIEF && "font-medium",
                 ),

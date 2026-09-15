@@ -1185,6 +1185,28 @@ def post_sign(
     return _card_out(_one(db, identity, card_id))
 
 
+@router.post("/{card_id}/claim", summary="Взять лот на себя")
+def post_claim(card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None) -> CardOut:
+    """Берёт ничей лот на себя.
+
+    Отдельно от «поручить другому»: раздавать работу — право руководящее, а
+    взять свободную себе должен любой, кто её делает. Лот с портала берёт
+    госзакупщик, разбор считает тендерщик, и бежать за менеджером ради одной
+    отметки значит потерять день из двух, что даёт срок обсуждения.
+    """
+    _act(
+        lambda: cards.claim(
+            db,
+            organization_id=identity.organization.id,
+            card_id=card_id,
+            user_id=identity.user.id,
+            role=identity.role,
+        )
+    )
+    db.commit()
+    return _card_out(_one(db, identity, card_id))
+
+
 @router.post("/{card_id}/submit", summary="Отметить подачу заявки")
 def post_submit(
     card_id: uuid.UUID,
