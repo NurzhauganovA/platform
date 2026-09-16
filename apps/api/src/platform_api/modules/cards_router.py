@@ -21,6 +21,7 @@ from typing import Annotated, BinaryIO
 
 from fastapi import (
     APIRouter,
+    Depends,
     File,
     Form,
     HTTPException,
@@ -33,7 +34,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from platform_api.auth.dependencies import CurrentUser, Db, requires_crm
+from platform_api.auth.dependencies import CurrentUser, Db, requires, requires_crm
+from platform_api.auth.permissions import Permission
 from platform_api.config import Settings
 from platform_api.db.models import (
     ApprovalKind,
@@ -45,6 +47,7 @@ from platform_api.db.models import (
     LotOutcome,
     LotStatus,
     Participation,
+    Task,
     TaskState,
     User,
 )
@@ -52,7 +55,8 @@ from platform_api.errors import SpokenError
 from platform_api.jobs.service import JobService
 from platform_api.jobs.worker import enqueue_sync
 from platform_api.logging import get_logger
-from platform_api.modules import ModuleRegistry, cards, preview, sheets
+from platform_api.modules import ModuleRegistry, cards, discussion, preview, sheets
+from platform_api.modules.discussion_router import MessageIn, MessageOut
 from platform_api.modules.goszakup import start
 from platform_api.modules.schemas import (
     PreviewBlockOut,
@@ -77,6 +81,11 @@ router = APIRouter(prefix="/cards", tags=["Лоты в работе"])
 # проверку за обычный параметр запроса: она не выполняется, а `_guard` вылезает
 # в схеме API отдельным полем. Тем же способом ломается любая проверка прав.
 Guard = Annotated[None, requires_crm]
+
+# Раздел задач — личный: что поручили тебе и что поручил ты. Поэтому своё
+# право, а не право на карточки лотов: поручение дают человеку, а не
+# должности, и технолог со сборщиком должны видеть своё так же, как тендерщик.
+Errands = Annotated[None, Depends(requires(Permission.PAGE_TASKS))]
 
 
 class SignOut(BaseModel):
@@ -209,6 +218,10 @@ class TaskOut(BaseModel):
     done_at: str = ""
     done_by: str = ""
     author: str = ""
+    author_id: str = ""
+    talk: int = 0
+    """Сколько реплик в переписке задачи. Числом на строке: разговор о задаче —
+    половина работы по ней, и строка без числа выглядит нетронутой."""
 
 
 class EventOut(BaseModel):
@@ -344,6 +357,34 @@ class TaskIn(BaseModel):
     department: Department | None = None
     assignee_id: uuid.UUID | None = None
     due_at: datetime | None = None
+
+
+class ErrandIn(BaseModel):
+    """Поручение вне лота.
+
+    Исполнитель обязателен: ничья задача вне лота не всплывает нигде — у неё
+    нет ни отдела, ни очереди, в которой её подберут.
+    """
+
+    title: str
+    body: str = ""
+    assignee_id: uuid.UUID
+    due_at: datetime | None = None
+
+
+class ErrandEditIn(BaseModel):
+    """Правка поручения. Пустое поле — «не трогать», а не «стереть»."""
+
+    title: str | None = None
+    body: str | None = None
+
+    assignee_id: uuid.UUID | None = None
+    change_assignee: bool = False
+    """Признаком, а не пустым значением: «не указан» и «указан пустым» в JSON
+    приходят одинаково, и правка названия молча снимала бы исполнителя."""
+
+    due_at: datetime | None = None
+    change_due: bool = False
 
 
 class CloseIn(BaseModel):
@@ -515,12 +556,24 @@ def _autostart(db: Db, card: LotCard, *, identity: CurrentUser, request: Request
 
 
 @router.get("/people", summary="Кому можно поручить")
-def get_people(identity: CurrentUser, db: Db, _guard: Guard = None) -> list[PersonOut]:
+def get_people(identity: CurrentUser, db: Db) -> list[PersonOut]:
     """Сотрудники организации с их ролями.
 
     Нужен спискам выбора: ответственного назначают руками, и вводить почту
     коллеги по памяти — верный способ поручить не тому.
+
+    Доступен и по праву на карточки лотов, и по праву на раздел задач: там
+    поручение дают любому сотруднику, и без списка имён это означало бы
+    вводить их по памяти. Ролью с проверкой в обработчике, а не зависимостью:
+    зависимость умеет одно право, а здесь их два.
+
+    Выключенные не отдаются. Уволившийся в списке — это поручение, о котором
+    никто не узнает: уведомления ему не уходят, и заметят это через неделю.
     """
+    if not (identity.can(Permission.CRM) or identity.can(Permission.PAGE_TASKS)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к списку сотрудников"
+        )
     from sqlalchemy import select
 
     from platform_api.db.models import Membership
@@ -528,7 +581,10 @@ def get_people(identity: CurrentUser, db: Db, _guard: Guard = None) -> list[Pers
     rows = db.execute(
         select(User, Membership.role)
         .join(Membership, Membership.user_id == User.id)
-        .where(Membership.organization_id == identity.organization.id)
+        .where(
+            Membership.organization_id == identity.organization.id,
+            User.is_active.is_(True),
+        )
         .order_by(User.full_name, User.email)
     ).all()
     return [
@@ -563,6 +619,8 @@ def get_tasks(
     спрашивают в девяти случаях из десяти, и очередь, которая по умолчанию
     отдаёт всё закрытое за год, бесполезна.
 
+    Только задачи по лотам: поручения вне лота живут в своём разделе.
+
     Без `mine`, `unassigned` и `assignee` отдаётся весь отдел. Это вкладка
     «Все» на столе: у руководителя вопрос «что сейчас у отдела» и «на ком
     висит вот это» возникает каждый день, а до сих пор ответом было открывание
@@ -581,6 +639,11 @@ def get_tasks(
         assignee_id=identity.user.id if mine else assignee,
         unassigned=unassigned,
         card_id=card_id,
+        # Только задачи по лотам. Поручения вне лота живут в своём разделе:
+        # очередь отдела, в которой половина записей ни к чему не привязана,
+        # перестаёт быть очередью работы — снабженец ищет в ней свой лот и
+        # находит чужой пропуск на склад.
+        standalone=False,
         state=want,
     )
     return [TaskOut(**asdict(item)) for item in found]
@@ -599,6 +662,296 @@ def _task_state(value: str) -> TaskState:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Неизвестное состояние задачи: {value}",
         ) from exc
+
+
+# Поручения и переписка по задачам — до маршрутов карточки лота.
+#
+# Порядок объявления и есть порядок разбора адреса: `/cards/{card_id}` ловит
+# любой первый кусок пути, и объявленный после него `/cards/errands` получал бы
+# отказ «errands — не идентификатор лота». Ошибка выглядит как поломка списка,
+# а причина в порядке строк в файле.
+@router.get("/errands", summary="Поручения вне лота")
+def get_errands(
+    identity: CurrentUser,
+    db: Db,
+    side: Annotated[
+        str,
+        Query(description="both — мои и мной поручённые, mine, given, all (администратору)"),
+    ] = "both",
+    task_state: Annotated[
+        str, Query(alias="state", description="open, done, cancelled или all")
+    ] = "open",
+    _guard: Errands = None,
+) -> list[TaskOut]:
+    """Личный раздел задач: что поручили мне и что поручил я.
+
+    Только задачи вне лота. Работа по закупкам живёт на столах отделов, и
+    смешать её сюда значит превратить личный список в ту же общую очередь,
+    мимо которой человек и шёл.
+
+    `all` — администратору: вопрос «какие вообще поручения ходят по компании»
+    возникает у того, кто за это отвечает, и ответом до сих пор было
+    расспрашивать людей.
+    """
+    want = None if task_state == "all" else _task_state(task_state)
+    me = identity.user.id
+    if side == "all" and not identity.can(Permission.ADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Все поручения видит администратор",
+        )
+    found = cards.tasks(
+        db,
+        organization_id=identity.organization.id,
+        assignee_id=me if side == "mine" else None,
+        author_id=me if side == "given" else None,
+        involving=me if side == "both" else None,
+        standalone=True,
+        state=want,
+    )
+    return [TaskOut(**asdict(item)) for item in found]
+
+
+@router.post("/errands", summary="Поручить задачу", status_code=201)
+def post_errand(
+    body: ErrandIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Errands = None,
+) -> TaskOut:
+    """Заводит поручение любому сотруднику.
+
+    Без лота и без отдела: «собрать доверенности», «оформить пропуск на склад»
+    — это работа человека, а не закупки, и класть её в очередь отдела значит
+    засорять очередь, ради которой ту и заводили.
+    """
+    try:
+        task = cards.add_task(
+            db,
+            organization_id=identity.organization.id,
+            card_id=None,
+            created_by=identity.user.id,
+            title=body.title,
+            body=body.body,
+            assignee_id=body.assignee_id,
+            due_at=body.due_at,
+            settings=request.app.state.settings,
+        )
+    except SpokenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return _task_out(db, identity, task.id)
+
+
+@router.patch("/errands/{task_id}", summary="Поправить поручение")
+def patch_errand(
+    task_id: uuid.UUID,
+    body: ErrandEditIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+    _guard: Errands = None,
+) -> TaskOut:
+    """Правит своё поручение: название, текст, исполнителя, срок.
+
+    Правит тот, кто его дал, и администратор. Исполнителю это не отдаётся:
+    переписавший себе срок отвечает уже на другой вопрос.
+    """
+    # Задача по лоту сюда не пускается: у неё своя дверь под правом на карточки
+    # лотов, и второй вход мимо него однажды разойдётся с первым.
+    _errand(db, identity, task_id)
+    _act(
+        lambda: cards.edit_task(
+            db,
+            organization_id=identity.organization.id,
+            task_id=task_id,
+            user_id=identity.user.id,
+            role=identity.role,
+            title=body.title,
+            body=body.body,
+            assignee_id=body.assignee_id,
+            change_assignee=body.change_assignee,
+            due_at=body.due_at,
+            change_due=body.change_due,
+            settings=request.app.state.settings,
+        )
+    )
+    db.commit()
+    return _task_out(db, identity, task_id)
+
+
+@router.post("/errands/{task_id}/close", summary="Закрыть поручение")
+def post_errand_close(
+    task_id: uuid.UUID,
+    body: CloseIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Errands = None,
+) -> TaskOut:
+    """Закрывает поручение — тот, кому его дали, тот, кто дал, и администратор.
+
+    Своим эндпоинтом, а не общим закрытием задач: то под правом на карточки
+    лотов, а поручение приходит и технологу, и наблюдателю — человеку, а не
+    должности. Здесь же проверяется, что задача действительно вне лота: иначе
+    личный раздел стал бы второй дверью к работе по закупкам.
+    """
+    row = _errand(db, identity, task_id)
+    if not (
+        row.assignee_id == identity.user.id
+        or row.created_by_id == identity.user.id
+        or identity.can(Permission.ADMIN)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Закрыть поручение может исполнитель или тот, кто его дал",
+        )
+    _act(
+        lambda: cards.close_task(
+            db,
+            organization_id=identity.organization.id,
+            task_id=task_id,
+            state=body.state,
+            result=body.result,
+            user_id=identity.user.id,
+            role=identity.role,
+        )
+    )
+    db.commit()
+    return _task_out(db, identity, task_id)
+
+
+@router.get("/tasks/{task_id}/talk", summary="Переписка по задаче")
+def get_task_talk(
+    task_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+) -> list[MessageOut]:
+    """Ветка внутри задачи.
+
+    Отдельно от общей ветки лота: та отвечает на «берём или нет», а здесь
+    вопрос свой — «что именно найти», «подойдёт ли вот этот». В общей ветке он
+    тонет, и через неделю не разобрать, о какой из пяти задач шла речь.
+    """
+    _may_talk(db, identity, task_id)
+    found = discussion.task_messages(db, identity.organization.id, task_id)
+    return [MessageOut(**asdict(item)) for item in found]
+
+
+@router.post("/tasks/{task_id}/talk", summary="Написать в задаче", status_code=201)
+def post_task_talk(
+    task_id: uuid.UUID,
+    body: MessageIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+) -> MessageOut:
+    _may_talk(db, identity, task_id)
+    try:
+        added = discussion.add_to_task(
+            db,
+            identity.organization.id,
+            identity.user.id,
+            task_id=task_id,
+            body=body.body,
+            mentions=body.mentions,
+            settings=request.app.state.settings,
+        )
+    except SpokenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    db.commit()
+    return MessageOut(**asdict(added))
+
+
+@router.patch("/tasks/{task_id}/talk/{message_id}", summary="Поправить своё в задаче")
+def patch_task_talk(
+    task_id: uuid.UUID,
+    message_id: uuid.UUID,
+    body: MessageIn,
+    identity: CurrentUser,
+    db: Db,
+    request: Request,
+) -> MessageOut:
+    """Правит свою реплику. Своим эндпоинтом, а не общим для всех веток: тот
+    под правом на рабочие списки, а в задаче пишут технолог и сборщик — у них
+    этого права нет, и общая дверь отказала бы им в правке собственных слов."""
+    _may_talk(db, identity, task_id)
+    try:
+        changed = discussion.edit(
+            db,
+            identity.organization.id,
+            identity.user.id,
+            message_id,
+            body.body,
+            mentions=body.mentions,
+            settings=request.app.state.settings,
+        )
+    except SpokenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    db.commit()
+    return MessageOut(**asdict(changed))
+
+
+@router.delete(
+    "/tasks/{task_id}/talk/{message_id}", summary="Убрать своё в задаче", status_code=204
+)
+def delete_task_talk(
+    task_id: uuid.UUID,
+    message_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+) -> None:
+    _may_talk(db, identity, task_id)
+    try:
+        discussion.remove(db, identity.organization.id, identity.user, identity.role, message_id)
+    except SpokenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    db.commit()
+
+
+def _task_row(db: Db, identity: CurrentUser, task_id: uuid.UUID) -> Task:
+    """Задача организации или 404."""
+    row = db.get(Task, task_id)
+    if row is None or row.organization_id != identity.organization.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Задача не найдена")
+    return row
+
+
+def _errand(db: Db, identity: CurrentUser, task_id: uuid.UUID) -> Task:
+    """Задача вне лота или отказ.
+
+    Проверка здесь, а не на экране: личный раздел не должен становиться второй
+    дверью к задачам по закупкам — за теми стоит право на карточки лотов.
+    """
+    row = _task_row(db, identity, task_id)
+    if row.card_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Это задача по лоту — она в карточке лота",
+        )
+    return row
+
+
+def _may_talk(db: Db, identity: CurrentUser, task_id: uuid.UUID) -> None:
+    """Кто вправе читать и писать в ветке задачи.
+
+    Задача по лоту — по праву на карточки лотов: за ней стоит закупка со всеми
+    её суммами. Поручение вне лота — по праву на раздел задач: оно приходит
+    человеку, а не должности, и запирать его от собственной переписки незачем.
+
+    Проверкой в обработчике, а не зависимостью: право зависит от самой задачи,
+    а зависимость её ещё не видела.
+    """
+    row = _task_row(db, identity, task_id)
+    allowed = (
+        identity.can(Permission.CRM)
+        if row.card_id is not None
+        else identity.can(Permission.PAGE_TASKS) or identity.can(Permission.CRM)
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к этой задаче"
+        )
 
 
 class FolderOut(BaseModel):

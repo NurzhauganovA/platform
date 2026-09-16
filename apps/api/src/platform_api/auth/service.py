@@ -233,6 +233,27 @@ def identity_of(membership: Membership, session_id: uuid.UUID) -> Identity:
             role_title=own.title,
         )
 
+    # Права встроенной роли могли поправить руками. Накладка лежит отдельной
+    # записью, а заводской набор остаётся в коде: так «вернуть как было» — это
+    # удаление накладки, а не восстановление по памяти того, кто правил.
+    changed = next(
+        (row for row in membership.organization.role_overrides if row.role is membership.role),
+        None,
+    )
+    if changed is not None:
+        known = {item.value for item in Permission}
+        return Identity(
+            user=membership.user,
+            organization=membership.organization,
+            role=membership.role,
+            session_id=session_id,
+            permissions=frozenset(
+                Permission(item) for item in changed.permissions if item in known
+            ),
+            role_key=membership.role.value,
+            role_title=ROLE_NAMES.get(membership.role, membership.role.value),
+        )
+
     return Identity(
         user=membership.user,
         organization=membership.organization,

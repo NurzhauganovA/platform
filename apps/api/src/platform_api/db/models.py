@@ -109,6 +109,13 @@ class Organization(Base, UUIDPrimaryKey, Timestamps):
         back_populates="organization", cascade="all, delete-orphan"
     )
 
+    role_overrides: Mapped[list[RoleOverride]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+    """Правки прав встроенных ролей. Читаются вместе с организацией: они нужны
+    на каждом разборе сессии, и отдельный запрос ради них — это лишний обход
+    базы на каждый запрос к платформе."""
+
 
 class User(Base, UUIDPrimaryKey, Timestamps):
     __tablename__ = "users"
@@ -202,6 +209,35 @@ class CustomRole(Base, UUIDPrimaryKey, Timestamps):
 
     title: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(Text, default="")
+
+    permissions: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    """Права списком. Неизвестное значение молча игнорируется при чтении:
+    право могли убрать из кода вместе с местом, которое его проверяло."""
+
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class RoleOverride(Base, UUIDPrimaryKey, Timestamps):
+    """Правка прав встроенной роли.
+
+    Накладкой, а не подменой. Заводские права встроенных ролей заданы кодом —
+    это ответ на вопрос «как должно быть», и терять его нельзя: «вернуть как
+    было» тогда пришлось бы восстанавливать по памяти того, кто правил.
+
+    Запись есть — права взяты из неё; записи нет — из кода. Удалить накладку
+    значит вернуть роль к заводскому состоянию, и это же делает кнопка на
+    экране ролей.
+    """
+
+    __tablename__ = "role_overrides"
+    __table_args__ = (UniqueConstraint("organization_id", "role", name="role_override_role"),)
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[Role] = mapped_column(Enum(Role, native_enum=False, length=32), index=True)
 
     permissions: Mapped[list[str]] = mapped_column(JSONB, default=list)
     """Права списком. Неизвестное значение молча игнорируется при чтении:
@@ -774,9 +810,26 @@ class DiscussionMessage(Base, UUIDPrimaryKey, Timestamps):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    module: Mapped[str] = mapped_column(String(32))
-    row_id: Mapped[str] = mapped_column(String(128))
-    """Устойчивое имя строки: номер закупки у госзакупок, имя строки у отбора."""
+    module: Mapped[str] = mapped_column(String(32), default="")
+    row_id: Mapped[str] = mapped_column(String(128), default="")
+    """Устойчивое имя строки: номер закупки у госзакупок, имя строки у отбора.
+
+    Пусто — реплика не о строке списка, а о задаче: тогда заполнен `task_id`."""
+
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    """Задача, внутри которой идёт переписка. Пусто — переписка по строке.
+
+    Одна таблица на оба разговора, а не две. Устроены они одинаково — реплика,
+    автор, правка, упоминания, — и вторая таблица означала бы второй набор
+    правил о том, кто может править чужое, и второй способ звать людей. А
+    расходятся эти наборы молча.
+
+    Переписка по задаче нужна тем, что общая ветка лота отвечает на «берём или
+    нет», а у задачи вопрос свой: «что именно найти», «подойдёт ли вот этот».
+    В общей ветке это тонет, и через неделю не найти, о какой из пяти задач
+    шла речь."""
 
     body: Mapped[str] = mapped_column(Text)
     edited_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -1197,13 +1250,27 @@ class Task(Base, UUIDPrimaryKey, Timestamps):
     organization_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"), index=True
     )
-    card_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("lot_cards.id", ondelete="CASCADE"), index=True
+    card_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("lot_cards.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    """Лот, о котором задача. Пусто — задача сама по себе.
 
-    department: Mapped[Department] = mapped_column(
-        Enum(Department, native_enum=False, length=16), index=True
+    Долго здесь было «задача всегда о лоте»: очередь, в которой половина
+    записей ни к чему не привязана, перестаёт быть очередью работы. Это
+    осталось верным — **для очередей отделов**: стол снабжения показывает
+    только лотовые задачи, и «позвонить в банк» там не появится.
+
+    Но работа отдела лотами не исчерпывается: «собрать доверенности»,
+    «оформить пропуск на склад» — это поручения человеку, и до сих пор они
+    жили в переписке, где теряются. У них свой раздел («Мой стол» → «Задачи»)
+    и свои правила: адресуются человеку, а не отделу, и в столы не попадают.
+    """
+
+    department: Mapped[Department | None] = mapped_column(
+        Enum(Department, native_enum=False, length=16), nullable=True, index=True
     )
+    """Чья очередь. Пусто — у задачи вне лота: она адресована человеку."""
+
     title: Mapped[str] = mapped_column(Text)
     body: Mapped[str] = mapped_column(Text, default="")
 

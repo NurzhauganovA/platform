@@ -63,6 +63,21 @@ class MeOut(BaseModel):
     email: str
     full_name: str
     role: Role
+    """Встроенная роль. При своей роли здесь «Наблюдатель» — самое безопасное
+    значение; что человеку можно, говорят права."""
+
+    role_title: str = ""
+    """Название роли по-русски: своё у заведённой, обычное у встроенной."""
+
+    permissions: list[str] = []
+    """Что человеку можно. Отдаётся браузеру затем, чтобы он не рисовал кнопок,
+    которые ответят отказом: нажатая кнопка с отказом читается как поломка, а
+    человек к тому моменту уже уверен, что сделал дело.
+
+    Защитой это не является и заменой проверкам на эндпоинтах не служит.
+    Спрятать кнопку и оставить эндпоинт открытым — самый распространённый
+    способ отдать себестоимость наружу."""
+
     organization: OrganizationOut
     last_login_at: datetime | None = None
 
@@ -160,6 +175,8 @@ def me(identity: CurrentUser) -> MeOut:
             slug=identity.organization.slug,
         ),
         last_login_at=identity.user.last_login_at,
+        role_title=identity.role_title,
+        permissions=sorted(item.value for item in identity.permissions),
     )
 
 

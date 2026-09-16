@@ -77,6 +77,89 @@ class Summary:
     last: str
 
 
+def task_messages(db: DbSession, organization_id: uuid.UUID, task_id: uuid.UUID) -> list[Message]:
+    """Ветка внутри задачи.
+
+    Отдельно от ветки лота, и это главное в ней. Общая ветка отвечает на «берём
+    или нет»; у задачи вопрос свой — «что именно найти», «подойдёт ли вот
+    этот», — и в общей он тонет: через неделю не разобрать, о какой из пяти
+    задач по лоту шла речь.
+
+    Тем же кодом, что и ветка строки: правка автором, удаление автором или
+    администратором, упоминания с оповещением. Второй набор этих правил
+    разошёлся бы с первым на первой же правке.
+    """
+    rows = db.execute(
+        select(DiscussionMessage, User)
+        .outerjoin(User, User.id == DiscussionMessage.author_id)
+        .where(
+            DiscussionMessage.organization_id == organization_id,
+            DiscussionMessage.task_id == task_id,
+        )
+        .order_by(DiscussionMessage.created_at)
+    ).all()
+    return [_out(message, user) for message, user in rows]
+
+
+def add_to_task(
+    db: DbSession,
+    organization_id: uuid.UUID,
+    author_id: uuid.UUID | None,
+    *,
+    task_id: uuid.UUID,
+    body: str,
+    mentions: Sequence[str] = (),
+    settings: Settings | None = None,
+) -> Message:
+    """Реплика в ветке задачи. Зовёт упомянутых — тем же способом."""
+    text = _clean(body)
+    called = _called(db, organization_id, mentions, author_id)
+    message = DiscussionMessage(
+        organization_id=organization_id,
+        author_id=author_id,
+        task_id=task_id,
+        body=text,
+        mentions=called,
+    )
+    db.add(message)
+    db.flush()
+    author = db.get(User, author_id) if author_id else None
+    if settings is not None and called:
+        alerts.mentioned_in_task(
+            db,
+            settings,
+            organization_id=organization_id,
+            task_id=task_id,
+            author=author,
+            text=text,
+            mentions=called,
+            message_id=message.id,
+        )
+    return _out(message, author)
+
+
+def counts_for_tasks(
+    db: DbSession, organization_id: uuid.UUID, task_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Сколько реплик у каждой задачи — одним запросом.
+
+    Число стоит на строке списка: по нему видно, что у задачи есть разговор, и
+    её открывают ради него. Запрос на задачу превратил бы открытие раздела в
+    полсотни обращений к базе.
+    """
+    if not task_ids:
+        return {}
+    rows = db.execute(
+        select(DiscussionMessage.task_id, func.count())
+        .where(
+            DiscussionMessage.organization_id == organization_id,
+            DiscussionMessage.task_id.in_(list(task_ids)),
+        )
+        .group_by(DiscussionMessage.task_id)
+    ).all()
+    return {task_id: int(count) for task_id, count in rows if task_id is not None}
+
+
 def messages(db: DbSession, organization_id: uuid.UUID, module: str, row_id: str) -> list[Message]:
     """Ветка по строке, снизу свежие: читают её сверху вниз, как разговор."""
     rows = db.execute(

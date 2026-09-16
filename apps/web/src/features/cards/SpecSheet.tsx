@@ -41,6 +41,7 @@ import { jobsApi } from "@/api/jobs";
 import { Button, Card as Panel, Spinner, cx } from "@/ui";
 import { BarHead, BarTitle, Note } from "./kit";
 import { RichText } from "./RichText";
+import { useCan } from "@/shell/can";
 
 /** Через сколько молчания сохранять правки. */
 const SETTLE_MS = 1200;
@@ -135,6 +136,9 @@ export function SpecSheet({
   kind?: SheetKind;
 }) {
   const cache = useQueryClient();
+  // Что можно — спрашиваем у прав, а не у роли. Кнопка, отвечающая отказом,
+  // читается как поломка; проверка при этом остаётся на эндпоинте.
+  const can = useCan();
   const [draft, setDraft] = useState<Sheet | null>(null);
   const [trouble, setTrouble] = useState("");
   const [saved, setSaved] = useState(false);
@@ -384,7 +388,7 @@ export function SpecSheet({
             </p>
           )}
           <div className="mt-4 flex justify-center gap-2">
-            {spec && spec.chars > 0 && (
+            {spec && spec.chars > 0 && can("sheet.build") && (
               <Button
                 variant="primary"
                 onClick={() => build.mutate()}

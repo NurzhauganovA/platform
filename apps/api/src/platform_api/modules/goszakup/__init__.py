@@ -32,6 +32,7 @@ module = ModuleSpec(
         NavItem(
             title="Лоты портала",
             path="/goszakup/lots",
+            permission="page.portal",
             group="Площадки",
             icon="table",
             roles=names(*READS),
@@ -42,6 +43,7 @@ module = ModuleSpec(
         NavItem(
             title="Обход портала",
             path="/goszakup/codes",
+            permission="page.portal_codes",
             group="Площадки",
             icon="settings",
             roles=names(Role.ADMIN),
@@ -49,6 +51,7 @@ module = ModuleSpec(
         NavItem(
             title="Замечания заказчику",
             path="/goszakup/remarks",
+            permission="page.remarks",
             # В «Работе», а не в «Моём столе». «Мой стол» — это очереди задач:
             # что мне поручено, что висит на отделе, что я закрыл. Замечание
             # устроено иначе — это переписка с заказчиком со своим сроком и

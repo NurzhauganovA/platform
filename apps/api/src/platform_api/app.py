@@ -74,6 +74,29 @@ def _share_people(sessions: Any, settings: Settings) -> None:
         logger.warning("Сотрудников выгрузить не вышло", error=str(exc))
 
 
+def _shown(identity: Any, item: Any) -> bool:
+    """Показывать ли пункт меню этому человеку.
+
+    По праву, если модуль его объявил; по встроенной роли — если ещё нет.
+    Правом, а не ролью: роли заводит администратор, и список имён новую роль не
+    знает — пункт пропадал бы у неё, хотя доступ ей выдали.
+
+    Права всё равно проверяются на эндпоинтах. Скрытый пункт — это удобство: он
+    не открывает страницу, а лишь не предлагает её тем, кому там нечего делать.
+    """
+    if item.permission:
+        from platform_api.auth.permissions import Permission
+
+        try:
+            return bool(identity.can(Permission(item.permission)))
+        except ValueError:
+            # Право убрали из кода, а объявление осталось: показываем пункт.
+            # Спрятанная страница выглядит поломкой, а лишняя — просто лишней,
+            # и эндпоинт за ней всё равно под своей проверкой.
+            return True
+    return bool(not item.roles or identity.role.value in item.roles)
+
+
 class ModuleOut(BaseModel):
     """Модуль так, как его видит оболочка интерфейса."""
 
@@ -189,7 +212,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "group": item.group or module.title,
                     }
                     for item in module.nav
-                    if not item.roles or identity.role.value in item.roles
+                    if _shown(identity, item)
                 ],
             )
             for module in registry.all()

@@ -493,21 +493,23 @@ def test_fail_zanyatuyu_rol_ne_ubirayut(db: DbSession, app_client: TestClient) -
     assert "Переведите" in отказ.json()["detail"]
 
 
-def test_fail_vstroennuyu_rol_ne_pravyat(db: DbSession, app_client: TestClient) -> None:
-    """На правах встроенных ролей держатся проверки по всей платформе.
+def test_fail_u_vstroennoy_roli_pravyatsya_tolko_prava(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Название встроенной роли не меняется.
 
-    «Убрал деньги у тендерщика» означало бы, что половина экранов опустела у
-    всех сразу — и выяснялось бы это на работающей платформе.
+    По нему роль узнают в переписке и в журнале действий: «Тендерщик» под
+    другим именем — это уже другая роль, и заводят её рядом.
     """
     from tests.conftest import sign_in
 
     sign_in(db, app_client, Role.ADMIN)
     db.commit()
 
-    отказ = app_client.patch("/api/people/roles/analyst", json={"permissions": []})
+    отказ = app_client.patch("/api/people/roles/analyst", json={"title": "Аналитик"})
 
     assert отказ.status_code == 409
-    assert "Встроенную" in отказ.json()["detail"]
+    assert "только права" in отказ.json()["detail"]
 
 
 def test_fail_sebya_ne_vyklyuchayut(db: DbSession, app_client: TestClient) -> None:
@@ -655,3 +657,75 @@ def test_fail_zanyatuyu_rol_ubirayut_tolko_naprosheno(
     )
     assert остался["role"] == "viewer"
     assert остался["is_active"] is True
+
+
+def test_fail_prava_vstroennoy_roli_pravyatsya_i_vozvrashchayutsya(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """«Тендерщик без аналитики» — настройка, а не новая роль.
+
+    Заводить рядом копию из десяти галочек ради снятия одной значит держать два
+    списка и однажды поправить только один. Заводские права при этом остаются в
+    коде: правка лежит накладкой, и «вернуть как было» — это её удаление.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    было = next(
+        one for one in app_client.get("/api/people/roles").json() if one["key"] == "analyst"
+    )
+    assert "page.tender_analytics" in было["permissions"]
+    assert было["changed"] is False
+
+    без_аналитики = [право for право in было["permissions"] if право != "page.tender_analytics"]
+    правка = app_client.patch("/api/people/roles/analyst", json={"permissions": без_аналитики})
+    assert правка.status_code == 200, правка.text
+    assert "page.tender_analytics" not in правка.json()["permissions"]
+    assert правка.json()["changed"] is True
+
+    назад = app_client.post("/api/people/roles/analyst/reset")
+    assert назад.status_code == 200, назад.text
+    assert "page.tender_analytics" in назад.json()["permissions"]
+    assert назад.json()["changed"] is False
+
+
+def test_fail_sebya_ne_zapirayut_pravkoy_roli(db: DbSession, app_client: TestClient) -> None:
+    """Администратор без управления платформой не вернёт его себе.
+
+    И последней роли с этим правом его тоже не снять: платформа осталась бы без
+    управления доступами вовсе.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    своя = app_client.patch("/api/people/roles/admin", json={"permissions": ["page.lots"]})
+    assert своя.status_code == 409
+    assert "своей роли" in своя.json()["detail"]
+
+
+def test_fail_menyu_sobiraetsya_po_pravam(db: DbSession, app_client: TestClient) -> None:
+    """Пункт без права не показывается, и правка роли это сразу меняет.
+
+    Пункт меню — удобство, а не защита: эндпоинт за ним под своей проверкой.
+    Но пункт, ведущий в отказ, человек нажимает один раз и перестаёт верить
+    всему меню.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.ADMIN)
+    db.commit()
+
+    пути = {
+        пункт["path"] for модуль in app_client.get("/api/modules").json() for пункт in модуль["nav"]
+    }
+    assert "/work/people" in пути
+    assert "/skstore/analytics" in пути
+
+    # Права приходят браузеру, чтобы он не рисовал кнопок, отвечающих отказом.
+    я = app_client.get("/api/auth/me").json()
+    assert "admin" in я["permissions"]
+    assert я["role_title"] == "Администратор"

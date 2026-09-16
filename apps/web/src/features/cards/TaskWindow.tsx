@@ -22,11 +22,13 @@ import { Link } from "react-router-dom";
 import type { Job } from "@/api/cards";
 import { cx } from "@/ui";
 import { TaskCard } from "./StepRail";
+import { TaskTalk } from "./TaskTalk";
 
 export function TaskWindow({
   task,
   me,
   busy,
+  admin,
   trouble,
   onClose,
   onTake,
@@ -36,6 +38,9 @@ export function TaskWindow({
   task: Job;
   me: string;
   busy: boolean;
+  /** Убирает и чужие реплики. Право администратора — им и держится порядок в
+   *  ветке. */
+  admin?: boolean;
   /** Что ответил сервер, если не получилось. Показывается внутри окна: за
    *  его пределами человек этого не увидит вовсе. */
   trouble?: string;
@@ -62,7 +67,9 @@ export function TaskWindow({
       aria-label="Задача"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="w-full max-w-[520px]">
+      {/* Окно прокручивается само: с перепиской внутри оно выше экрана, а
+          прокрутка страницы под ним осталась бы недоступной. */}
+      <div className="max-h-full w-full max-w-[520px] overflow-y-auto">
         <TaskCard
           task={task}
           me={me}
@@ -70,8 +77,15 @@ export function TaskWindow({
           busy={busy}
           backLabel="Закрыть окно"
           lot={
-            <Lot code={task.card_code} title={task.card_title} id={task.card_id} />
+            task.card_id ? (
+              <Lot
+                code={task.card_code}
+                title={task.card_title}
+                id={task.card_id}
+              />
+            ) : undefined
           }
+          talk={<TaskTalk taskId={task.id} me={me} admin={admin} />}
           onBack={onClose}
           onTake={onTake}
           onRelease={onRelease}

@@ -39,6 +39,7 @@ module = ModuleSpec(
         NavItem(
             title="Отбор тендеров",
             path="/tender/worklist",
+            permission="page.tender_pick",
             group="Площадки",
             icon="target",
             roles=names(*MONEY),
@@ -46,6 +47,7 @@ module = ModuleSpec(
         NavItem(
             title="Тендеры в работе",
             path="/tender/works",
+            permission="page.tender_works",
             group="Площадки",
             icon="briefcase",
             roles=names(*READS),
@@ -53,6 +55,7 @@ module = ModuleSpec(
         NavItem(
             title="Аналитика тендеров",
             path="/tender/analytics",
+            permission="page.tender_analytics",
             group="Площадки",
             icon="chart",
             roles=names(*MONEY),

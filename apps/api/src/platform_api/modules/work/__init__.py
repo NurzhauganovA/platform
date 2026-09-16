@@ -32,6 +32,7 @@ module = ModuleSpec(
         NavItem(
             title="Лоты в работе",
             path="/work/lots",
+            permission="page.lots",
             icon="table",
             group="Мой стол",
             # Первым пунктом и первым в разделе: с него начинают день. Очереди
@@ -44,8 +45,25 @@ module = ModuleSpec(
             roles=names(*CRM),
         ),
         NavItem(
+            title="Задачи",
+            path="/work/tasks",
+            permission="page.tasks",
+            icon="list",
+            group="Мой стол",
+            # Личный раздел, а не очередь отдела: что поручили мне и что
+            # поручил я. Поручение вне лота — «собрать доверенности», «оформить
+            # пропуск на склад» — до сих пор жило в мессенджере, то есть нигде:
+            # срока у него не было, и спросить о нём было не с кого.
+            #
+            # Роли перечислены все, кто вообще заходит в платформу: поручение
+            # дают человеку, а не должности, и раздел без пункта означал бы
+            # задачу, о которой исполнитель узнаёт только из уведомления.
+            roles=(*names(*CRM), "viewer"),
+        ),
+        NavItem(
             title="Обсуждение",
             path="/work/discussion",
+            permission="page.desk_discussion",
             icon="list",
             group="Мой стол",
             # Тот же стол, что у разбора и снабжения. Задачи отделу
@@ -57,6 +75,7 @@ module = ModuleSpec(
         NavItem(
             title="Разбор",
             path="/work/analysis",
+            permission="page.desk_analysis",
             icon="list",
             group="Мой стол",
             roles=("admin", "manager", "analyst"),
@@ -64,6 +83,7 @@ module = ModuleSpec(
         NavItem(
             title="Снабжение",
             path="/work/supply",
+            permission="page.desk_supply",
             icon="list",
             group="Мой стол",
             roles=("admin", "manager", "buyer"),
@@ -71,6 +91,7 @@ module = ModuleSpec(
         NavItem(
             title="Юристы",
             path="/work/legal",
+            permission="page.desk_legal",
             icon="list",
             group="Мой стол",
             roles=("admin", "manager", "lawyer"),
@@ -78,6 +99,7 @@ module = ModuleSpec(
         NavItem(
             title="Подача",
             path="/work/submit",
+            permission="page.submit",
             icon="calendar",
             group="Работа",
             # Подают менеджеры. Остальным этот календарь показывает чужую
@@ -87,6 +109,7 @@ module = ModuleSpec(
         NavItem(
             title="Журнал действий",
             path="/work/audit",
+            permission="page.audit",
             icon="list",
             group="Работа",
             # Только администратору. Журнал отвечает на вопрос «кто это
@@ -99,6 +122,7 @@ module = ModuleSpec(
         NavItem(
             title="Сотрудники",
             path="/work/people",
+            permission="page.people",
             icon="settings",
             group="Работа",
             # Только администратору: за экраном почты всех сотрудников, их роли
@@ -109,6 +133,7 @@ module = ModuleSpec(
         NavItem(
             title="Уведомления",
             path="/work/notifications",
+            permission="page.notify",
             icon="bell",
             group="Работа",
             # Только администратору: за экраном почты всех сотрудников и то,
@@ -119,6 +144,7 @@ module = ModuleSpec(
         NavItem(
             title="Согласование",
             path="/work/approval",
+            permission="page.approval",
             icon="check",
             group="Работа",
             # Все пятеро подписывающих плюс те, кто следит, собрано ли.

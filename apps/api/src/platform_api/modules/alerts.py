@@ -86,7 +86,7 @@ def lot_opened(db: DbSession, settings: Settings, card: LotCard) -> None:
     )
 
 
-def task_added(db: DbSession, settings: Settings, task: Task, card: LotCard) -> None:
+def task_added(db: DbSession, settings: Settings, task: Task, card: LotCard | None) -> None:
     """Задачу завели — зовём исполнителя, а нет его, так весь отдел.
 
     Отдел, а не тишина: задача без исполнителя лежит в общей очереди, и если о
@@ -102,21 +102,32 @@ def task_added(db: DbSession, settings: Settings, task: Task, card: LotCard) -> 
         [task.assignee_id]
         if task.assignee_id
         else people_of(db, task.organization_id, task.department)
+        if task.department is not None
+        else []
     )
     people = [one for one in people if one is not None]
     if not people:
         return
+
+    # Задача вне лота: строки про лот в сообщении нет, и ведёт оно в раздел
+    # задач, а не в карточку. Отдел у неё пуст — она адресована человеку.
+    о_лоте = f"{card.code} · {card.title}" if card is not None else ""
+    куда = f"/work/lots/{card.id}" if card is not None else "/work/tasks"
 
     notify.about(
         settings,
         event="task.assigned",
         payload={
             "title": task.title,
-            "lot": f"{card.code} · {card.title}",
-            "department": DEPARTMENT_NAMES.get(task.department, task.department.value),
+            "lot": о_лоте,
+            "department": (
+                DEPARTMENT_NAMES.get(task.department, task.department.value)
+                if task.department is not None
+                else "поручение"
+            ),
         },
         users=sorted(set(people)),
-        url=f"/work/lots/{card.id}",
+        url=куда,
         deadline=task.due_at.isoformat() if task.due_at else "",
         group=f"task:{task.id}",
         remind_before_minutes=[360] if task.due_at else None,
@@ -137,6 +148,10 @@ def task_taken(db: DbSession, settings: Settings, task: Task) -> None:
     """
     from platform_api.modules.cards import DEPARTMENT_NAMES, people_of
 
+    # Про взятую задачу вне лота отделу рассказывать нечего: у неё нет ни
+    # отдела, ни общей очереди — её поручили человеку, и он же её и взял.
+    if task.card_id is None or task.department is None:
+        return
     card = db.get(LotCard, task.card_id)
     if card is None:
         return
@@ -220,6 +235,48 @@ def mentioned(
         # Ключ по реплике: одно сообщение зовёт человека один раз, сколько бы
         # раз обработчик ни повторился.
         idempotency_key=f"chat-mention-{message_id}",
+    )
+
+
+def mentioned_in_task(
+    db: DbSession,
+    settings: Settings,
+    *,
+    organization_id: uuid.UUID,
+    task_id: uuid.UUID,
+    author: User | None,
+    text: str,
+    mentions: list[str],
+    message_id: uuid.UUID,
+) -> None:
+    """Позвали в переписке задачи — зовём тем же способом, но в свою ветку.
+
+    Ссылка ведёт туда, где эта ветка лежит: задача по лоту живёт в карточке,
+    поручение — в разделе задач. Одна ссылка на оба случая высадила бы половину
+    позванных в разделе, где их задачи нет вовсе.
+    """
+    from platform_api.modules.discussion import EVERYONE
+
+    people = _mentioned_people(db, organization_id, mentions, author)
+    if not people:
+        return
+
+    task = db.get(Task, task_id)
+    who = author.full_name or author.email if author else "Коллега"
+    where = task.title if task is not None else "задача"
+    everyone = EVERYONE in mentions
+    card = db.get(LotCard, task.card_id) if task is not None and task.card_id else None
+
+    notify.about(
+        settings,
+        event="discussion.mention",
+        title="Вас позвали в задаче" if not everyone else "Позвали всех в задаче",
+        body_text=f"{who} · {where}\n\n{_short(text)}",
+        payload={"author": who, "lot": where, "text": _short(text)},
+        users=sorted(people),
+        url=f"/work/lots/{card.id}" if card is not None else "/work/tasks",
+        group=f"task:{task_id}",
+        idempotency_key=f"task-mention-{message_id}",
     )
 
 
@@ -310,6 +367,7 @@ __all__ = [
     "TAKEN_DESKS",
     "lot_opened",
     "mentioned",
+    "mentioned_in_task",
     "task_added",
     "task_closed",
     "task_taken",

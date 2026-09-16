@@ -32,6 +32,7 @@ module = ModuleSpec(
         NavItem(
             title="Предзаказы OMarket",
             path="/omarket/preorders",
+            permission="page.omarket",
             icon="table",
             roles=names(*READS),
             group="Площадки",
@@ -39,6 +40,7 @@ module = ModuleSpec(
         NavItem(
             title="Аналитика предзаказов",
             path="/omarket/analytics",
+            permission="page.omarket_analytics",
             icon="chart",
             roles=names(*READS),
             group="Площадки",

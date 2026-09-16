@@ -137,6 +137,10 @@ def test_fail_menyu_sovpadaet_s_pravami() -> None:
         "/goszakup/codes": READS,
         "/goszakup/remarks": REMARKS,
         "/work/lots": CRM,
+        # Раздел задач — личный: что поручили мне и что поручил я. Поэтому и
+        # наблюдатель: поручение дают человеку, а не должности, и без раздела
+        # заведённая ему задача не видна нигде.
+        "/work/tasks": (*CRM, Role.VIEWER),
         "/work/discussion": CRM,
         "/work/analysis": CRM,
         "/work/supply": CRM,

@@ -44,7 +44,7 @@ from platform_api.auth.permissions import (
     ROLE_NAMES,
     Permission,
 )
-from platform_api.db.models import CustomRole, Membership, Role, Session, User
+from platform_api.db.models import CustomRole, Membership, Role, RoleOverride, Session, User
 from platform_api.logging import get_logger
 
 logger = get_logger(__name__)
@@ -76,7 +76,11 @@ class RoleOut(BaseModel):
     built_in: bool
     """Встроенная. Права заданы кодом и не правятся; удалить нельзя."""
 
-    people: int
+    changed: bool = False
+    """Права правили руками. У встроенной это значит, что они разошлись с
+    заводскими, и есть куда вернуться."""
+
+    people: int = 0
     """Сколько человек её носит. По нему видно, что удалять уже поздно."""
 
 
@@ -147,13 +151,15 @@ def get_roles(identity: CurrentUser, db: Db, _guard: OnlyAdmin = None) -> list[R
     неважно, откуда роль взялась, ему важно, что она даёт.
     """
     counted = _counts(db, identity.organization.id)
+    changed = _overrides(db, identity.organization.id)
     out = [
         RoleOut(
             key=role.value,
             title=ROLE_NAMES[role],
             about=ROLE_ABOUT[role],
-            permissions=sorted(item.value for item in BUILT_IN[role]),
+            permissions=sorted(changed.get(role, {item.value for item in BUILT_IN[role]})),
             built_in=True,
+            changed=role in changed,
             people=counted.get(role.value, 0),
         )
         for role in Role
@@ -216,12 +222,26 @@ def post_role(body: RoleIn, identity: CurrentUser, db: Db, _guard: OnlyAdmin = N
 def patch_role(
     key: str, body: RolePatch, identity: CurrentUser, db: Db, _guard: OnlyAdmin = None
 ) -> RoleOut:
-    """Меняет название, пояснение и права своей роли.
+    """Меняет название, пояснение и права роли — в том числе встроенной.
 
-    Права встроенных не правятся: на них держатся проверки по всей платформе, и
-    «убрал деньги у тендерщика» означало бы, что половина экранов опустела у
-    всех сразу. Нужна другая — заводится рядом.
+    Встроенные раньше не правились: на их правах держатся проверки по всей
+    платформе. Но «тендерщик без аналитики» и «закупщик, которому не нужны
+    файлы» — это настройка, а не новая роль: заводить рядом копию из десяти
+    галочек ради снятия одной значит держать два списка и однажды поправить
+    только один.
+
+    Заводские права при этом никуда не деваются: они заданы кодом, и кнопка
+    «вернуть как было» возвращает роль к ним. Правка лежит отдельной записью —
+    удалить её значит вернуть роль в исходное состояние.
+
+    Два запрета, и оба про то, чтобы не запереть самого себя. Нельзя снять
+    управление платформой со своей роли: администратор без этого права не
+    вернёт его себе. И нельзя снять его с последней роли, у которой оно есть,
+    — платформа осталась бы без управления доступами вовсе.
     """
+    if key in {item.value for item in Role}:
+        return _patch_builtin(key, body, identity, db)
+
     role = _own(db, identity.organization.id, key)
     if body.title is not None:
         role.title = body.title.strip()[:120] or role.title
@@ -238,6 +258,36 @@ def patch_role(
         permissions=sorted(role.permissions),
         built_in=False,
         people=_counts(db, identity.organization.id).get(role.key, 0),
+    )
+
+
+@router.post("/roles/{key}/reset", summary="Вернуть заводские права роли")
+def post_reset(key: str, identity: CurrentUser, db: Db, _guard: OnlyAdmin = None) -> RoleOut:
+    """Возвращает встроенной роли права, заданные кодом.
+
+    Удалением накладки, а не восстановлением по памяти: заводской набор лежит в
+    коде и никуда не девался — именно поэтому правку и хранили отдельной
+    записью.
+    """
+    role = _builtin(key)
+    found = db.scalar(
+        select(RoleOverride).where(
+            RoleOverride.organization_id == identity.organization.id,
+            RoleOverride.role == role,
+        )
+    )
+    if found is not None:
+        db.delete(found)
+        db.commit()
+        logger.warning("role.builtin.reset", key=key, by=str(identity.user.id))
+    return RoleOut(
+        key=key,
+        title=ROLE_NAMES[role],
+        about=ROLE_ABOUT[role],
+        permissions=sorted(item.value for item in BUILT_IN[role]),
+        built_in=True,
+        changed=False,
+        people=_counts(db, identity.organization.id).get(key, 0),
     )
 
 
@@ -438,6 +488,76 @@ def delete_person(
     logger.warning("person.purged", email=email, by=str(identity.user.id))
 
 
+def _patch_builtin(key: str, body: RolePatch, identity: CurrentUser, db: Db) -> RoleOut:
+    """Правка прав встроенной роли.
+
+    Хранится накладкой (`RoleOverride`): заводские права остаются в коде, и
+    «вернуть как было» — это удаление накладки, а не восстановление по памяти.
+    Название и пояснение встроенных не меняются: по ним роль узнают в переписке
+    и в журнале, а «Тендерщик» под другим именем — это уже другая роль.
+    """
+    role = Role(key)
+    if body.permissions is None:
+        raise _spoken("У встроенной роли правятся только права")
+
+    wanted = set(_clean(body.permissions))
+    свой = identity.role_key == key
+    if свой and Permission.ADMIN.value not in wanted:
+        raise _spoken("Нельзя снять управление платформой со своей роли: вернуть его будет нечем")
+
+    if Permission.ADMIN.value not in wanted and not _admin_elsewhere(db, identity, key):
+        raise _spoken(
+            "Это последняя роль с управлением платформой. Выдайте его другой роли, потом снимайте"
+        )
+
+    found = db.scalar(
+        select(RoleOverride).where(
+            RoleOverride.organization_id == identity.organization.id,
+            RoleOverride.role == role,
+        )
+    )
+    if found is None:
+        found = RoleOverride(
+            organization_id=identity.organization.id,
+            role=role,
+            created_by_id=identity.user.id,
+        )
+        db.add(found)
+    found.permissions = sorted(wanted)
+    db.commit()
+    logger.warning("role.builtin.updated", key=key, by=str(identity.user.id))
+    return RoleOut(
+        key=key,
+        title=ROLE_NAMES[role],
+        about=ROLE_ABOUT[role],
+        permissions=sorted(wanted),
+        built_in=True,
+        changed=True,
+        people=_counts(db, identity.organization.id).get(key, 0),
+    )
+
+
+def _admin_elsewhere(db: Db, identity: CurrentUser, besides: str) -> bool:
+    """Есть ли управление платформой у какой-нибудь другой роли."""
+    overrides = _overrides(db, identity.organization.id)
+    for role in Role:
+        if role.value == besides:
+            continue
+        права = overrides.get(role, {item.value for item in BUILT_IN[role]})
+        if Permission.ADMIN.value in права:
+            return True
+    own = db.scalars(
+        select(CustomRole).where(CustomRole.organization_id == identity.organization.id)
+    )
+    return any(Permission.ADMIN.value in set(role.permissions) for role in own)
+
+
+def _overrides(db: Db, organization_id: uuid.UUID) -> dict[Role, set[str]]:
+    """Накладки на встроенные роли: где права правили руками."""
+    rows = db.scalars(select(RoleOverride).where(RoleOverride.organization_id == organization_id))
+    return {row.role: set(row.permissions) for row in rows}
+
+
 def _last_admin(db: Db, organization_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     """Единственный ли он администратор в организации.
 
@@ -497,6 +617,13 @@ def _pick(db: Db, organization_id: uuid.UUID, key: str) -> tuple[Role, CustomRol
     if own is None:
         raise _spoken(f"Роли «{key}» нет")
     return Role.VIEWER, own
+
+
+def _builtin(key: str) -> Role:
+    try:
+        return Role(key)
+    except ValueError:
+        raise _spoken(f"Встроенной роли «{key}» нет") from None
 
 
 def _own(db: Db, organization_id: uuid.UUID, key: str) -> CustomRole:

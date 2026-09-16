@@ -20,8 +20,10 @@ export type WorkRole = {
   title: string;
   about: string;
   permissions: string[];
-  /** Встроенная: права заданы кодом, править и удалять нельзя. */
+  /** Встроенная: название не меняется и удалить нельзя, а права правятся. */
   built_in: boolean;
+  /** Права правили руками: у встроенной есть куда вернуться. */
+  changed: boolean;
   /** Сколько человек её носит. По нему видно, что удалять уже поздно. */
   people: number;
 };
@@ -55,6 +57,10 @@ export const peopleApi = {
   ) => api.patch<WorkRole>(`/api/people/roles/${key}`, body),
 
   /** Убирает роль. Занятую — только с `force`: люди на ней станут наблюдателями. */
+  /** Возвращает встроенной роли заводские права. */
+  resetRole: (key: string) =>
+    api.post<WorkRole>(`/api/people/roles/${key}/reset`),
+
   dropRole: (key: string, force = false) =>
     api.delete<void>(`/api/people/roles/${key}${force ? "?force=true" : ""}`),
 

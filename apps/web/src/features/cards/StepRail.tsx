@@ -284,6 +284,7 @@ export function TaskCard({
   busy,
   backLabel = "Назад к шагам лота",
   lot,
+  talk,
   onBack,
   onTake,
   onRelease,
@@ -298,6 +299,9 @@ export function TaskCard({
   /** Из какого лота задача. В колонке лота это и так известно, а на столе
    *  отдела задача без лота — это работа неизвестно над чем. */
   lot?: ReactNode;
+  /** Переписка по этой задаче. Снизу и последней: сначала что сделать и к
+   *  какому сроку, потом разговор о том, как именно. */
+  talk?: ReactNode;
   onBack: () => void;
   onTake: () => void;
   onRelease: () => void;
@@ -463,6 +467,10 @@ export function TaskCard({
           в очередь.
         </p>
       )}
+
+      {/* Переписка под действиями, а не над ними: кнопка «Закрыть задачу»,
+          отодвинутая веткой на экран вниз, находится не с первого раза. */}
+      {talk && <div className="border-t border-hairline/70">{talk}</div>}
     </div>
   );
 }

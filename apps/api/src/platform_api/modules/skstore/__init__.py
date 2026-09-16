@@ -32,6 +32,7 @@ module = ModuleSpec(
         NavItem(
             title="Закупы SKStore",
             path="/skstore/bargains",
+            permission="page.skstore",
             icon="table",
             roles=names(*READS),
             group="Площадки",
@@ -39,6 +40,7 @@ module = ModuleSpec(
         NavItem(
             title="Аналитика закупов",
             path="/skstore/analytics",
+            permission="page.skstore_analytics",
             icon="chart",
             roles=names(*READS),
             group="Площадки",

@@ -1657,3 +1657,201 @@ def test_fail_shest_sostoyaniy_i_ni_odnogo_lishnego(
     assert all(status in cards.STATUS_NAMES for status in Статус)
     assert all(status in cards.ALLOWED for status in Статус)
     assert all(status in cards.DEPARTMENT_OF for status in Статус)
+
+
+def test_fail_poruchenie_vne_lota_trebuet_ispolnitelya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Ничья задача вне лота не всплывёт нигде.
+
+    У неё нет ни отдела, ни очереди, в которой её подберут: «собрать
+    доверенности», положенное в общую кучу, лежит ровно до того дня, когда о
+    нём спросят.
+    """
+    with pytest.raises(SpokenError):
+        cards.add_task(
+            db,
+            organization_id=org.id,
+            card_id=None,
+            created_by=кто,
+            title="Собрать доверенности",
+        )
+
+
+def test_fail_poruchenie_ne_popadaet_v_ochered_otdela(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Стол отдела — про работу по закупкам, а не про поручения людям.
+
+    Очередь, в которой половина записей ни к чему не привязана, перестаёт быть
+    очередью работы: снабженец ищет в ней свой лот и находит чужой пропуск на
+    склад.
+    """
+    card_id = _завести(db, org, кто)
+    по_лоту = cards.add_task(
+        db, organization_id=org.id, card_id=card_id, created_by=кто, title="Найти товар"
+    )
+    поручение = cards.add_task(
+        db,
+        organization_id=org.id,
+        card_id=None,
+        created_by=кто,
+        title="Оформить пропуск",
+        assignee_id=кто,
+    )
+
+    # У поручения нет ни лота, ни отдела: придуманный отдел вывел бы его в
+    # чужую очередь.
+    assert поручение.card_id is None
+    assert поручение.department is None
+
+    стол = cards.tasks(db, organization_id=org.id, standalone=False)
+    assert [item.id for item in стол] == [str(по_лоту.id)]
+
+    личное = cards.tasks(db, organization_id=org.id, standalone=True)
+    assert [item.id for item in личное] == [str(поручение.id)]
+
+    # «Что на мне и что я поручил» — одним списком: поручение касается двоих, и
+    # человек ходит в раздел за обеими половинами.
+    обе = cards.tasks(db, organization_id=org.id, standalone=True, involving=кто)
+    assert [item.id for item in обе] == [str(поручение.id)]
+
+
+def test_fail_perepiska_zadachi_ne_smeshivaetsya_s_vetkoy_lota(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """У задачи своя ветка, и в общую она не протекает.
+
+    Общая отвечает на «берём или нет», у задачи вопрос свой — «подойдёт ли вот
+    этот». Смешать их значит через неделю не разобрать, о какой из пяти задач
+    по лоту шла речь.
+    """
+    from platform_api.modules import discussion
+
+    card_id = _завести(db, org, кто)
+    задача = cards.add_task(
+        db, organization_id=org.id, card_id=card_id, created_by=кто, title="Найти товар"
+    )
+    discussion.add_to_task(db, org.id, кто, task_id=задача.id, body="Какой именно насос?")
+    discussion.add(db, org.id, кто, module="goszakup", row_id="81468165-ЗЦП1", body="Берём")
+
+    в_задаче = discussion.task_messages(db, org.id, задача.id)
+    assert [item.body for item in в_задаче] == ["Какой именно насос?"]
+
+    в_лоте = discussion.messages(db, org.id, "goszakup", "81468165-ЗЦП1")
+    assert [item.body for item in в_лоте] == ["Берём"]
+
+    # Число реплик стоит на строке задачи: без него строка выглядит нетронутой,
+    # и ответа ждут сутки.
+    одна = cards.task(db, organization_id=org.id, task_id=задача.id)
+    assert одна.talk == 1
+
+
+def test_fail_poruchenie_pravit_tot_kto_dal(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Исполнитель не переписывает себе срок.
+
+    Поручение — чужая просьба, и человек, сдвинувший срок, отвечает уже на
+    другой вопрос.
+    """
+    другой = User(email=f"{uuid.uuid4().hex[:8]}@fintend.kz", password_hash="x")
+    db.add(другой)
+    db.flush()
+
+    поручение = cards.add_task(
+        db,
+        organization_id=org.id,
+        card_id=None,
+        created_by=кто,
+        title="Оформить пропуск",
+        assignee_id=другой.id,
+    )
+
+    with pytest.raises(SpokenError):
+        cards.edit_task(
+            db,
+            organization_id=org.id,
+            task_id=поручение.id,
+            user_id=другой.id,
+            role=Role.BUYER,
+            title="Оформить пропуск к пятнице",
+        )
+
+    правленое = cards.edit_task(
+        db,
+        organization_id=org.id,
+        task_id=поручение.id,
+        user_id=кто,
+        role=Role.ANALYST,
+        title="Оформить пропуск на склад",
+    )
+    assert правленое.title == "Оформить пропуск на склад"
+
+    # Снять исполнителя у поручения нельзя: оно останется висеть ничьим.
+    with pytest.raises(SpokenError):
+        cards.edit_task(
+            db,
+            organization_id=org.id,
+            task_id=поручение.id,
+            user_id=кто,
+            role=Role.ANALYST,
+            assignee_id=None,
+            change_assignee=True,
+        )
+
+
+def test_fail_razdel_zadach_otvechaet_a_ne_prinimaet_za_lot(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Поручение заводится, читается и закрывается через свои адреса.
+
+    Проверка заодно про порядок маршрутов: `/cards/{card_id}` ловит любой
+    первый кусок пути, и объявленный после него `/cards/errands` отвечал бы
+    «errands — не идентификатор лота». Ошибка читается как поломка списка, а
+    причина — в порядке строк в файле.
+    """
+    from tests.conftest import sign_in
+
+    sign_in(db, app_client, Role.MANAGER)
+    кому = User(email=f"{uuid.uuid4().hex[:8]}@fintend.kz", password_hash="x")
+    db.add(кому)
+    db.flush()
+    db.commit()
+
+    заведено = app_client.post(
+        "/api/cards/errands",
+        json={"title": "Собрать доверенности", "assignee_id": str(кому.id)},
+    )
+    assert заведено.status_code == 201, заведено.text
+    задача = заведено.json()
+    assert задача["card_id"] == "" and задача["department"] == ""
+
+    мои = app_client.get("/api/cards/errands?side=given").json()
+    assert [one["id"] for one in мои] == [задача["id"]]
+
+    # На стол отдела поручение не попадает: очередь отдела — про закупки.
+    стол = app_client.get("/api/cards/tasks").json()
+    assert задача["id"] not in [one["id"] for one in стол]
+
+    сказано = app_client.post(
+        f"/api/cards/tasks/{задача['id']}/talk",
+        json={"body": "Какие именно нужны?"},
+    )
+    assert сказано.status_code == 201, сказано.text
+    ветка = app_client.get(f"/api/cards/tasks/{задача['id']}/talk").json()
+    assert [one["body"] for one in ветка] == ["Какие именно нужны?"]
+
+    # Закрыть без отчёта нельзя: по записи «закрыл» через месяц не понять, что
+    # именно сделали.
+    отказ = app_client.post(
+        f"/api/cards/errands/{задача['id']}/close", json={"state": "done", "result": ""}
+    )
+    assert отказ.status_code == 403
+
+    закрыто = app_client.post(
+        f"/api/cards/errands/{задача['id']}/close",
+        json={"state": "done", "result": "Собрал, лежат у юристов"},
+    )
+    assert закрыто.status_code == 200, закрыто.text
+    assert закрыто.json()["state"] == "done"

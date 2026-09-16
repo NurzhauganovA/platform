@@ -7,7 +7,7 @@
  */
 
 import { api } from "@/api/client";
-import type { Preview } from "@/api/worklist";
+import type { Message, Preview } from "@/api/worklist";
 
 /** Где лот в сквозном процессе. Порядок объявления — порядок жизни. */
 /**
@@ -199,6 +199,11 @@ export type Job = {
   done_by: string;
   /** Кто поставил. Вопрос «а кто это придумал» адресуют не исполнителю. */
   author: string;
+  /** Кто поставил, ключом: по нему экран решает, показывать ли правку. */
+  author_id: string;
+  /** Сколько реплик в переписке задачи. Числом на строке: разговор о задаче —
+   *  половина работы по ней, и строка без числа выглядит нетронутой. */
+  talk: number;
 };
 
 export type Person = { id: string; name: string; role: string };
@@ -387,6 +392,72 @@ export const cardsApi = {
 
   closeTask: (taskId: string, state: TaskState = "done", result = "") =>
     api.post<Job>(`/api/cards/tasks/${taskId}/close`, { state, result }),
+
+  /**
+   * Поручения вне лота: что поручили мне и что поручил я.
+   *
+   * Отдельно от задач отдела, и это не удвоение: у тех своё право (карточки
+   * лотов) и своя очередь, а поручение приходит человеку — технологу,
+   * наблюдателю, кому угодно.
+   */
+  errands: (
+    filters: {
+      /** both — и мои, и мной поручённые. mine, given, all (администратору). */
+      side?: "both" | "mine" | "given" | "all";
+      state?: TaskState | "all";
+    } = {},
+  ) => api.get<Job[]>(`/api/cards/errands${query(filters)}`),
+
+  addErrand: (body: {
+    title: string;
+    body?: string;
+    assignee_id: string;
+    due_at?: string | null;
+  }) => api.post<Job>("/api/cards/errands", body),
+
+  /** Правка поручения. Смена исполнителя — признаком: «не указан» и «указан
+   *  пустым» в JSON приходят одинаково. */
+  editErrand: (
+    taskId: string,
+    body: {
+      title?: string;
+      body?: string;
+      assignee_id?: string | null;
+      change_assignee?: boolean;
+      due_at?: string | null;
+      change_due?: boolean;
+    },
+  ) => api.patch<Job>(`/api/cards/errands/${taskId}`, body),
+
+  closeErrand: (taskId: string, state: TaskState = "done", result = "") =>
+    api.post<Job>(`/api/cards/errands/${taskId}/close`, { state, result }),
+
+  /**
+   * Переписка внутри задачи.
+   *
+   * Отдельно от общей ветки лота: та отвечает на «берём или нет», а здесь
+   * вопрос свой — «что именно найти», «подойдёт ли вот этот». В общей ветке
+   * он тонет, и через неделю не разобрать, о какой из пяти задач шла речь.
+   */
+  talk: (taskId: string) =>
+    api.get<Message[]>(`/api/cards/tasks/${taskId}/talk`),
+
+  say: (taskId: string, body: string, mentions: string[] = []) =>
+    api.post<Message>(`/api/cards/tasks/${taskId}/talk`, { body, mentions }),
+
+  fixSaid: (
+    taskId: string,
+    messageId: string,
+    body: string,
+    mentions: string[] = [],
+  ) =>
+    api.patch<Message>(`/api/cards/tasks/${taskId}/talk/${messageId}`, {
+      body,
+      mentions,
+    }),
+
+  dropSaid: (taskId: string, messageId: string) =>
+    api.delete<void>(`/api/cards/tasks/${taskId}/talk/${messageId}`),
 
   /**
    * Взять задачу себе. Срока здесь нет: его назначает автор при заведении, и

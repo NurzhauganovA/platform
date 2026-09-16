@@ -14,7 +14,7 @@
  * ролью уходит себестоимость.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   peopleApi,
@@ -521,8 +521,20 @@ function RoleRow({
   const [asking, setAsking] = useState(false);
   const [picked, setPicked] = useState<string[]>(role.permissions);
 
+  // Список прав приходит с сервера и меняется после сохранения — подхватываем
+  // его, иначе галочки остаются теми, какими были при первом раскрытии.
+  useEffect(() => setPicked(role.permissions), [role.permissions]);
+
   const save = useMutation({
     mutationFn: () => peopleApi.saveRole(role.key, { permissions: picked }),
+    onSuccess: () => {
+      setOpen(false);
+      onDone();
+    },
+    onError: onFail,
+  });
+  const reset = useMutation({
+    mutationFn: () => peopleApi.resetRole(role.key),
     onSuccess: () => {
       setOpen(false);
       onDone();
@@ -549,6 +561,14 @@ function RoleRow({
             {role.built_in && (
               <span className="shrink-0 rounded-[6px] bg-plane px-1.5 py-0.5 text-[11px] text-ink-muted">
                 встроенная
+              </span>
+            )}
+            {role.changed && (
+              <span
+                title="Права правили руками: заводские можно вернуть"
+                className="shrink-0 rounded-[6px] bg-warning/15 px-1.5 py-0.5 text-[11px] text-ink"
+              >
+                правлена
               </span>
             )}
           </span>
@@ -601,26 +621,37 @@ function RoleRow({
 
       {open && (
         <div className="border-t border-hairline/70 bg-plane/40 px-[15px] py-2.5">
+          {/* Галочки живые и у встроенных ролей. «Тендерщик без аналитики» —
+              это настройка, а не новая роль: заводить рядом копию из десяти
+              галочек ради снятия одной значит держать два списка и однажды
+              поправить только один. Заводские права при этом остаются в коде,
+              и кнопка рядом возвращает к ним. */}
           <Boxes
             permissions={permissions}
-            picked={role.built_in ? role.permissions : picked}
-            frozen={role.built_in}
+            picked={picked}
             onChange={setPicked}
           />
-          {!role.built_in && (
-            <div className="mt-2.5 flex items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              disabled={save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? "Сохраняем…" : "Сохранить права"}
+            </Button>
+            {role.built_in && role.changed && (
               <Button
-                variant="primary"
-                disabled={save.isPending}
-                onClick={() => save.mutate()}
+                variant="secondary"
+                disabled={reset.isPending}
+                onClick={() => reset.mutate()}
               >
-                {save.isPending ? "Сохраняем…" : "Сохранить права"}
+                {reset.isPending ? "Возвращаем…" : "Вернуть заводские"}
               </Button>
-              <span className="text-[11.5px] text-ink-muted">
-                подействует при следующем входе этих людей
-              </span>
-            </div>
-          )}
+            )}
+            <span className="text-[11.5px] text-ink-muted">
+              подействует при следующем входе этих людей
+            </span>
+          </div>
         </div>
       )}
     </li>
@@ -705,55 +736,122 @@ function NewRole({
 }
 
 /**
- * Права галочками.
+ * Права галочками, по группам.
  *
- * Списком, а не выпадающим выбором: их тринадцать, и выдающий доступ должен
- * видеть все разом — в том числе те, которые он не ставит. Пояснение у каждого
- * своё: «money» без слов означает, что выдавать будут наугад.
+ * Списком, а не выпадающим выбором: их четыре десятка, и выдающий доступ
+ * должен видеть все разом — в том числе те, которые он не ставит. Пояснение у
+ * каждого своё: `money` без слов означает, что выдавать будут наугад.
+ *
+ * Группы нужны с того момента, как прав стало больше десятка. «Страницы» —
+ * куда человек может зайти, ими управляется меню; «Лоты» и «Работа» — что он
+ * может сделать; «Подписи» — пять однотипных; «Платформа» — управление
+ * доступами. Без групп это сорок галочек подряд, по которым ищут глазами.
+ *
+ * У каждой группы «выбрать все» и «снять»: роль обычно собирают целыми
+ * областями — «все страницы работы, ничего из площадок», — и сорок нажатий
+ * вместо двух это то, из-за чего роли не заводят вообще.
  */
 function Boxes({
   permissions,
   picked,
-  frozen = false,
   onChange,
 }: {
   permissions: Permission[];
   picked: string[];
-  frozen?: boolean;
   onChange: (next: string[]) => void;
 }) {
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    items: permissions.filter((one) => group.match(one.key)),
+  })).filter((group) => group.items.length > 0);
+
   return (
-    <ul className="grid gap-x-5 gap-y-1.5 sm:grid-cols-2">
-      {permissions.map((one) => (
-        <li key={one.key}>
-          <label
-            className={cx(
-              "flex items-start gap-2",
-              frozen ? "cursor-default" : "cursor-pointer",
-            )}
-          >
-            <input
-              type="checkbox"
-              checked={picked.includes(one.key)}
-              disabled={frozen}
-              onChange={(event) =>
-                onChange(
-                  event.target.checked
-                    ? [...picked, one.key]
-                    : picked.filter((item) => item !== one.key),
-                )
-              }
-              className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[var(--color-series-1)]"
-            />
-            <span className="min-w-0">
-              <span className="block text-[12.5px] text-ink">{one.title}</span>
-              <span className="block text-[11.5px] text-ink-muted">
-                {one.about}
+    <div className="space-y-3">
+      {groups.map((group) => {
+        const keys = group.items.map((one) => one.key);
+        const all = keys.every((key) => picked.includes(key));
+
+        return (
+          <div key={group.title}>
+            <div className="mb-1.5 flex items-center gap-2">
+              <span className="text-[11.5px] font-semibold tracking-[0.02em] text-ink-secondary uppercase">
+                {group.title}
               </span>
-            </span>
-          </label>
-        </li>
-      ))}
-    </ul>
+              <span className="text-[11px] text-ink-muted tabular-nums">
+                {keys.filter((key) => picked.includes(key)).length} из{" "}
+                {keys.length}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange(
+                    all
+                      ? picked.filter((key) => !keys.includes(key))
+                      : [...new Set([...picked, ...keys])],
+                  )
+                }
+                className="rounded-[6px] px-1.5 py-0.5 text-[11px] text-series-1 transition hover:underline"
+              >
+                {all ? "снять все" : "выбрать все"}
+              </button>
+            </div>
+
+            <ul className="grid gap-x-5 gap-y-1.5 sm:grid-cols-2">
+              {group.items.map((one) => (
+                <li key={one.key}>
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={picked.includes(one.key)}
+                      onChange={(event) =>
+                        onChange(
+                          event.target.checked
+                            ? [...picked, one.key]
+                            : picked.filter((item) => item !== one.key),
+                        )
+                      }
+                      className="mt-0.5 h-[15px] w-[15px] shrink-0 accent-[var(--color-series-1)]"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-[12.5px] text-ink">
+                        {one.title}
+                      </span>
+                      <span className="block text-[11.5px] text-ink-muted">
+                        {one.about}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
   );
 }
+
+/**
+ * Как права раскладываются по группам.
+ *
+ * По ключу, а не по отдельному полю в ответе: ключ и так говорит об области
+ * («page.», «lot.», «sign.»), и второй источник этой же разметки разошёлся бы
+ * с первым на первом же добавленном праве.
+ */
+const GROUPS: { title: string; match: (key: string) => boolean }[] = [
+  { title: "Страницы", match: (key) => key.startsWith("page.") },
+  { title: "Лоты", match: (key) => key.startsWith("lot.") },
+  {
+    title: "Работа с лотом",
+    match: (key) =>
+      ["crm", "tasks", "files", "move", "decide"].includes(key) ||
+      key.startsWith("sheet.") ||
+      key.startsWith("remark."),
+  },
+  { title: "Подписи", match: (key) => key.startsWith("sign.") },
+  {
+    title: "Данные",
+    match: (key) => ["money", "read", "sourcing", "remarks"].includes(key),
+  },
+  { title: "Платформа", match: (key) => key === "admin" },
+];

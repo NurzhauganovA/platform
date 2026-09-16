@@ -35,6 +35,7 @@ import { ApiError } from "@/api/client";
 import { Card as Panel, cx, money } from "@/ui";
 import { NewTask } from "./NewTask";
 import { Node, TaskCard, TaskLine } from "./StepRail";
+import { TaskTalk } from "./TaskTalk";
 import type { Mark } from "./StepRail";
 import { Avatar, Chip, Clock, Passed, shortName, stamp } from "./kit";
 
@@ -258,6 +259,15 @@ export function Steps({
           me={me?.id ?? ""}
           deskName={chosen.department_name}
           busy={take.isPending || finish.isPending || release.isPending}
+          // Та же переписка, что в окне задачи на столе отдела. Задача,
+          // открытая здесь без ветки и там с веткой, читается как две разные.
+          talk={
+            <TaskTalk
+              taskId={chosen.id}
+              me={me?.id ?? ""}
+              admin={me?.role === "admin"}
+            />
+          }
           onBack={() => setOpenTask(null)}
           onTake={() => take.mutate(chosen.id)}
           onRelease={() => release.mutate(chosen.id)}

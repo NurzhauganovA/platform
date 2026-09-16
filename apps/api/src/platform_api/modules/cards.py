@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from platform_api.config import Settings
 from platform_api.db.base import utcnow
@@ -345,6 +345,17 @@ class Job:
     author: str = ""
     """Кто поставил. Вопрос «а кто это придумал» задают ровно тогда, когда
     задача выглядит лишней, — и адресовать его нужно не исполнителю."""
+
+    author_id: str = ""
+    """Кто поставил, ключом. По нему экран решает, показывать ли правку и
+    снятие: поручение отзывает тот, кто его дал, и администратор."""
+
+    talk: int = 0
+    """Сколько реплик в переписке задачи.
+
+    Числом на строке, а не только внутри. Разговор о задаче — это половина
+    работы по ней («подойдёт ли вот этот?»), и задачу открывают ради него;
+    строка без числа выглядит нетронутой, и ответа ждут сутки."""
 
     card_amount: Decimal | None = None
     """Сумма закупки по снимку карточки. Нужна в очереди отдела: за что взяться,
@@ -986,7 +997,7 @@ def add_task(
     db: DbSession,
     *,
     organization_id: uuid.UUID,
-    card_id: uuid.UUID,
+    card_id: uuid.UUID | None,
     created_by: uuid.UUID,
     title: str,
     department: Department | None = None,
@@ -995,16 +1006,24 @@ def add_task(
     due_at: datetime | None = None,
     settings: Settings | None = None,
 ) -> Task:
-    """Заводит задачу по лоту.
+    """Заводит задачу — по лоту или саму по себе.
 
     Отдел не указан — берётся тот, у кого лот сейчас: чаще всего задачу заводят
     себе же, и переспрашивать об этом каждый раз значит добавить нажатие к
     самому частому действию.
+
+    **Без лота задача адресуется человеку.** «Собрать доверенности», «оформить
+    пропуск на склад» — это поручения, а не работа по закупке, и отдела у них
+    нет: положить такую в общую очередь снабжения значит засорить очередь, ради
+    которой её и заводили. Поэтому исполнитель обязателен: ничья задача вне
+    лота не всплывёт нигде и не будет сделана никогда.
     """
-    card = _required(db, organization_id, card_id)
+    card = _required(db, organization_id, card_id) if card_id is not None else None
     clean = " ".join(title.split())
     if not clean:
         raise SpokenError("У задачи должно быть название")
+    if card is None and assignee_id is None:
+        raise SpokenError("Задаче вне лота нужен исполнитель: ничью её никто не возьмёт")
 
     # Задача с исполнителем считается взятой сразу: её завели конкретному
     # человеку, и подбирать её некому.
@@ -1016,8 +1035,10 @@ def add_task(
 
     task = Task(
         organization_id=organization_id,
-        card_id=card.id,
-        department=department or DEPARTMENT_OF[card.status],
+        card_id=card.id if card is not None else None,
+        # Отдел — только у лотовой задачи: у поручения человеку его нет, и
+        # придуманный отдел вывел бы такую задачу в чужую очередь.
+        department=(department or DEPARTMENT_OF[card.status] if card is not None else department),
         title=clean[:2000],
         body=body.strip(),
         assignee_id=assignee_id,
@@ -1026,16 +1047,76 @@ def add_task(
         due_at=when,
     )
     db.add(task)
-    trace(
-        db,
-        card_id=card.id,
-        kind="task",
-        title=f"Завёл задачу отделу «{DEPARTMENT_NAMES[task.department]}»",
-        actor_id=created_by,
-        detail=clean,
-    )
+    if card is not None and task.department is not None:
+        trace(
+            db,
+            card_id=card.id,
+            kind="task",
+            title=f"Завёл задачу отделу «{DEPARTMENT_NAMES[task.department]}»",
+            actor_id=created_by,
+            detail=clean,
+        )
     db.flush()
     _task_added(db, settings, task, card)
+    return task
+
+
+def edit_task(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    task_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role: Role,
+    title: str | None = None,
+    body: str | None = None,
+    assignee_id: uuid.UUID | None = None,
+    change_assignee: bool = False,
+    due_at: datetime | None = None,
+    change_due: bool = False,
+    settings: Settings | None = None,
+) -> Task:
+    """Правит поручение: название, текст, исполнителя, срок.
+
+    Правит только тот, кто задачу завёл, и администратор. Исполнитель здесь не
+    вправе: поручение — это чужая просьба, и человек, переписавший себе срок,
+    отвечает уже на другой вопрос.
+
+    Смена исполнителя отдельным признаком, а не пустым значением: «не указан» и
+    «указан пустым» приходят в JSON одинаково, и правка одного названия молча
+    снимала бы исполнителя.
+
+    Нового исполнителя зовём как при заведении: для него это задача, о которой
+    он до сих пор не знал, и узнать о ней он должен так же.
+    """
+    task = db.get(Task, task_id)
+    if task is None or task.organization_id != organization_id:
+        raise SpokenError("Задача не найдена")
+    if task.created_by_id != user_id and role is not Role.ADMIN:
+        raise SpokenError("Править задачу может тот, кто её завёл")
+
+    if title is not None:
+        clean = " ".join(title.split())
+        if not clean:
+            raise SpokenError("У задачи должно быть название")
+        task.title = clean[:2000]
+    if body is not None:
+        task.body = body.strip()
+    if change_due:
+        task.due_at = due_at
+
+    was = task.assignee_id
+    if change_assignee:
+        if assignee_id is None and task.card_id is None:
+            raise SpokenError("Задаче вне лота нужен исполнитель: ничью её никто не возьмёт")
+        task.assignee_id = assignee_id
+        # Взятой считается та, у которой есть исполнитель: поручение адресное,
+        # и подбирать его некому.
+        task.taken_at = utcnow() if assignee_id else None
+
+    db.flush()
+    if change_assignee and assignee_id is not None and assignee_id != was:
+        _task_added(db, settings, task, db.get(LotCard, task.card_id) if task.card_id else None)
     return task
 
 
@@ -1068,13 +1149,16 @@ def take_task(
     if user_id is None:
         task.assignee_id = None
         task.taken_at = None
-        trace(
-            db,
-            card_id=task.card_id,
-            kind="task_taken",
-            title=f"Вернул в очередь отдела задачу «{task.title}»",
-            actor_id=None,
-        )
+        # Лента лота пишется только у лотовой задачи: у задачи вне лота ленты
+        # нет вовсе, а о своей работе она рассказывает сама.
+        if task.card_id is not None:
+            trace(
+                db,
+                card_id=task.card_id,
+                kind="task_taken",
+                title=f"Вернул в очередь отдела задачу «{task.title}»",
+                actor_id=None,
+            )
         db.flush()
         return task
 
@@ -1085,13 +1169,14 @@ def take_task(
 
     task.assignee_id = user_id
     task.taken_at = utcnow()
-    trace(
-        db,
-        card_id=task.card_id,
-        kind="task_taken",
-        title=f"Взял задачу «{task.title}»",
-        actor_id=user_id,
-    )
+    if task.card_id is not None:
+        trace(
+            db,
+            card_id=task.card_id,
+            kind="task_taken",
+            title=f"Взял задачу «{task.title}»",
+            actor_id=user_id,
+        )
     db.flush()
     _task_taken(db, settings, task)
     return task
@@ -1135,19 +1220,20 @@ def close_task(
     task.done_by_id = user_id if state is not TaskState.OPEN else None
     if result.strip():
         task.result = result.strip()[:4000]
-    trace(
-        db,
-        card_id=task.card_id,
-        kind="task_done" if state is TaskState.DONE else "task",
-        title=(
-            f"Закрыл задачу «{task.title}»"
-            if state is TaskState.DONE
-            else f"Вернул в работу задачу «{task.title}»"
-        ),
-        actor_id=user_id,
-        role=role,
-        detail=result,
-    )
+    if task.card_id is not None:
+        trace(
+            db,
+            card_id=task.card_id,
+            kind="task_done" if state is TaskState.DONE else "task",
+            title=(
+                f"Закрыл задачу «{task.title}»"
+                if state is TaskState.DONE
+                else f"Вернул в работу задачу «{task.title}»"
+            ),
+            actor_id=user_id,
+            role=role,
+            detail=result,
+        )
     db.flush()
     return task
 
@@ -1435,6 +1521,9 @@ def tasks(
     assignee_id: uuid.UUID | None = None,
     unassigned: bool = False,
     card_id: uuid.UUID | None = None,
+    author_id: uuid.UUID | None = None,
+    involving: uuid.UUID | None = None,
+    standalone: bool | None = None,
     state: TaskState | None = TaskState.OPEN,
     now: datetime | None = None,
 ) -> list[Job]:
@@ -1442,11 +1531,32 @@ def tasks(
 
     По умолчанию только открытые: очередь работы — это то, что не сделано, а
     закрытые смотрят отдельной вкладкой и редко.
+
+    `involving` — «что на мне и что я поручил». Это раздел задач: поручение
+    касается двоих, и человек ходит туда за обеими половинами.
+
+    `standalone` делит два разных списка. Стол отдела — про работу по лотам, и
+    поручение «оформить пропуск» там лишнее: очередь, в которой половина
+    записей ни к чему не привязана, перестаёт быть очередью работы. Раздел
+    задач — наоборот, про поручения людям. Поэтому признак трёхзначный: `True`
+    — только вне лота, `False` — только лотовые, `None` — всё подряд (так
+    смотрят «что вообще на человеке»).
     """
     moment = now or utcnow()
     query = select(Task).where(Task.organization_id == organization_id)
     if department is not None:
         query = query.where(Task.department == department)
+    if author_id is not None:
+        query = query.where(Task.created_by_id == author_id)
+    if involving is not None:
+        # «Что на мне и что я поручил» одним списком. Двумя запросами это
+        # значило бы склеивать их в питоне и вычищать задачи, где человек и
+        # автор, и исполнитель, — а такие как раз самые частые.
+        query = query.where(or_(Task.assignee_id == involving, Task.created_by_id == involving))
+    if standalone is True:
+        query = query.where(Task.card_id.is_(None))
+    elif standalone is False:
+        query = query.where(Task.card_id.is_not(None))
     if assignee_id is not None:
         query = query.where(Task.assignee_id == assignee_id)
     if unassigned:
@@ -1460,7 +1570,8 @@ def tasks(
     rows.sort(key=lambda row: (row.due_at is None, row.due_at or moment))
     known = people(db, rows)
     cards = _cards_of(db, rows)
-    return [_job(row, known, cards, moment) for row in rows]
+    talk = _talk_of(db, organization_id, rows)
+    return [_job(row, known, cards, moment, talk) for row in rows]
 
 
 def task(
@@ -1481,38 +1592,55 @@ def task(
     if row is None or row.organization_id != organization_id:
         raise SpokenError("Задача не найдена")
     moment = now or utcnow()
-    card = db.get(LotCard, row.card_id)
+    # Карточки может не быть вовсе — у поручения вне лота её нет; `db.get` с
+    # пустым ключом ругается на состав первичного ключа, а не возвращает None.
+    card = db.get(LotCard, row.card_id) if row.card_id is not None else None
     return _job(
         row,
         people(db, [row]),
         {card.id: card} if card is not None else {},
         moment,
+        _talk_of(db, organization_id, [row]),
     )
 
 
 def _cards_of(db: DbSession, rows: Sequence[Task]) -> dict[uuid.UUID, LotCard]:
     """Карточки задач одним запросом — задача без лота не читается."""
-    wanted = {row.card_id for row in rows}
+    wanted = {row.card_id for row in rows if row.card_id is not None}
     if not wanted:
         return {}
     found = db.execute(select(LotCard).where(LotCard.id.in_(wanted))).scalars()
     return {card.id: card for card in found}
 
 
+def _talk_of(
+    db: DbSession, organization_id: uuid.UUID, rows: Sequence[Task]
+) -> dict[uuid.UUID, int]:
+    """Сколько реплик у каждой задачи. Лениво: обсуждение знает о задачах,
+    задачи об обсуждении — только здесь, и общий импорт свёл бы их в кольцо."""
+    from platform_api.modules import discussion
+
+    return discussion.counts_for_tasks(db, organization_id, [row.id for row in rows])
+
+
 def _job(
-    row: Task, known: dict[uuid.UUID, str], cards: dict[uuid.UUID, LotCard], now: datetime
+    row: Task,
+    known: dict[uuid.UUID, str],
+    cards: dict[uuid.UUID, LotCard],
+    now: datetime,
+    talk: dict[uuid.UUID, int] | None = None,
 ) -> Job:
-    card = cards.get(row.card_id)
+    card = cards.get(row.card_id) if row.card_id else None
     left, burning, overdue = time_left(row.due_at, now)
     return Job(
         id=str(row.id),
-        card_id=str(row.card_id),
+        card_id=str(row.card_id) if row.card_id else "",
         card_code=card.code if card else "",
         card_title=card.title if card else "",
         card_amount=card.amount if card else None,
         card_customer=card.customer if card else "",
-        department=row.department.value,
-        department_name=DEPARTMENT_NAMES[row.department],
+        department=row.department.value if row.department else "",
+        department_name=DEPARTMENT_NAMES[row.department] if row.department else "",
         title=row.title,
         body=row.body,
         assignee=known.get(row.assignee_id, "") if row.assignee_id else "",
@@ -1528,6 +1656,8 @@ def _job(
         done_at=row.done_at.isoformat() if row.done_at else "",
         done_by=known.get(row.done_by_id, "") if row.done_by_id else "",
         author=known.get(row.created_by_id, "") if row.created_by_id else "",
+        author_id=str(row.created_by_id) if row.created_by_id else "",
+        talk=(talk or {}).get(row.id, 0),
     )
 
 
@@ -1747,7 +1877,7 @@ def _opened(db: DbSession, settings: Settings | None, card: LotCard) -> None:
         logger.warning("Не позвали отделы на новый лот", card=str(card.id), error=str(exc))
 
 
-def _task_added(db: DbSession, settings: Settings | None, task: Task, card: LotCard) -> None:
+def _task_added(db: DbSession, settings: Settings | None, task: Task, card: LotCard | None) -> None:
     """Зовёт исполнителя или отдел. Отказ рассылки не роняет заведение задачи."""
     if settings is None:
         return
@@ -2230,6 +2360,7 @@ __all__ = [
     "decide",
     "detach",
     "drop_folder",
+    "edit_task",
     "files",
     "folders",
     "listing",
