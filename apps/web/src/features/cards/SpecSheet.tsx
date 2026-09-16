@@ -41,6 +41,7 @@ import { jobsApi } from "@/api/jobs";
 import { Button, Card as Panel, Spinner, cx } from "@/ui";
 import { BarHead, BarTitle, Note } from "./kit";
 import { RichText } from "./RichText";
+import { money, parse, total } from "./money";
 import { useCan } from "@/shell/can";
 
 /** Через сколько молчания сохранять правки. */
@@ -70,17 +71,22 @@ function sums(sheet: Sheet): Record<string, string> {
   const out: Record<string, string> = {};
   for (const column of sheet.columns) {
     if (!MONEY.has(column.key)) continue;
-    let sum = 0;
-    let seen = 0;
+    const values: number[] = [];
+    let broken = 0;
     for (const row of sheet.rows) {
-      const value = money(row.cells[column.key] ?? "");
-      if (value === null) continue;
-      sum += value;
-      seen += 1;
+      const cell = parse(row.cells[column.key] ?? "");
+      if (cell.kind === "broken") broken += 1;
+      if (cell.kind === "number" || cell.kind === "formula")
+        values.push(cell.value);
     }
     // Пустой столбец итога не получает: «0 ₸» под ценой читается как «мы
     // считаем, что бесплатно», а не как «ещё не заполнено».
-    if (seen > 0) out[column.key] = `${sum.toLocaleString("ru-RU")} ₸`;
+    if (!values.length && !broken) continue;
+    // Про непосчитанные строки говорим прямо в итоге. Молча выпавшая строка —
+    // это сумма, которая не сходится с тем, что видно глазами, и расхождение
+    // всплывает на согласовании, когда объяснять его уже некому.
+    out[column.key] =
+      money(total(values)) + (broken ? ` · ${broken} не посчитано` : "");
   }
   return out;
 }
@@ -90,24 +96,6 @@ function sums(sheet: Sheet): Record<string, string> {
     Себестоимости здесь больше нет: столбец убрали — заполнять его было нечем,
     цены поставщиков платформа по госзакупкам не знает. */
 const MONEY = new Set(["price"]);
-
-/**
- * Число из ячейки. `null` — там не число.
- *
- * Пишут по-разному: «1 250 000», «1250000», «1 250 000 ₸», «1250,50». Разбор
- * снисходительный намеренно — иначе одна ячейка с хвостом «₸» выкидывает
- * позицию из суммы, и итог тихо расходится с тем, что видно глазами.
- */
-function money(raw: string): number | null {
-  const clean = raw
-    .replace(/\u00a0/g, " ")
-    .replace(/[^\d,.-]/g, "")
-    .replace(/\s/g, "")
-    .replace(",", ".");
-  if (!clean || clean === "-" || clean === ".") return null;
-  const value = Number(clean);
-  return Number.isFinite(value) ? value : null;
-}
 
 /**
  * Подсказка в пустой ячейке наших столбцов.
@@ -928,6 +916,10 @@ function Cell({
 }) {
   const own = column.filled_by === "hand";
   const wordy = column.key === DEMAND;
+  // Что в денежной ячейке: число, выражение или невнятица. Считаем при
+  // отрисовке, а не при сохранении: итог наверху меняется вместе с набором, и
+  // подсказка под ячейкой должна успевать за ним.
+  const sum = MONEY.has(column.key) ? parse(value) : null;
 
   return (
     <td className="px-2.5 py-2.5">
@@ -977,6 +969,30 @@ function Cell({
                 ),
         )}
       />
+
+      {/* Сколько вышло — под ячейкой, а не вместо написанного. В ячейке
+          остаётся «2 * 18000»: через неделю вопрос будет не «сколько», а
+          «сколько штук и почём», и ответ на него стирать нельзя.
+
+          Подпись показывается только у выражения: под ячейкой с обычным
+          числом она повторяла бы само число. */}
+      {sum?.kind === "formula" && (
+        <span
+          className="mt-1 block truncate text-[11.5px] text-ink-muted tabular-nums"
+          title="Посчитано по написанному в ячейке"
+        >
+          = {money(sum.value)}
+        </span>
+      )}
+
+      {/* Непонятное выражение названо вслух. Молча выпавшая из суммы строка —
+          это итог, расходящийся с тем, что видно глазами; словом, а не одним
+          цветом — цвет сам по себе не говорит, что делать. */}
+      {sum?.kind === "broken" && (
+        <span className="mt-1 block truncate text-[11.5px] font-medium text-critical">
+          не считается
+        </span>
+      )}
     </td>
   );
 }

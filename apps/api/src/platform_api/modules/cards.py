@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import func, or_, select
 
+from platform_api.auth.permissions import Permission
 from platform_api.config import Settings
 from platform_api.db.base import utcnow
 from platform_api.db.models import (
@@ -165,6 +166,39 @@ SIGNS: dict[ApprovalKind, frozenset[Role]] = {
     ApprovalKind.TECHNOLOGIST: frozenset({Role.ADMIN, Role.TECHNOLOGIST}),
     ApprovalKind.ASSEMBLER: frozenset({Role.ADMIN, Role.ASSEMBLER}),
 }
+
+SIGN_RIGHTS: dict[ApprovalKind, Permission] = {
+    ApprovalKind.MANAGER: Permission.SIGN_MANAGER,
+    ApprovalKind.SUPPLY: Permission.SIGN_SUPPLY,
+    ApprovalKind.LEGAL: Permission.SIGN_LEGAL,
+    ApprovalKind.TECHNOLOGIST: Permission.SIGN_TECHNOLOGIST,
+    ApprovalKind.ASSEMBLER: Permission.SIGN_ASSEMBLER,
+}
+"""Какое право отвечает за какую подпись.
+
+Наборы в `SIGNS` и права в `BUILT_IN` совпадают роль в роль — это перевод
+одного и того же на два языка. Таблица нужна, чтобы своя роль, которой выдали
+подпись снабжения, могла её поставить: по имени роли она «Наблюдатель».
+"""
+
+MOVE_RIGHTS: dict[LotStatus, Permission] = {
+    LotStatus.WORK: Permission.MOVE,
+    LotStatus.APPROVAL: Permission.MOVE,
+    LotStatus.SUBMISSION: Permission.MOVE,
+    LotStatus.WAITING: Permission.MOVE,
+    LotStatus.DONE: Permission.DECIDE,
+}
+"""Каким правом двигают лот вперёд.
+
+«Нового» здесь нет намеренно: это не шаг вперёд, а возврат лота в начало —
+отмена чужой работы, и остаётся он за менеджером. Завершение — за тем, кто
+решает об участии: лот, мимо которого прошли, закрывает руководитель, а не
+менеджер задним числом.
+
+Право одно на четыре шага, а не своё на каждый: «двигать лот» — это одно
+умение, и дробить его на четыре галочки значит заставить администратора
+ставить их всегда вчетвером.
+"""
 
 APPROVAL_NAMES: dict[ApprovalKind, str] = {
     ApprovalKind.MANAGER: "Менеджер",
@@ -543,6 +577,34 @@ def open_card(
     return found
 
 
+def _may(
+    permission: Permission,
+    permissions: frozenset[Permission],
+) -> bool:
+    """Есть ли право. Администратор проходит везде — как и в `Identity.can`."""
+    return Permission.ADMIN in permissions or permission in permissions
+
+
+def _may_move(to: LotStatus, permissions: frozenset[Permission]) -> bool:
+    """Можно ли перевести лот в это состояние по праву."""
+    right = MOVE_RIGHTS.get(to)
+    return right is not None and _may(right, permissions)
+
+
+"""Право или встроенная роль — годится любое из двух.
+
+Проверки по именам ролей писались до того, как появились права, и переписать
+их разом нельзя: у каждого действия свой набор ролей, и одно право вместо
+шести наборов раздало бы тендерщику возврат лота в «Новый».
+
+Поэтому право добавлено вторым путём, а не заменой. Встроенным ролям это не
+меняет ничего — их наборы прав в `BUILT_IN` собраны ровно из этих же списков,
+— а своя роль наконец начинает работать: до сих пор она проваливалась во все
+проверки сразу, потому что встроенная часть у неё «Наблюдатель» (самое
+безопасное значение), и сравнение с ролью всегда отвечало «нельзя».
+"""
+
+
 def move(
     db: DbSession,
     *,
@@ -552,6 +614,7 @@ def move(
     user_id: uuid.UUID,
     to: LotStatus,
     reason: str = "",
+    permissions: frozenset[Permission] = frozenset(),
 ) -> LotCard:
     """Переводит лот на следующий шаг."""
     card = _required(db, organization_id, card_id)
@@ -562,7 +625,7 @@ def move(
         raise SpokenError(
             f"Из состояния «{STATUS_NAMES[card.status]}» нельзя перейти в «{STATUS_NAMES[to]}»"
         )
-    if role not in ALLOWED[to]:
+    if role not in ALLOWED[to] and not _may_move(to, permissions):
         raise SpokenError(f"Перевести лот в «{STATUS_NAMES[to]}» вам нельзя")
     # Запрет один, и он про деньги: подавать без пяти подписей — это участие в
     # закупке, товара под которую нет. Стоял он на «Готов к участию»; теперь на
@@ -720,6 +783,7 @@ def decide(
     participation: Participation,
     reason: str = "",
     user_id: uuid.UUID | None = None,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> LotCard:
     """Берём лот в работу или нет.
 
@@ -727,7 +791,7 @@ def decide(
     приходит вчетверо больше, чем мы способны разобрать.
     """
     card = _required(db, organization_id, card_id)
-    if role not in _DECIDES:
+    if role not in _DECIDES and not _may(Permission.DECIDE, permissions):
         raise SpokenError("Решать об участии вам нельзя")
     if participation is Participation.NO and not reason.strip():
         raise SpokenError("Укажите причину отказа от участия")
@@ -764,6 +828,7 @@ def sign(
     kind: ApprovalKind,
     state: ApprovalState,
     note: str = "",
+    permissions: frozenset[Permission] = frozenset(),
 ) -> LotCard:
     """Ставит подпись отдела под участием.
 
@@ -771,7 +836,7 @@ def sign(
     работу и не говорит, что чинить.
     """
     card = _required(db, organization_id, card_id)
-    if role not in SIGNS[kind]:
+    if role not in SIGNS[kind] and not _may(SIGN_RIGHTS[kind], permissions):
         raise SpokenError(f"Подпись «{APPROVAL_NAMES[kind]}» ставите не вы")
     if state is ApprovalState.REJECTED and not note.strip():
         raise SpokenError("Укажите, что мешает согласовать")
@@ -1407,6 +1472,7 @@ def listing(
     user_id: uuid.UUID,
     filters: Filters | None = None,
     now: datetime | None = None,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> list[Card]:
     """Карточки под отбором.
 
@@ -1465,6 +1531,7 @@ def listing(
             now=moment,
             talk=talks.get((row.module, row.row_id)),
             brief=True,
+            permissions=permissions,
         )
         for row in rows
     ]
@@ -1481,6 +1548,7 @@ def one(
     role: Role,
     user_id: uuid.UUID,
     now: datetime | None = None,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> Card:
     card = _required(db, organization_id, card_id)
     # Обсуждение читается только для одной карточки. В списке оно не
@@ -1499,6 +1567,7 @@ def one(
         user_id=user_id,
         now=now or utcnow(),
         talk=talk,
+        permissions=permissions,
     )
 
 
@@ -1776,6 +1845,7 @@ def _shown(
     now: datetime,
     talk: Discussion | None = None,
     brief: bool = False,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> Card:
     # Срок считается только пока лот в игре. У завершённого «осталось 3 дня»
     # означало бы, что по нему ещё что-то нужно сделать.
@@ -1788,7 +1858,9 @@ def _shown(
     approve_left, approve_burning, approve_overdue = (
         time_left(approve_at, now) if card.status not in _FINAL else ("", False, False)
     )
-    signs = tuple(_sign(item, known, role=role) for item in _ordered(card.approvals))
+    signs = tuple(
+        _sign(item, known, role=role, permissions=permissions) for item in _ordered(card.approvals)
+    )
     open_tasks = sum(1 for task in card.tasks if task.state is TaskState.OPEN)
 
     return Card(
@@ -1833,7 +1905,7 @@ def _shown(
         approved=_all_signed(card),
         open_tasks=open_tasks,
         done_tasks=len(card.tasks) - open_tasks,
-        can=_can(card, role=role, user_id=user_id),
+        can=_can(card, role=role, user_id=user_id, permissions=permissions),
         # В списке обсуждение целиком не отдаётся: там оно не показывается, а
         # сотня вложенных объектов — это лишний вес ответа. Отметка отдела при
         # этом считается по нему же, и для неё оно и читалось.
@@ -1918,7 +1990,13 @@ def _ordered(approvals: Sequence[Approval]) -> list[Approval]:
     return sorted(approvals, key=lambda item: order.index(item.kind))
 
 
-def _sign(item: Approval, known: dict[uuid.UUID, str], *, role: Role) -> Sign:
+def _sign(
+    item: Approval,
+    known: dict[uuid.UUID, str],
+    *,
+    role: Role,
+    permissions: frozenset[Permission] = frozenset(),
+) -> Sign:
     return Sign(
         kind=item.kind.value,
         name=APPROVAL_NAMES[item.kind],
@@ -1928,16 +2006,27 @@ def _sign(item: Approval, known: dict[uuid.UUID, str], *, role: Role) -> Sign:
         by=(known.get(item.by_id) if item.by_id else None) or item.by_name,
         at=item.decided_at.isoformat() if item.decided_at else "",
         note=item.note,
-        can_sign=role in SIGNS[item.kind],
+        can_sign=role in SIGNS[item.kind] or _may(SIGN_RIGHTS[item.kind], permissions),
     )
 
 
-def _can(card: LotCard, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
-    """Что этому человеку доступно на этом шаге."""
+def _can(
+    card: LotCard,
+    *,
+    role: Role,
+    user_id: uuid.UUID,
+    permissions: frozenset[Permission] = frozenset(),
+) -> tuple[str, ...]:
+    """Что этому человеку доступно на этом шаге.
+
+    Считается по праву или по встроенной роли — по любому из двух. Список
+    собирается ровно теми же условиями, что стоят в службах: кнопка, которую
+    показали, а служба отвергла, — это человек, уверенный, что дело сделано.
+    """
     allowed = [
         status.value
         for status in TRANSITIONS[card.status]
-        if role in ALLOWED[status]
+        if (role in ALLOWED[status] or _may_move(status, permissions))
         # «Подачу» без всех подписей не предлагаем: кнопка, которая всегда
         # отвечает отказом, читается как поломка, а не как правило.
         and (status is not LotStatus.SUBMISSION or _all_signed(card))
@@ -1946,11 +2035,14 @@ def _can(card: LotCard, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
     # руководящее здесь не нужно, работу берут себе сами.
     if card.owner_id is None:
         allowed.append("claim")
-    if role in _DECIDES:
+    if role in _DECIDES or _may(Permission.DECIDE, permissions):
         allowed.append("decide")
-    if role in {Role.ADMIN, Role.MANAGER}:
+    # Назначение — только по праву, без оглядки на имя роли. Набор прав у
+    # встроенных ролей собран из того же списка `{админ, менеджер}`, поэтому им
+    # не меняется ничего, а своя роль получает ровно то, что ей выдали.
+    if _may(Permission.LOT_ASSIGN, permissions):
         allowed.append("assign")
-    if any(role in SIGNS[kind] for kind in ApprovalKind):
+    if any(role in SIGNS[kind] or _may(SIGN_RIGHTS[kind], permissions) for kind in ApprovalKind):
         allowed.append("sign")
     allowed.append("task")
     return tuple(allowed)

@@ -1855,3 +1855,121 @@ def test_fail_razdel_zadach_otvechaet_a_ne_prinimaet_za_lot(
     )
     assert закрыто.status_code == 200, закрыто.text
     assert закрыто.json()["state"] == "done"
+
+
+def test_fail_naznachenie_idyot_po_pravu_a_ne_po_imeni_roli(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Галочка «Поручать лот другому» должна работать.
+
+    До этого список кнопок собирался по имени встроенной роли, а у человека со
+    своей ролью встроенная часть — «Наблюдатель»: сколько прав ни выдай,
+    сравнение с ролью всегда отвечало «нельзя». Право при этом не спрашивал
+    никто, то есть выданная галочка не делала ровно ничего.
+    """
+    from platform_api.auth.permissions import BUILT_IN, Permission
+
+    card_id = _завести(db, org, кто)
+
+    # Своя роль: встроенная часть «Наблюдатель», но право выдано.
+    своя = cards.one(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        permissions=frozenset({Permission.CRM, Permission.LOT_ASSIGN}),
+    )
+    assert "assign" in своя.can
+
+    # Без права — кнопки нет, даже у той же роли.
+    без = cards.one(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        permissions=frozenset({Permission.CRM}),
+    )
+    assert "assign" not in без.can
+
+    # Встроенным ролям не меняется ничего: их наборы прав собраны из тех же
+    # списков, по которым шли прежние проверки.
+    for role in Role:
+        видно = cards.one(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=role,
+            user_id=кто,
+            permissions=BUILT_IN[role],
+        )
+        было = role in {Role.ADMIN, Role.MANAGER}
+        assert ("assign" in видно.can) is было, role
+
+
+def test_fail_svoya_rol_podpisyvaet_i_dvigaet_po_pravu(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Подпись и перевод лота тоже идут по праву, а не только по роли.
+
+    Иначе своя роль упирается в отказ на следующем же шаге: кнопку назначения
+    ей открыли, а перевести лот в работу она по-прежнему не может — и понять,
+    почему одна галочка сработала, а вторая нет, человеку нечем.
+    """
+    from platform_api.auth.permissions import Permission
+
+    card_id = _завести(db, org, кто)
+    права = frozenset({Permission.CRM, Permission.MOVE, Permission.SIGN_SUPPLY})
+
+    # Перевод в работу — по праву «двигать лот».
+    cards.move(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        to=LotStatus.WORK,
+        permissions=права,
+    )
+    assert _карточка(db, org).status is LotStatus.WORK
+
+    # Подпись снабжения — по своему праву.
+    cards.sign(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        kind=ApprovalKind.SUPPLY,
+        state=ApprovalState.APPROVED,
+        permissions=права,
+    )
+    подписи = {item.kind: item.state for item in _карточка(db, org).approvals}
+    assert подписи[ApprovalKind.SUPPLY] is ApprovalState.APPROVED
+
+    # Чужую подпись тем же правом не поставить: одна роль — одна подпись.
+    with pytest.raises(SpokenError):
+        cards.sign(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.VIEWER,
+            user_id=кто,
+            kind=ApprovalKind.LEGAL,
+            state=ApprovalState.APPROVED,
+            permissions=права,
+        )
+
+    # «Новый» — не шаг вперёд, а возврат лота в начало: он остаётся за
+    # менеджером и одним правом «двигать лот» не берётся.
+    with pytest.raises(SpokenError):
+        cards.move(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.VIEWER,
+            user_id=кто,
+            to=LotStatus.NEW,
+            permissions=права,
+        )

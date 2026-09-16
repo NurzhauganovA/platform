@@ -87,6 +87,12 @@ Guard = Annotated[None, requires_crm]
 # должности, и технолог со сборщиком должны видеть своё так же, как тендерщик.
 Errands = Annotated[None, Depends(requires(Permission.PAGE_TASKS))]
 
+# Смена менеджера и ведущего — своим правом, а не общим доступом к карточкам.
+# Раньше эндпоинт был закрыт только правом на карточки: кнопки у большинства
+# ролей не было, а запрос проходил у всех — то самое «спрятали кнопку и
+# оставили открытым эндпоинт», от которого предостерегает CLAUDE.md.
+Assigns = Annotated[None, Depends(requires(Permission.LOT_ASSIGN))]
+
 
 class SignOut(BaseModel):
     kind: str
@@ -459,6 +465,7 @@ def get_cards(
         organization_id=identity.organization.id,
         role=identity.role,
         user_id=identity.user.id,
+        permissions=identity.permissions,
         filters=cards.Filters(
             module=module,
             status=lot_status,
@@ -1433,6 +1440,7 @@ def post_move(
             user_id=identity.user.id,
             to=body.to,
             reason=body.reason,
+            permissions=identity.permissions,
         )
     )
     job_id = _start_discussion(request, db, identity, card, to=body.to)
@@ -1508,6 +1516,7 @@ def post_decide(
             participation=body.participation,
             reason=body.reason,
             user_id=identity.user.id,
+            permissions=identity.permissions,
         )
     )
     db.commit()
@@ -1532,6 +1541,7 @@ def post_sign(
             kind=body.kind,
             state=body.state,
             note=body.note,
+            permissions=identity.permissions,
         )
     )
     db.commit()
@@ -1628,7 +1638,13 @@ def post_assign(
     identity: CurrentUser,
     db: Db,
     _guard: Guard = None,
+    _assigns: Assigns = None,
 ) -> CardOut:
+    """Меняет менеджера и ведущего.
+
+    Право отдельное: раздавать работу — решение руководящее, и оно не должно
+    доставаться заодно с доступом к карточке лота.
+    """
     _act(
         lambda: cards.assign(
             db,
@@ -2035,6 +2051,7 @@ def _one(db: Db, identity: CurrentUser, card_id: uuid.UUID) -> cards.Card:
             card_id=card_id,
             role=identity.role,
             user_id=identity.user.id,
+            permissions=identity.permissions,
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
