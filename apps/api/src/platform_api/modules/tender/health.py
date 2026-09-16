@@ -43,6 +43,19 @@ def check() -> dict[str, Any]:
             "Ядро работает с файлом SQLite, а не с общей базой — задайте TENDER__DB__URL"
         )
 
+    # Перечни кодов с казахстанским производителем. Молчать об их пропаже
+    # нельзя: без них раздел не ломается, а просто перестаёт отмечать коды —
+    # ни ошибки, ни строки в журнале. Заметить это можно только по тому, что
+    # красного на экране нет, а такого повода зайти ни у кого не возникает.
+    # Не доехавший в образ файл выглядит ровно так же, как «сегодня красить
+    # нечего».
+    domestic = len(getattr(settings, "domestic", ()))
+    if not domestic:
+        problems.append(
+            "Перечни кодов с казахстанским производителем не прочитаны — "
+            "коды ЕНС в отборе не отмечаются"
+        )
+
     return {
         "ok": not problems,
         "core_version": core_version(),
@@ -50,6 +63,7 @@ def check() -> dict[str, Any]:
         "provider": provider,
         "model_access": model_access,
         "companies_configured": len(configured),
+        "domestic_codes": domestic,
         "problems": tuple(problems),
     }
 

@@ -68,6 +68,31 @@ def build_detail(item: RankedRow, pick: str = "") -> Detail:
     )
 
 
+def _ens(row: Any) -> Any:
+    """Код ЕНС ТРУ и почему он покрашен.
+
+    В списке ячейка с кодом заливается красным, и больше этот цвет нигде не
+    объяснён: ни значка, ни подписи в легенде — легенда там про вердикт
+    строки. Человек видел красное и шёл спрашивать, что оно значит.
+
+    Оговорка стоит здесь, потому что сюда и приходят за объяснением: разбор
+    открывают ровно тогда, когда в строке что-то непонятно.
+    """
+    from platform_api.modules.tender.worklist import is_domestic
+
+    if not is_domestic(row):
+        return text_field("ЕНС ТРУ", row.ens_code)
+    return text_field(
+        "ЕНС ТРУ",
+        row.ens_code,
+        tone="critical",
+        note=(
+            "Есть казахстанский производитель: код в перечне Минпрома или "
+            "в перечне Электронного магазина. Закупка пойдёт по своим правилам"
+        ),
+    )
+
+
 def _about(row: Any) -> Section:
     return Section(
         title="Закупка",
@@ -76,7 +101,7 @@ def _about(row: Any) -> Section:
             text_field("Предмет", row.subject),
             text_field("Категория", row.category),
             text_field("Количество", _plain(row.quantity)),
-            text_field("ЕНС ТРУ", row.ens_code),
+            _ens(row),
             text_field("Признак закупки", row.kind),
             text_field("Способ закупки", row.method),
             text_field("Дата закупки", row.date),

@@ -2193,3 +2193,53 @@ def test_fail_stroka_chuzhogo_plana_zakupok_ne_popadayet() -> None:
     assert "Насос ЦНС-60 · 281314" in текст
     assert "Кран шаровой" not in текст
     assert "Напор · 150 м" in текст
+
+
+def test_fail_krasnyy_kod_obyasnyaetsya_v_razbore(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Цвет ячейки объяснён словами там, куда за объяснением приходят.
+
+    В списке код просто красный: значка у него нет, а легенда над таблицей —
+    про вердикт строки. Единственное место, где можно спросить «почему», это
+    разбор, и до сих пор код лежал там обычным полем.
+    """
+    import platform_api.modules.tender.detail as detail
+    import platform_api.modules.tender.worklist as worklist
+
+    row = SimpleNamespace(ens_code="281314.900.000076")
+
+    monkeypatch.setattr(worklist, "is_domestic", lambda _row: True)
+    отмечен = detail._ens(row)
+    assert отмечен.tone == "critical"
+    assert "казахстанский производитель" in отмечен.note
+    assert отмечен.text == "281314.900.000076"
+
+    monkeypatch.setattr(worklist, "is_domestic", lambda _row: False)
+    обычный = detail._ens(row)
+    assert обычный.tone == "" and обычный.note == ""
+
+
+def test_fail_oba_perechnya_krasyat_kod() -> None:
+    """Перечни складываются, а не подменяют друг друга.
+
+    Приказ Минпрома и книга Электронного магазина совпадают меньше чем
+    наполовину: из трёх с половиной тысяч кодов министерства в книге красными
+    помечены полторы. Взять один из них означало бы оставить без пометки
+    закупку с живым казахстанским поставщиком.
+
+    Множество собирает ядро — здесь проверяется, что платформа берёт именно
+    объединение, а не первый попавшийся перечень.
+    """
+    from platform_api.modules.tender.core import core_settings
+    from tender_analyze.infrastructure.fs.domestic import domestic_codes
+
+    settings = core_settings()
+    из_приказа = set(domestic_codes(settings.domestic_file))
+    из_книги = set(domestic_codes(settings.ktp_file))
+    if not из_приказа or not из_книги:
+        pytest.skip("Перечни не разложены рядом с ядром — проверять нечего")
+
+    весь = set(settings.domestic)
+    assert из_приказа <= весь
+    assert из_книги <= весь
+    # И они действительно разные: иначе объединение не имело бы смысла.
+    assert из_приказа != из_книги
