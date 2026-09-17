@@ -35,7 +35,9 @@ export type Purge = {
 export type Fetched = {
   number: string;
   /** Чем нашли: по номеру лота или по номеру объявления. Пусто — не нашли. */
-  by?: "lot" | "announce" | "";
+  /** Чем нашли: по номеру лота, по номеру объявления, `empty` — объявление
+   *  есть, но лотов портал по нему не публикует, пусто — не нашли вовсе. */
+  by?: "lot" | "announce" | "empty" | "";
   found: number;
   added?: number;
   updated?: number;

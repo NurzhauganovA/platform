@@ -23,12 +23,14 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMutation } from "@tanstack/react-query";
 import { goszakup, type Fetched } from "@/api/goszakup";
+import { useSearchParams } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { useJobStream } from "@/api/jobs";
 import { Button, Input, Spinner, cx } from "@/ui";
 
 export function FetchByNumber() {
   const cache = useQueryClient();
+  const [params, setParams] = useSearchParams();
   const [number, setNumber] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const [trouble, setTrouble] = useState("");
@@ -38,6 +40,7 @@ export function FetchByNumber() {
     // Список карточек перечитываем: найденное уже взято в работу и должно
     // появиться здесь же, без перезагрузки страницы.
     void cache.invalidateQueries({ queryKey: ["cards"] });
+    void cache.invalidateQueries({ queryKey: ["worklist"] });
   });
   const going =
     run === null ? jobId !== null : ["queued", "running"].includes(run.status);
@@ -45,8 +48,17 @@ export function FetchByNumber() {
   // Итог снимается с прогона, а не запрашивается отдельно: он уже пришёл в
   // последнем событии потока.
   if (run?.status === "succeeded" && run.result && !done) {
-    setDone(run.result as unknown as Fetched);
+    const итог = run.result as unknown as Fetched;
+    setDone(итог);
     setNumber("");
+    // Найденное сразу ставим в поиск этого же списка: человек искал одну
+    // закупку и должен увидеть её, а не пролистывать тысячу строк в поисках
+    // той, которую только что завёл.
+    if (итог.found > 0 && params.get("q") !== итог.number) {
+      const next = new URLSearchParams(params);
+      next.set("q", итог.number);
+      setParams(next, { replace: true });
+    }
   }
 
   const start = useMutation({
@@ -104,9 +116,14 @@ export function FetchByNumber() {
             done.found === 0 ? "text-ink-muted" : "text-good",
           )}
         >
-          {done.found === 0
-            ? `Портал не знает закупки «${done.number}». Проверьте номер: он есть в письме и в карточке на портале.`
-            : `Нашли ${done.found} и взяли в работу: ${done.codes.join(", ")}`}
+          {/* Три ответа, а не два. «Объявление есть, лотов нет» отправляло
+              человека искать опечатку в номере, который он только что
+              скопировал с портала. */}
+          {done.found > 0
+            ? `Нашли ${done.found} и взяли в работу: ${done.codes.join(", ")}`
+            : done.by === "empty"
+              ? `Объявление «${done.number}» на портале есть, но лотов по нему не публикуют. Открывать нечего — посмотрите закупку на самом портале.`
+              : `Портал не знает закупки «${done.number}». Проверьте номер: он есть в письме и в карточке на портале.`}
         </p>
       )}
 

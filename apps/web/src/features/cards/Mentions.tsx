@@ -97,7 +97,10 @@ export function Highlighted({
 }) {
   const labels = useMemo(
     () =>
-      [...people.map((one) => one.name.trim()).filter(Boolean), ...EVERYONE_WORDS]
+      [
+        ...people.map((one) => one.name.trim()).filter(Boolean),
+        ...EVERYONE_WORDS,
+      ]
         // Длинные вперёд: иначе «@Айша» подсветится внутри «@Айша Тлеубаева»
         // и оставит фамилию простым текстом.
         .sort((a, b) => b.length - a.length),
@@ -183,7 +186,11 @@ export function MentionBox({
     const tail = before.slice(found + 1);
     // Пробел разрешён один: имена у нас из двух слов, а на третьем это уже
     // предложение, в котором собачка осталась от прошлой мысли.
-    if (tail.length > TAIL || /\n/.test(tail) || (tail.match(/ /g) ?? []).length > 1) {
+    if (
+      tail.length > TAIL ||
+      /\n/.test(tail) ||
+      (tail.match(/ /g) ?? []).length > 1
+    ) {
       return setQuery(null);
     }
     setQuery({ at: found, text: tail });

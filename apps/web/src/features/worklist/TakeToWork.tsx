@@ -18,6 +18,12 @@ import { useNavigate } from "react-router-dom";
 import { cardsApi, type Card } from "@/api/cards";
 import { Button } from "@/ui";
 
+/** Кто ведёт лот — «Поставка». Она же считает себестоимость: у нас это один
+ *  человек, и в строке показывают именно его. */
+function lead(card: Card): string {
+  return card.seats.find((place) => place.desk === "analysis")?.name ?? "";
+}
+
 export function TakeToWork({
   module,
   rowId,
@@ -77,9 +83,7 @@ export function TakeToWork({
         variant="secondary"
         onClick={() => navigate(`/work/lots/${already.id}`)}
         title={`Лот в работе, ${already.status_name.toLowerCase()}. ${
-          already.owner
-            ? `Сейчас у ${already.owner}`
-            : "Ответственный не назначен"
+          lead(already) ? `Сейчас у ${lead(already)}` : "Поставка ещё не занята"
         }${already.open_tasks > 0 ? `, открытых задач ${already.open_tasks}` : ""}`}
       >
         В работе · {already.status_name}

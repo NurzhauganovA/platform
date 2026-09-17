@@ -73,7 +73,7 @@ def analyzed_case(
     # ядра доходит до него — и ни база разбора, ни диск не участвуют.
     monkeypatch.setattr(core, "build_case_view", lambda _row: FakeView())
     # Находки читаются из базы ядра — в этих тестах она не участвует.
-    monkeypatch.setattr(comparison, "_market", lambda _view: None)
+    monkeypatch.setattr(comparison, "_market", lambda _view, **_: None)
     return None
 
 

@@ -30,6 +30,7 @@ import type { Card } from "@/api/cards";
 import { Button, Card as Panel, EmptyState, Spinner, cx } from "@/ui";
 import { BarHead, BarTitle, Chip, Note, Passed, stamp } from "./kit";
 import { Marked, RichText } from "./RichText";
+import { RemarkHistory } from "./RemarkHistory";
 import { SpecHint } from "./SpecHint";
 
 /**
@@ -362,6 +363,10 @@ export function Discussion({ card }: { card: Card }) {
             экрана. */}
         <SpecHint card={card} />
       </Panel>
+
+      {/* Хронология — под самим замечанием: открывают её тогда, когда текст
+          уже прочитан и надо понять, как он таким стал. */}
+      <RemarkHistory remarkId={data.id} />
 
       {data.answer && (
         <Panel className="overflow-hidden">

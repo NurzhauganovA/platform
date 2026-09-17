@@ -62,6 +62,7 @@ export function WorklistPage({
   subtitle,
   unit,
   emptyHint = "Данных пока нет.",
+  extra,
 }: {
   slug: WorklistSlug;
   title: string;
@@ -71,6 +72,10 @@ export function WorklistPage({
   /** Что делать, если список пуст, а кнопки «Обновить» в разделе нет. Знает
    *  это только сам раздел: общий экран не должен упоминать чужие команды. */
   emptyHint?: string;
+
+  /** Блок над таблицей — своё у раздела. У портала это выборка закупки по
+   *  номеру: искать её надо там же, где потом смотрят результат. */
+  extra?: React.ReactNode;
 }) {
   const client = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -291,6 +296,8 @@ export function WorklistPage({
       />
 
       <Page>
+        {extra}
+
         {job && running && (
           <Card className="px-5 py-3.5">
             <div className="flex items-center justify-between gap-4">

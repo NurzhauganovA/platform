@@ -164,10 +164,7 @@ function Stages({ stages }: { stages: Stage[] }) {
       <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-x-[18px] gap-y-3 px-[15px] py-3.5">
         {stages.map((stage, index) => (
           <div key={`${stage.status}-${index}`} className="min-w-0">
-            <span
-              aria-hidden
-              className="block h-[3px] rounded-sm bg-hairline"
-            >
+            <span aria-hidden className="block h-[3px] rounded-sm bg-hairline">
               <span
                 className={cx(
                   "block h-full rounded-sm bg-series-1",

@@ -1015,9 +1015,6 @@ class LotStatus(StrEnum):
     и сортировка списка.
     """
 
-    NEW = "new"
-    """Появился в выгрузке, никто не смотрел."""
-
     WORK = "work"
     """В работе. Внутри — обсуждение, разбор, юрист, технолог, снабжение: они
     идут параллельно, и очередь между ними задают задачи, а не статус."""
@@ -1043,16 +1040,45 @@ class LotOutcome(StrEnum):
     проигранный были взаимоисключающими состояниями, хотя проигранный лот
     завершён ровно так же, как выигранный.
 
-    Пустой итог — это не «неизвестно», а «не участвовали»: заявку не подали,
-    протокола по нам нет. Такие лоты нужны в отчётах отдельно от проигранных:
-    первые мы пропустили сами, вторые проиграли по цене.
+    Причин закончить закупку больше, чем две. «Проиграли» и «не участвуем» —
+    разные вещи, и «не успели подать» отличается от обеих: в первом случае мы
+    считали и проиграли по цене, во втором отказались сами, в третьем просто
+    не успели. Пока всё это лежало одним «пустым итогом», отчёт отвечал на
+    вопрос «почему прошли мимо» одним словом на все случаи.
     """
 
     NONE = "none"
-    """Не участвовали. Протокола по нам нет."""
+    """Итога нет: протокол не пришёл, а лот ещё идёт.
+
+    Не «не участвовали» — для этого есть `SKIPPED`. Пустой итог у идущего лота
+    и осознанный отказ от участия — разные ответы, и путать их значит считать
+    в отчёте отказы вместе с незаконченным."""
 
     WON = "won"
+    """Выиграли. Цена, с которой выиграли, — в `won_amount`."""
+
     LOST = "lost"
+    """Проиграли. Победитель и его цена — в `winner` и `won_amount`."""
+
+    NOT_SUBMITTED = "not_submitted"
+    """Не успели подать: срок приёма истёк, заявки не было.
+
+    Ставится прогоном, а не человеком. Признать вслух, что лот упустили, не
+    успевает никто — до сих пор такие закупки оставались «в работе» месяцами и
+    висели в списке живыми, а на планёрке о них не спрашивали."""
+
+    NOT_LIQUID = "not_liquid"
+    """Не ликвидный тендер: браться невыгодно."""
+
+    WRONG_CODE = "wrong_code"
+    """Код ТРУ не подходит: закупка не нашего профиля."""
+
+    CANCELLED = "cancelled"
+    """Тендер отменён заказчиком."""
+
+    SKIPPED = "skipped"
+    """Не участвуем. Причина обязательна: вопрос «почему прошли мимо»
+    задают через месяц, и отвечать на него некому."""
 
 
 class Participation(StrEnum):
@@ -1125,7 +1151,10 @@ class LotCard(Base, UUIDPrimaryKey, Timestamps):
     __table_args__ = (
         UniqueConstraint("module", "row_id", name="card_on_row"),
         Index("card_status", "organization_id", "status"),
-        Index("card_owner", "owner_id", "status"),
+        # Кто чем занимается — теперь в `lot_seats`, и указатель там же
+        # (`lot_seat_user`). Здесь остался тот, кто лот завёл: по нему идёт
+        # отбор «мои» вместе с местами отделов.
+        Index("card_taken_by", "taken_by_id", "status"),
         Index("card_deadline", "deadline"),
     )
 
@@ -1161,10 +1190,12 @@ class LotCard(Base, UUIDPrimaryKey, Timestamps):
     сортируется всё, что показывают человеку."""
 
     status: Mapped[LotStatus] = mapped_column(
-        Enum(LotStatus, native_enum=False, length=24), default=LotStatus.NEW, index=True
+        Enum(LotStatus, native_enum=False, length=24), default=LotStatus.WORK, index=True
     )
     outcome: Mapped[LotOutcome] = mapped_column(
-        Enum(LotOutcome, native_enum=False, length=8),
+        # Длина под самое длинное имя: `NOT_SUBMITTED` — тринадцать знаков.
+        # `native_enum=False` пишет в колонку ИМЯ члена заглавными.
+        Enum(LotOutcome, native_enum=False, length=24),
         default=LotOutcome.NONE,
         # Имя члена, а не значение: `native_enum=False` пишет в колонку имя
         # («NONE»), и умолчание значением разошлось бы с тем, что кладёт код.
@@ -1182,16 +1213,20 @@ class LotCard(Base, UUIDPrimaryKey, Timestamps):
     )
     skip_reason: Mapped[str] = mapped_column(Text, default="")
 
-    manager_id: Mapped[uuid.UUID | None] = mapped_column(
+    taken_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    """Менеджер поставки: отвечает за лот целиком, от объявления до оплаты."""
+    taken_by_name: Mapped[str] = mapped_column(String(255), default="")
+    """Кто взял закупку в работу. Ставится один раз и не переписывается.
 
-    owner_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    """У кого лот прямо сейчас. Меняется по ходу: обсуждение у юриста, разбор у
-    тендерщика, поиск у снабжения. Менеджер при этом остаётся тот же."""
+    Раньше этот человек молча становился менеджером, и первое же назначение его
+    затирало: узнать, кто завёл лот, можно было только в ленте событий. А
+    спрашивают об этом каждый раз, когда выясняется, что лот вообще не стоило
+    брать.
+
+    Имя копией рядом: сотрудник увольняется, запись обнуляется, а ответ на
+    вопрос «кто это завёл» должен остаться.
+    """
 
     note: Mapped[str] = mapped_column(Text, default="")
 
@@ -1222,6 +1257,12 @@ class LotCard(Base, UUIDPrimaryKey, Timestamps):
     tasks: Mapped[list[Task]] = relationship(
         back_populates="card", cascade="all, delete-orphan", lazy="selectin"
     )
+    seats: Mapped[list[LotSeat]] = relationship(
+        back_populates="card", cascade="all, delete-orphan", lazy="selectin"
+    )
+    """Пять отделов и кто в них. Читается вместе с карточкой: по запросу на
+    отдел список из сотни лотов стоил бы пятисот обращений к базе."""
+
     approvals: Mapped[list[Approval]] = relationship(
         back_populates="card", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -1313,6 +1354,48 @@ class Task(Base, UUIDPrimaryKey, Timestamps):
     месяц неотличима от брошенной."""
 
     card: Mapped[LotCard] = relationship(back_populates="tasks")
+
+
+class LotSeat(Base, UUIDPrimaryKey, Timestamps):
+    """Кто занимается лотом от своего отдела.
+
+    Пять строк на лот: поставка, обсуждение, юрист, снабжение, технолог. Вместо
+    прежних двух полей «менеджер» и «ведёт лот», которые отвечали на вопрос
+    «кто за это отвечает» одним именем на всю закупку: на планёрке спрашивают
+    не «чей лот», а «кто по нему юрист» — и до сих пор ответом было открывание
+    задач по одной.
+
+    Строками, а не пятью колонками в карточке — по той же причине, что и
+    подписи (`Approval`): у назначения есть время, есть имя копией и есть
+    признак «поставлено правилом, а не человеком», и поле их не вмещает. А
+    шестой отдел появится правкой одного справочника, без миграции.
+
+    Строки заводятся сразу пустыми при взятии лота в работу: иначе «строки
+    нет» и «строка пуста» разъезжаются, и каждому читателю приходится доливать
+    недостающие.
+    """
+
+    __tablename__ = "lot_seats"
+    __table_args__ = (
+        UniqueConstraint("card_id", "desk", name="lot_seat_desk"),
+        Index("lot_seat_user", "user_id", "desk"),
+    )
+
+    card_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("lot_cards.id", ondelete="CASCADE"), index=True
+    )
+    desk: Mapped[Department] = mapped_column(Enum(Department, native_enum=False, length=16))
+
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    by_name: Mapped[str] = mapped_column(String(255), default="")
+    """Имя копией: сотрудник увольняется, ссылка обнуляется, а кто вёл лот
+    полгода назад — вопрос, который задают именно тогда."""
+
+    taken_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    card: Mapped[LotCard] = relationship(back_populates="seats")
 
 
 class Approval(Base, UUIDPrimaryKey, Timestamps):
@@ -1418,6 +1501,58 @@ class LotEvent(Base, UUIDPrimaryKey, Timestamps):
     """Откуда и куда перевели. Отдельными полями, а не разбором `title`:
     по ним считается, сколько лот простоял на каждом этапе и у кого. Разбирать
     ради этого готовую строку значит сломаться на первой же правке слов."""
+
+
+class RemarkEvent(Base, UUIDPrimaryKey, Timestamps):
+    """Что делали с замечанием заказчику и кто.
+
+    Своей таблицей, потому что собрать это из самого замечания нельзя. В
+    `discussions` хранятся только последние значения: кто правил последним,
+    когда модель писала последний раз, когда отправили. Кем отправлено — не
+    хранится вовсе, а текст модели затирается при каждом перезапуске прогона.
+
+    Отдельно от ленты лота (`LotEvent`), хотя устроена так же. Замечание живёт
+    своей жизнью: его заводят по строке списка, где карточки лота может ещё не
+    быть, и привязывать его к карточке значит терять половину истории у тех
+    закупок, которые в работу так и не взяли.
+
+    Запись не редактируется и не удаляется. Хронологию, которую можно
+    поправить, незачем и заводить: её открывают ровно тогда, когда пришёл
+    отказ и надо понять, что именно ушло заказчику.
+    """
+
+    __tablename__ = "remark_events"
+    __table_args__ = (Index("remark_event_at", "discussion_id", "created_at"),)
+
+    discussion_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("discussions.id", ondelete="CASCADE"), index=True
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_name: Mapped[str] = mapped_column(String(255), default="")
+    """Имя на момент действия, копией: ссылка при удалении сотрудника
+    обнуляется, а «кто это написал» спрашивают через полгода."""
+
+    actor_role: Mapped[str] = mapped_column(String(64), default="")
+    """Роль на момент действия — как её видит человек: «Обсуждение», «Юрист».
+    Своя роль сюда попадает своим названием, а не встроенной частью: в ленте
+    «Наблюдатель» вместо «Обсуждение» — это неверный ответ на вопрос «кто»."""
+
+    by_machine: Mapped[bool] = mapped_column(default=False, server_default="false")
+    """Написано моделью. Без признака в ленте не отличить её от человека, а
+    это первое, что спрашивают: «это мы так написали или она?»"""
+
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    """`written`, `edited`, `moved`, `sent`, `answered`, `failed`."""
+
+    title: Mapped[str] = mapped_column(String(255), default="")
+    """Что произошло, готовой строкой: «Передал юристам»."""
+
+    detail: Mapped[str] = mapped_column(Text, default="")
+    """Что написали или чем кончилось. Хранится обрезанным: лента читается
+    целиком, и замечание на три тысячи знаков в ней — это не хронология, а
+    второй экземпляр текста."""
 
 
 class LotFolder(Base, UUIDPrimaryKey, Timestamps):

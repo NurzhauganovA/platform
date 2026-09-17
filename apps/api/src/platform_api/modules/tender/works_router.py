@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from platform_api.auth.dependencies import CurrentUser, Db, requires_read
 from platform_api.auth.permissions import Permission
 from platform_api.db.base import utcnow
-from platform_api.db.models import Role, TenderWork, TenderWorkOption, WorkStage
+from platform_api.db.models import TenderWork, TenderWorkOption, WorkStage
 from platform_api.errors import SpokenError, unavailable
 from platform_api.modules.schemas import (
     DetailField,
@@ -73,7 +73,7 @@ def list_works(
             waiting_days=_waiting(work),
         )
         for work in rows
-        if works.visible_for(work, identity.role)
+        if works.visible_for(work, identity.permissions)
     ]
 
 
@@ -248,7 +248,10 @@ def remove_work(
     сохранённая работа заняла бы его код и заставила выяснять, какая из двух
     настоящая.
     """
-    if identity.role is not Role.ADMIN:
+    # По праву, а не по имени роли: у человека со своей ролью встроенная
+    # часть — «Наблюдатель», и кнопка на экране (она уже спрашивает право)
+    # показывалась бы, а запрос отвечал отказом.
+    if not identity.can(Permission.ADMIN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Убрать лот из работы может только администратор",
@@ -293,7 +296,9 @@ def edit_note(
     объяснять приходится позицию — в общем это теряется.
     """
     work = _mine(db, identity, work_id)
-    if not works.visible_for(work, identity.role) or not _at_desk(work, identity.permissions):
+    if not works.visible_for(work, identity.permissions) or not _at_desk(
+        work, identity.permissions
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Писать заметку может тот отдел, у которого лот",
@@ -414,7 +419,7 @@ def _mine(db: Db, identity: Any, work_id: uuid.UUID) -> TenderWork:
         work = works.one(db, identity.organization.id, work_id)
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    if not works.visible_for(work, identity.role):
+    if not works.visible_for(work, identity.permissions):
         # Не 403: иначе по коду ответа перебирается, какие лоты существуют.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Такой работы нет")
     return work

@@ -2244,3 +2244,42 @@ def test_fail_oba_perechnya_krasyat_kod() -> None:
     assert из_книги <= весь
     # И они действительно разные: иначе объединение не имело бы смысла.
     assert из_приказа != из_книги
+
+
+def test_fail_kto_vidit_dengi_tot_vidit_i_svoi_loty() -> None:
+    """Видимость лота и видимость цифр считаются одним правилом.
+
+    Пока видимость сверялась с именем роли, а суммы отдавались по праву,
+    условия разъехались: менеджер проходил проверку на числа, заводил лот в
+    работу — и не находил его в списке, потому что видимость по-прежнему
+    считала его снабжением. Кнопка есть, лот заведён, открыть нельзя.
+    """
+    from types import SimpleNamespace
+
+    from platform_api.auth.permissions import BUILT_IN
+    from platform_api.db.models import Role, WorkStage
+    from platform_api.modules.table import sees_money
+    from platform_api.modules.tender.works import visible_for
+
+    for этап in WorkStage:
+        for role in Role:
+            права = BUILT_IN[role]
+            видно = visible_for(SimpleNamespace(stage=этап), права)
+            ждём = sees_money(права) or этап is WorkStage.SUPPLY
+            assert видно is ждём, f"{role} на этапе {этап}"
+
+
+def test_fail_platnyy_progon_po_pravu_rashoda(db: Any, app_client: Any) -> None:
+    """Обновление площадки зовёт модель только тому, кто вправе тратить.
+
+    Право «Себестоимость и маржа» говорит, что человеку показывают цифры, а не
+    что он может их заказывать. Руководителю деньги видно, а кнопка, которая
+    молча запускает платный прогон, — не его.
+    """
+    from platform_api.auth.permissions import BUILT_IN, Permission
+    from platform_api.db.models import Role
+
+    тратят = {role for role in Role if Permission.SHEET_BUILD in BUILT_IN[role]}
+    видят = {role for role in Role if Permission.MONEY in BUILT_IN[role]}
+    assert тратят < видят, "право расхода должно быть уже права видеть"
+    assert Role.HEAD not in тратят and Role.COMMERCIAL not in тратят

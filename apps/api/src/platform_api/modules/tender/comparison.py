@@ -21,7 +21,6 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_sourcing
-from platform_api.db.models import Role
 from platform_api.logging import get_logger
 from platform_api.modules.tender.models import TenderCaseRow
 
@@ -180,6 +179,7 @@ def get_comparison(
     if case is None or case.organization_id != identity.organization.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Закупка не найдена")
 
+    from platform_api.modules.table import sees_money
     from platform_api.modules.tender.core import build_case_view
 
     view = build_case_view(case)
@@ -193,7 +193,12 @@ def get_comparison(
 
     # Деньги видят те, кто за них отвечает. Закупщику и наблюдателю сюда
     # нельзя: себестоимость и маржа для их работы не нужны.
-    with_money = identity.role in (Role.ADMIN, Role.ANALYST)
+    # По праву, а не по имени роли. Иначе расходится трижды: у своей роли
+    # встроенная часть «Наблюдатель» и деньги пропадают при выданном праве;
+    # у менеджера и руководителя, которым цифры в отборе показывают, здесь
+    # стоял бы пустой разбор; а у тендерщика, которому администратор право
+    # снял накладкой, деньги продолжали бы приходить.
+    with_money = sees_money(identity.permissions)
     return _to_out(case, view, with_money=with_money)
 
 
@@ -259,7 +264,7 @@ def _to_out(case: TenderCaseRow, view: Any, *, with_money: bool) -> ComparisonOu
             )
             for item in view.case.requested
         ],
-        market=_market(view),
+        market=_market(view, with_money=with_money),
         subject=view.case.subject or case.subject or None,
         customer=(view.case.customer.name if view.case.customer else None) or case.customer or None,
         documents=len(view.case.documents),
@@ -273,11 +278,16 @@ def _to_out(case: TenderCaseRow, view: Any, *, with_money: bool) -> ComparisonOu
     )
 
 
-def _market(view: Any) -> MarketOut | None:
+def _market(view: Any, *, with_money: bool) -> MarketOut | None:
     """Находки прошлого поиска по этой закупке.
 
     Читаются из базы ядра: поиск платный, и его результат нужен потом — при
     сборке КП и при звонке поставщику, а не только в момент выполнения.
+
+    Маржа и себестоимость гасятся тем же признаком, что и решение модели. Сам
+    список находок остаётся: закупщику он и нужен — где взять, почём у
+    поставщика, за сколько дней. А вот наш заработок на этой позиции — уже не
+    его сведения, и до сих пор он приходил в ответе всегда.
     """
     from pydantic import ValidationError
     from tender_analyze.application.case_analysis import case_fingerprint
@@ -317,7 +327,6 @@ def _market(view: Any) -> MarketOut | None:
                 supplier=finding.supplier,
                 title=finding.title or "",
                 price_kzt=_float(finding.price_kzt),
-                landed_cost=_float(item.landed_cost),
                 unit=finding.unit,
                 delivery_days=finding.delivery_days,
                 min_order=finding.min_order,
@@ -325,8 +334,9 @@ def _market(view: Any) -> MarketOut | None:
                 contact=finding.contact,
                 matches_spec=finding.matches_spec,
                 match_note=finding.match_note or "",
-                margin_percent=_float(item.margin_percent),
-                margin_total=_float(item.margin_total),
+                landed_cost=_float(item.landed_cost) if with_money else None,
+                margin_percent=_float(item.margin_percent) if with_money else None,
+                margin_total=_float(item.margin_total) if with_money else None,
             )
         )
 
@@ -334,7 +344,11 @@ def _market(view: Any) -> MarketOut | None:
     return MarketOut(
         searched=True,
         findings=findings,
-        total_margin=float(sum(item.margin_total for item in opportunities if item.is_viable)),
+        total_margin=(
+            float(sum(item.margin_total for item in opportunities if item.is_viable))
+            if with_money
+            else None
+        ),
         by_country=by_country,
     )
 

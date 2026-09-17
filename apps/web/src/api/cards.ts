@@ -19,7 +19,7 @@ import type { Message, Preview } from "@/api/worklist";
  * пишет замечание, а снабжение уже ищет товар.
  */
 export type LotStatus =
-  "new" | "work" | "approval" | "submission" | "waiting" | "done";
+  "work" | "approval" | "submission" | "waiting" | "done";
 
 /**
  * Чем кончилась закупка по протоколу итогов.
@@ -37,16 +37,31 @@ export type TalkStage =
   "" | "none" | "running" | "sent" | "accepted" | "rejected" | "not_needed";
 
 /** Одна кнопка второго ряда отбора. */
-export type Pick = {
+export type Choice = {
   key: string;
   title: string;
   hint: string;
+  /** Какое поле строки сравнивать. Объявляет сервер: вторая такая таблица в
+   *  браузере разошлась бы с первой молча. */
+  field: "stage" | "talk_stage" | "desk_stage" | "outcome";
+  /** `in` — делит свою кнопку; `all` — ищет по всему списку «В работе». */
+  scope: "in" | "all";
   /** Из каких подстатусов состоит. Пусто — кнопка сама по себе. */
   of: string[];
+  /** Итог, который нельзя поставить молча: нужна причина. */
+  needs_reason?: boolean;
 };
 
-/** Две независимые оси отбора внутри «В работе». */
-export type Stages = { talk: Pick[]; desk: Pick[] };
+/** Кнопка верхнего ряда со своими подпунктами. */
+export type Group = {
+  key: string;
+  title: string;
+  hint: string;
+  subs: Choice[];
+};
+
+/** Ряды отбора: под «В работе» и под «Завершёнными». */
+export type Stages = { work: Group[]; done: Choice[] };
 
 /** Где лот по отделам внутри «В работе». */
 export type DeskStage =
@@ -68,6 +83,17 @@ export type ApprovalKind =
 export type ApprovalState = "waiting" | "approved" | "rejected";
 
 export type TaskState = "open" | "done" | "cancelled";
+
+/** Строка отдела в карточке: кто им занимается. */
+export type Seat = {
+  desk: Department;
+  title: string;
+  name: string;
+  user_id: string;
+  taken_at: string;
+  /** Что можно нажать: `take` — сесть самому, `assign` — посадить другого. */
+  can: string[];
+};
 
 export type Sign = {
   kind: ApprovalKind;
@@ -102,10 +128,12 @@ export type Card = {
   outcome: LotOutcome;
   outcome_name: string;
 
-  manager: string;
-  manager_id: string;
-  owner: string;
-  owner_id: string;
+  /** Кто взял закупку в работу. Ставится один раз и не переписывается. */
+  taken_by: string;
+  taken_by_id: string;
+
+  /** Пять отделов и кто в них. */
+  seats: Seat[];
 
   deadline: string;
   left: string;
@@ -153,6 +181,10 @@ export type Card = {
   discussion: Talk | null;
   /** Ход по отделам: четыре точки в строке списка и галочки в карточке. */
   desks: Desk[];
+
+  /** Где сейчас мяч: лот попадает ровно в одну кнопку верхнего ряда. */
+  stage: string;
+  stage_name: string;
 
   /** Где обсуждение по лоту. Считает сервер: исход заказчика в браузер иначе
    *  не приезжает, и «отправлено» от «отклонили» отличить нечем. */
@@ -378,6 +410,16 @@ export const cardsApi = {
   move: (id: string, to: LotStatus, reason = "") =>
     api.post<Card>(`/api/cards/${id}/move`, { to, reason }),
 
+  /**
+   * Закрывает лот без подачи: не участвуем, отменён, не тот код.
+   *
+   * Отдельно от «Записать итоги»: тот требует поданной заявки, а здесь её как
+   * раз и не было — требовать её значило бы не дать закрыть лот, мимо
+   * которого прошли.
+   */
+  finish: (id: string, outcome: string, reason: string) =>
+    api.post<Card>(`/api/cards/${id}/finish`, { outcome, reason }),
+
   decide: (id: string, participation: Participation, reason = "") =>
     api.post<Card>(`/api/cards/${id}/decide`, { participation, reason }),
 
@@ -387,10 +429,8 @@ export const cardsApi = {
   assign: (
     id: string,
     body: {
-      manager_id?: string | null;
-      owner_id?: string | null;
-      change_manager?: boolean;
-      change_owner?: boolean;
+      desk: Department;
+      user_id?: string | null;
     },
   ) => api.post<Card>(`/api/cards/${id}/assign`, body),
 
@@ -514,7 +554,8 @@ export const cardsApi = {
    * взять свободную себе должен любой, кто её делает. Лот с портала берёт
    * госзакупщик, а разбор считает тендерщик.
    */
-  claim: (cardId: string) => api.post<Card>(`/api/cards/${cardId}/claim`),
+  claim: (cardId: string, desk: Department = "analysis") =>
+    api.post<Card>(`/api/cards/${cardId}/claim`, { desk }),
 
   /**
    * Отмечает подачу и запоминает, за сколько подали.
@@ -589,7 +630,6 @@ export const cardsApi = {
 
 /** Шаги пути в том порядке, в каком лот их проходит. */
 export const FLOW: { key: LotStatus; title: string; short: string }[] = [
-  { key: "new", title: "Новый", short: "Новый" },
   { key: "work", title: "В работе", short: "В работе" },
   { key: "approval", title: "На согласовании", short: "Соглас." },
   { key: "submission", title: "Подача", short: "Подача" },

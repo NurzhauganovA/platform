@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_money, requires_read
+from platform_api.auth.permissions import Permission
 from platform_api.config import Settings
 from platform_api.errors import unavailable
 from platform_api.jobs import JobService
@@ -181,7 +182,10 @@ def start_sync(
         kind="sync",
         params={
             "skip_catalog": not with_catalog,
-            "analyze_new": sees_money(identity.permissions),
+            # Право расхода, а не право видеть цифры: прогон зовёт модель, и
+            # «Себестоимость и маржа» этого не разрешает. Руководителю деньги
+            # показывают, тратить их — не его кнопка.
+            "analyze_new": identity.can(Permission.SHEET_BUILD),
         },
         total=4,
     )

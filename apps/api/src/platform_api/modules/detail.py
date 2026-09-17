@@ -29,7 +29,7 @@ from decimal import Decimal
 from typing import Any
 
 from platform_api.auth.permissions import Permission
-from platform_api.modules.table import Visibility, sees_money, to_utc
+from platform_api.modules.table import Visibility, to_utc, visible_groups
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,11 +143,12 @@ def for_role(detail: Detail, permissions: frozenset[Permission]) -> Detail:
     Считает убранное, чтобы интерфейс мог сказать об этом словами: молча
     урезанный разбор выглядит как недоделанный.
     """
-    money = sees_money(permissions)
-    allowed = tuple(
-        section for section in detail.sections if section.access is not Visibility.MONEY or money
-    )
-    hidden = len(detail.sections) - len(allowed)
+    # Те же группы, что и у колонок таблицы: разбор и список показывают одни
+    # и те же данные, и раздел «Где взять» с ценой поставщика не должен
+    # приходить тому, у кого эта же цена скрыта в колонке.
+    groups = visible_groups(permissions)
+    shown = tuple(section for section in detail.sections if section.access in groups)
+    hidden = len(detail.sections) - len(shown)
     return Detail(
         lot=detail.lot,
         id=detail.id,
@@ -156,7 +157,7 @@ def for_role(detail: Detail, permissions: frozenset[Permission]) -> Detail:
         verdict=detail.verdict,
         tone=detail.tone,
         url=detail.url,
-        sections=allowed,
+        sections=shown,
         hidden_sections=hidden,
     )
 

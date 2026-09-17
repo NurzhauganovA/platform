@@ -118,6 +118,7 @@ def get_remarks(
         db,
         organization_id=identity.organization.id,
         role=identity.role,
+        permissions=identity.permissions,
         user_id=identity.user.id,
         module=module,
         stage=stage,
@@ -164,6 +165,7 @@ def put_text(
             organization_id=identity.organization.id,
             remark_id=remark_id,
             role=identity.role,
+            permissions=identity.permissions,
             user_id=identity.user.id,
             text=body.text,
         )
@@ -191,6 +193,8 @@ def post_move(
             organization_id=identity.organization.id,
             remark_id=remark_id,
             role=identity.role,
+            permissions=identity.permissions,
+            role_title=identity.role_title,
             user_id=identity.user.id,
             to=body.to,
             settings=request.app.state.settings,
@@ -214,7 +218,10 @@ def post_resolve(
             organization_id=identity.organization.id,
             remark_id=remark_id,
             role=identity.role,
+            permissions=identity.permissions,
+            role_title=identity.role_title,
             outcome=body.outcome,
+            user_id=identity.user.id,
             answer=body.answer,
         )
     )
@@ -247,6 +254,40 @@ def post_assign(
     return _out(_one(db, identity, remark_id))
 
 
+class StepOut(BaseModel):
+    """Строка хронологии обсуждения."""
+
+    id: str
+    at: str
+    actor: str
+    role: str = ""
+    by_machine: bool = False
+    kind: str
+    title: str
+    detail: str = ""
+
+
+@router.get("/{remark_id}/history", summary="Хронология обсуждения")
+def get_history(
+    remark_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Annotated[None, requires_remarks] = None,
+) -> list[StepOut]:
+    """Что делали с замечанием и кто — по порядку.
+
+    Собрать это из самого замечания нельзя: там хранятся только последние
+    значения, кем отправлено не хранится вовсе, а текст модели затирается при
+    каждом перезапуске прогона. Открывают ленту ровно тогда, когда пришёл
+    отказ и надо понять, что именно ушло заказчику.
+    """
+    try:
+        found = remarks.history(db, organization_id=identity.organization.id, remark_id=remark_id)
+    except SpokenError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return [StepOut(**asdict(item)) for item in found]
+
+
 def _one(db: Db, identity: CurrentUser, remark_id: uuid.UUID) -> remarks.Remark:
     try:
         return remarks.one(
@@ -254,6 +295,7 @@ def _one(db: Db, identity: CurrentUser, remark_id: uuid.UUID) -> remarks.Remark:
             organization_id=identity.organization.id,
             remark_id=remark_id,
             role=identity.role,
+            permissions=identity.permissions,
             user_id=identity.user.id,
         )
     except SpokenError as exc:

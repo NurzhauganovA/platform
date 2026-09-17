@@ -7,6 +7,7 @@
  * пустой список читается как «на портале ничего нет».
  */
 
+import { FetchByNumber } from "@/features/cards/FetchByNumber";
 import { WorklistPage } from "./WorklistPage";
 
 export function GoszakupPage() {
@@ -16,6 +17,11 @@ export function GoszakupPage() {
       title="Лоты портала"
       subtitle="zakup.gov.kz: закупки по нашей номенклатуре"
       unit="лотов"
+      // Выборка по номеру стоит здесь, а не в «Лотах в работе». Искать
+      // закупку и смотреть, что нашлось, надо в одном месте: после выборки
+      // номер сам встаёт в поиск этого же списка, и человек видит ровно ту
+      // строку, которую заводил.
+      extra={<FetchByNumber />}
     />
   );
 }

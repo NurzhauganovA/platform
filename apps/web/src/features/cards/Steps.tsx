@@ -37,7 +37,7 @@ import { NewTask } from "./NewTask";
 import { Node, TaskCard, TaskLine } from "./StepRail";
 import { TaskTalk } from "./TaskTalk";
 import type { Mark } from "./StepRail";
-import { Avatar, Chip, Clock, Passed, shortName, stamp } from "./kit";
+import { Chip, Clock, Passed, stamp } from "./kit";
 
 /** Каким по счёту идёт работа отделов. Пройдена — лот ушёл дальше «В работе». */
 const ANALYSIS_STEP = FLOW.findIndex((step) => step.key === "work") + 1;
@@ -391,16 +391,9 @@ export function Steps({
             onOpenTask={setOpenTask}
             mark={analysisDone ? "done" : card.burning ? "hot" : "active"}
             right={card.deadline ? <Clock due={card.deadline} /> : null}
-            meta={
-              card.owner ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Avatar name={card.owner} />
-                  Ведёт {shortName(card.owner)}
-                </span>
-              ) : (
-                <span className="text-ink-muted">ничей</span>
-              )
-            }
+            // Кто ведёт, здесь больше не пишем: на это отвечают строки отделов
+            // внизу колонки, и «Поставка» там — тот же человек. Две подписи об
+            // одном расходятся на первом же назначении.
           />
 
           {DESKS.map(({ desk, title }) => (
@@ -517,18 +510,38 @@ function Rung({
       open={open}
       onToggle={onToggle}
       right={
-        right ??
-        (near?.due_at ? (
-          <Clock due={near.due_at} />
-        ) : (
-          <span className="text-[11.5px] text-ink-muted">
-            {mine.length ? "все задачи закрыты" : "задач нет"}
-          </span>
-        ))
+        /* Раскрытый узел срок не показывает: ниже стоит список задач, и у
+           каждой свой срок — тот же час в двух местах заставляет сверять,
+           не разошлись ли они. Сложенный показывает ближайший: ради него
+           узел и держат сложенным.
+
+           Доля закрытых стоит здесь же, а не отдельной строкой снизу: в
+           рельсе шириной в триста точек каждая строка на счету, а «0/1» и
+           срок читаются вместе — «сколько осталось и к какому часу». */
+        <span className="flex items-center gap-2">
+          {mine.length > 0 && (
+            <span
+              className="text-[11.5px] text-ink-muted tabular-nums"
+              title={`${done.length} из ${mine.length} задач закрыто`}
+            >
+              <b className="font-semibold text-ink">{done.length}</b>/
+              {mine.length}
+            </span>
+          )}
+          {!open &&
+            (right ??
+              (near?.due_at ? (
+                <Clock due={near.due_at} />
+              ) : (
+                <span className="text-[11.5px] text-ink-muted">
+                  {mine.length ? "все задачи закрыты" : "задач нет"}
+                </span>
+              )))}
+        </span>
       }
       meta={meta}
       counts={
-        mine.length > 0 ? (
+        false ? (
           /* Долей, а не двумя числами со словами. «1 открыто · 1 закрыто»
              человек складывает в уме, чтобы понять, сколько работы всего, —
              а спрашивает он именно это: «2/3» читается сразу и не требует

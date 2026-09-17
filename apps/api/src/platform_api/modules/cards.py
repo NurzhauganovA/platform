@@ -30,6 +30,7 @@ from platform_api.db.models import (
     Approval,
     ApprovalKind,
     ApprovalState,
+    CustomRole,
     Department,
     Discussion,
     DiscussionOutcome,
@@ -39,6 +40,7 @@ from platform_api.db.models import (
     LotFile,
     LotFolder,
     LotOutcome,
+    LotSeat,
     LotStatus,
     Membership,
     Participation,
@@ -70,7 +72,6 @@ APPROVE_BEFORE = timedelta(hours=2)
 """
 
 STATUS_NAMES: dict[LotStatus, str] = {
-    LotStatus.NEW: "Новый",
     LotStatus.WORK: "В работе",
     LotStatus.APPROVAL: "На согласовании",
     LotStatus.SUBMISSION: "Подача",
@@ -79,15 +80,35 @@ STATUS_NAMES: dict[LotStatus, str] = {
 }
 
 OUTCOME_NAMES: dict[LotOutcome, str] = {
-    LotOutcome.NONE: "Не участвовали",
+    LotOutcome.NONE: "Итога нет",
     LotOutcome.WON: "Выиграли",
     LotOutcome.LOST: "Проиграли",
+    LotOutcome.NOT_SUBMITTED: "Не успели подать",
+    LotOutcome.NOT_LIQUID: "Не ликвидный тендер",
+    LotOutcome.WRONG_CODE: "Код ТРУ не подходит",
+    LotOutcome.CANCELLED: "Тендер отменён",
+    LotOutcome.SKIPPED: "Не участвуем",
 }
+
+NEEDS_REASON: frozenset[LotOutcome] = frozenset(
+    {
+        LotOutcome.NOT_LIQUID,
+        LotOutcome.WRONG_CODE,
+        LotOutcome.CANCELLED,
+        LotOutcome.SKIPPED,
+    }
+)
+"""Итоги, которые нельзя поставить молча.
+
+У выигрыша и проигрыша объяснение — сам протокол, и оно рядом: цена и
+победитель. У «не успели подать» причину пишет прогон. А «не ликвидный»,
+«не тот код», «отменён» и «не участвуем» — это наше решение, и через месяц
+на вопрос «почему прошли мимо этой закупки» отвечать будет нечем.
+"""
 
 # Порядок хода. По нему рисуется полоса в карточке: человек должен видеть, где
 # лот стоит и сколько шагов до конца, а не одно слово без контекста.
 FLOW: tuple[LotStatus, ...] = (
-    LotStatus.NEW,
     LotStatus.WORK,
     LotStatus.APPROVAL,
     LotStatus.SUBMISSION,
@@ -146,7 +167,6 @@ TRANSITIONS: dict[LotStatus, tuple[LotStatus, ...]] = {
 _RUNS = frozenset({Role.ADMIN, Role.MANAGER})
 _DECIDES = frozenset({Role.ADMIN, Role.MANAGER, Role.HEAD, Role.COMMERCIAL})
 ALLOWED: dict[LotStatus, frozenset[Role]] = {
-    LotStatus.NEW: _RUNS,
     # «В работе» объявляют те, кто в нём и работает: обсуждение заводит юрист,
     # разбор — тендерщик, и бежать за менеджером ради перевода незачем.
     LotStatus.WORK: _RUNS | {Role.LAWYER, Role.ANALYST},
@@ -167,6 +187,209 @@ SIGNS: dict[ApprovalKind, frozenset[Role]] = {
     ApprovalKind.TECHNOLOGIST: frozenset({Role.ADMIN, Role.TECHNOLOGIST}),
     ApprovalKind.ASSEMBLER: frozenset({Role.ADMIN, Role.ASSEMBLER}),
 }
+
+DESKS: tuple[tuple[Department, str, str], ...] = (
+    (Department.ANALYSIS, "Поставка", "delivery"),
+    (Department.DISCUSSION, "Обсуждение", "discussion"),
+    (Department.LEGAL, "Юрист", "lawyer"),
+    (Department.SUPPLY, "Снабжение", "buyer"),
+    (Department.TECHNOLOGIST, "Технолог", "technologist"),
+)
+"""Пять отделов, у каждого своё место в лоте: отдел, слово и ключ роли.
+
+«Поставка» села на отдел разбора намеренно: у нас это один человек — он
+считает себестоимость и он же ведёт поставку. Заводить рядом шестой отдел
+значило бы развести стол разбора, его задачи и подстатусы по двум местам, а
+работает там один и тот же сотрудник.
+
+Ключ роли — **подсказка, а не замок**. По нему решается, кого предложить и
+кому слать уведомление; посадить в строку можно кого угодно. Иначе уволившийся
+единственный юрист запирает строку до тех пор, пока администратор не выдаст
+кому-то роль, — а лот к этому времени уже ушёл по сроку.
+"""
+
+DESK_TITLES = {desk: title for desk, title, _ in DESKS}
+DESK_ROLE_KEYS = {desk: key for desk, _, key in DESKS}
+
+LEAD = Department.ANALYSIS
+"""Отдел, который ведёт лот. «Поставка»: она же считает себестоимость.
+
+Вынесено именем, а не вписано по месту: «кто ведёт лот» спрашивают в пяти
+местах — подстатус, отбор «мои», рассылка, отметка в списке, — и каждое из них
+должно смотреть на одно и то же место.
+"""
+
+
+def seated(card: LotCard, desk: Department) -> uuid.UUID | None:
+    """Кто сидит в этом отделе по лоту. `None` — место свободно."""
+    for row in card.seats:
+        if row.desk is desk:
+            return row.user_id
+    return None
+
+
+def _seat(card: LotCard, desk: Department) -> LotSeat:
+    """Строка отдела. Заводит недостающую: карточки бывают заведены до того,
+    как отделы появились, и «строки нет» читателю знать незачем."""
+    for row in card.seats:
+        if row.desk is desk:
+            return row
+    made = LotSeat(card_id=card.id, desk=desk)
+    card.seats.append(made)
+    return made
+
+
+def _seats_out(
+    card: LotCard,
+    known: dict[uuid.UUID, str],
+    *,
+    role: Role,
+    user_id: uuid.UUID,
+    permissions: frozenset[Permission],
+) -> tuple[Seat, ...]:
+    """Пять строк отделов по порядку — так, как их показывают.
+
+    Порядок объявления, а не тот, в каком их вернула база: столбец читают
+    сверху вниз, и перестановка строк между открытиями заставляет искать
+    нужную заново.
+    """
+    rows = {row.desk: row for row in card.seats}
+    out: list[Seat] = []
+    for desk, title, _ in DESKS:
+        row = rows.get(desk)
+        who = row.user_id if row is not None else None
+        # Сесть самому — своё право у каждого, кто работает с лотами: работу
+        # своего отдела берут себе сами. Посадить другого — право руководящее.
+        can: list[str] = []
+        if who is None:
+            can.append("take")
+        if _may(Permission.LOT_ASSIGN, permissions) or role in {Role.ADMIN, Role.MANAGER}:
+            can.append("assign")
+        out.append(
+            Seat(
+                desk=desk.value,
+                title=title,
+                name=(known.get(who) if who else "") or (row.by_name if row else ""),
+                user_id=str(who) if who else "",
+                taken_at=row.taken_at.isoformat() if row and row.taken_at else "",
+                can=tuple(can),
+            )
+        )
+    return tuple(out)
+
+
+def sits_anywhere(card: LotCard, user_id: uuid.UUID) -> bool:
+    """Занимает ли человек хоть одно место в лоте. По этому и считается «моё»:
+    вопрос «что на мне» не различает, в каком именно отделе."""
+    return any(row.user_id == user_id for row in card.seats)
+
+
+@dataclass(frozen=True, slots=True)
+class Seat:
+    """Место отдела в лоте так, как его показывают."""
+
+    desk: str
+    title: str
+    name: str
+    user_id: str
+    taken_at: str
+    can: tuple[str, ...] = ()
+    """Что можно нажать на этой строке: `take` — сесть самому, `assign` —
+    посадить другого. Решает сервер: второй набор правил в браузере разойдётся
+    с первым, и человек нажмёт кнопку, получив отказ."""
+
+
+def seats_of(card: LotCard, known: dict[uuid.UUID, str]) -> dict[Department, LotSeat]:
+    """Места лота по отделам. Недостающие не выдумываем — их заводит `open_card`."""
+    return {row.desk: row for row in card.seats}
+
+
+def people_of_role(db: DbSession, organization_id: uuid.UUID, key: str) -> list[uuid.UUID]:
+    """Кто в этой роли — встроенной или заведённой администратором.
+
+    Одним запросом и по обоим путям сразу: у своей роли человек привязан
+    ссылкой на `custom_roles`, у встроенной — значением в `memberships.role`,
+    и спрашивать их порознь значит однажды забыть второй.
+    """
+    rows = db.execute(
+        select(Membership.user_id, Membership.role, CustomRole.key)
+        .join(User, User.id == Membership.user_id)
+        .outerjoin(CustomRole, CustomRole.id == Membership.custom_role_id)
+        .where(Membership.organization_id == organization_id, User.is_active.is_(True))
+    ).all()
+    return [user_id for user_id, role, own in rows if (own or role.value) == key]
+
+
+WORK_STAGES: tuple[tuple[str, str], ...] = (
+    ("legal", "У юристов"),
+    ("talk", "В обсуждении"),
+    ("desk", "В разборе"),
+    ("supply", "У снабжения"),
+    ("done", "Разбор закончен"),
+)
+"""Где сейчас мяч. Верхний ряд отбора внутри «В работе».
+
+Лот попадает ровно в одну кнопку — это лестница, а не набор признаков: в
+списке у строки одно место, и лот, подходящий под три ответа сразу, должен
+попасть в тот, который ближе всего к действию.
+
+Порядок объявления и есть порядок разбора. Юристы первыми: у обсуждения срок
+два рабочих дня со дня публикации, а поиск товара идёт неделями — застрявший у
+юристов лот теряется быстрее. Дальше само обсуждение, потом разбор, снабжение
+и законченное.
+"""
+
+WORK_STAGE_NAMES = dict(WORK_STAGES)
+
+
+def work_stage(
+    card: LotCard,
+    *,
+    talk: Discussion | None,
+    talking: bool,
+    to_supply: bool,
+    now: datetime,
+) -> str:
+    """Где сейчас мяч по этому лоту.
+
+    Окно обсуждения считается открытым, пока письмо не ушло и срок не вышел.
+    Просроченное ненаписанное мяча не держит: отправлять уже нечего, и
+    показывать такой лот в «В обсуждении» значит звать делать работу, которую
+    сделать нельзя.
+
+    Открытая задача отдела держит мяч независимо от сроков — её кто-то должен
+    закрыть, и пока она висит, лот у этого отдела.
+    """
+    live = [task for task in card.tasks if task.state is TaskState.OPEN]
+    open_talk = (
+        talking
+        and talk is not None
+        and talk.stage not in {DiscussionStage.SENT, DiscussionStage.NOT_NEEDED}
+        and (talk.deadline is None or talk.deadline > now)
+    )
+
+    if any(task.department is Department.LEGAL for task in live) or (
+        open_talk and talk is not None and talk.stage is DiscussionStage.WITH_LAWYERS
+    ):
+        return "legal"
+    if (
+        open_talk
+        and talk is not None
+        and (
+            not talk.text.strip()
+            or talk.stage in {DiscussionStage.DRAFTING, DiscussionStage.MODERATION}
+        )
+    ):
+        return "talk"
+    # Открытая задача разбора — это и первый разбор, и возврат из снабжения:
+    # товара по части позиций нет или цена не набирается, и таблицу
+    # переделывают. Мяч в обоих случаях у разбора.
+    if seated(card, LEAD) is None or any(task.department is Department.ANALYSIS for task in live):
+        return "desk"
+    if any(task.department is Department.SUPPLY for task in live):
+        return "supply"
+    return "done" if to_supply else "desk"
+
 
 TALK_STAGES: tuple[tuple[str, str], ...] = (
     ("none", "Не написано"),
@@ -265,7 +488,7 @@ def desk_stage(card: LotCard, *, talk: Discussion | None, to_supply: bool) -> st
     значения, и именно такие лоты и ищут в этом отборе. До сих пор их было
     видно только по пустой колонке «Ведёт».
     """
-    if card.owner_id is None:
+    if seated(card, LEAD) is None:
         return "unowned"
 
     live = [task for task in card.tasks if task.state is TaskState.OPEN]
@@ -308,12 +531,10 @@ MOVE_RIGHTS: dict[LotStatus, Permission] = {
     LotStatus.WAITING: Permission.MOVE,
     LotStatus.DONE: Permission.DECIDE,
 }
-"""Каким правом двигают лот вперёд.
+"""Каким правом двигают лот по состояниям.
 
-«Нового» здесь нет намеренно: это не шаг вперёд, а возврат лота в начало —
-отмена чужой работы, и остаётся он за менеджером. Завершение — за тем, кто
-решает об участии: лот, мимо которого прошли, закрывает руководитель, а не
-менеджер задним числом.
+Завершение — за тем, кто решает об участии: лот, мимо которого прошли,
+закрывает руководитель, а не менеджер задним числом.
 
 Право одно на четыре шага, а не своё на каждый: «двигать лот» — это одно
 умение, и дробить его на четыре галочки значит заставить администратора
@@ -414,7 +635,6 @@ DEPARTMENT_NAMES: dict[Department, str] = {
 # Отдел, которому лот принадлежит на этом шаге. По нему задача попадает в
 # нужную очередь, когда её заводят с карточки без указания отдела.
 DEPARTMENT_OF: dict[LotStatus, Department] = {
-    LotStatus.NEW: Department.ANALYSIS,
     # «В работе» держат разом четыре отдела, и какой из них «тот самый», по
     # статусу не сказать. Разбор — потому что с него начинают: он считает,
     # берёмся ли вообще, и задача без указанного отдела чаще всего его.
@@ -573,10 +793,11 @@ class Card:
     outcome: str
     outcome_name: str
 
-    manager: str
-    manager_id: str
-    owner: str
-    owner_id: str
+    taken_by: str
+    taken_by_id: str
+    """Кто взял закупку в работу. Ставится один раз и не переписывается: до
+    сих пор этот человек молча становился менеджером, и первое же назначение
+    его затирало."""
 
     deadline: str
     left: str
@@ -633,6 +854,15 @@ class Card:
     список не приезжал вовсе, — и «отправлено» от «отклонили» отличить ему
     нечем."""
 
+    stage: str = ""
+    stage_name: str = ""
+    """Где сейчас мяч: `legal`, `talk`, `desk`, `supply`, `done`. Лот попадает
+    ровно в одну кнопку верхнего ряда — это лестница, а не набор признаков."""
+
+    seats: tuple[Seat, ...] = ()
+    """Пять отделов и кто в них. Место занимают сами («беру на себя») или
+    сажают те, кто вправе поручать."""
+
     desk_stage: str = ""
     desk_stage_name: str = ""
     """Где лот по отделам внутри «В работе»: не начат, у юристов, у
@@ -680,29 +910,36 @@ def open_card(
         enstru_code=snapshot.enstru_code,
         category=snapshot.category,
         deadline=snapshot.deadline,
-        status=LotStatus.NEW,
+        # Взяли в работу — значит, в работе. Отдельного «Нового» больше нет:
+        # он означал «появился в выгрузке, никто не смотрел», а карточка и
+        # заводится тем, кто уже посмотрел. Лишний шаг, который все пролистывали
+        # не глядя, и первый вопрос по нему был «а что с ним делать».
+        status=LotStatus.WORK,
         participation=Participation.MAYBE,
-        manager_id=by,
-        # Взявший не становится ведущим. Лот с портала берёт госзакупщик — он
-        # его нашёл и отвечает за него как менеджер, — но разбор считает не он.
-        # Пока владельцем ставился он сам, лот выглядел разобранным: в списке
-        # стояло его имя, тендерщики видели занятую работу и мимо неё
-        # проходили, а он ждал, что разберут.
-        #
-        # Ничьё — это приглашение: лот попадает во вкладку «Ничьи», тендерщики
-        # получают оповещение и берут его на себя кнопкой в карточке.
-        owner_id=None,
+        # Взявший не становится ответственным ни за что. Лот с портала берёт
+        # госзакупщик — он его нашёл, — но разбор считает не он. Пока взявший
+        # молча становился менеджером, лот выглядел разобранным: в списке
+        # стояло его имя, тендерщики видели занятую работу и проходили мимо, а
+        # он ждал, что разберут.
+        taken_by_id=by,
+        taken_by_name=_name_of(db, by),
     )
     db.add(found)
     db.flush()
 
-    _opened(db, settings, found)
+    # Пять мест отделов и пять подписей заводятся сразу пустыми — «строки
+    # нет» и «строка пуста» должны выглядеть одинаково.
+    #
+    # Через связи, а не `db.add` с готовым `card_id`: иначе коллекция у
+    # карточки останется пустой до следующего чтения из базы, и служба,
+    # которая тут же спросит `card.approvals`, заведёт их второй раз.
+    found.seats.extend(LotSeat(desk=desk) for desk, _, _ in DESKS)
+    found.approvals.extend(Approval(kind=kind) for kind in ApprovalKind)
+    db.flush()
 
-    # Пять подписей заводятся сразу пустыми, а не по мере появления. Иначе
-    # «согласовано» у лота с одной подписью выглядит так же, как у лота с
-    # пятью: в обоих случаях ни одного отказа.
-    for kind in ApprovalKind:
-        db.add(Approval(card_id=found.id, kind=kind))
+    _opened(db, settings, found)
+    _seats_told(db, settings, found)
+
     trace(
         db,
         card_id=found.id,
@@ -713,6 +950,18 @@ def open_card(
     )
     db.flush()
     return found
+
+
+def _seats_told(db: DbSession, settings: Settings | None, card: LotCard) -> None:
+    """Говорит отделам про новый лот. Отказ рассылки не роняет взятие."""
+    if settings is None:
+        return
+    from platform_api.modules import alerts
+
+    try:
+        alerts.seats_filled(db, settings, card)
+    except Exception as exc:  # рассылка не должна ронять работу
+        logger.warning("Не позвали отделы", card=str(card.id), error=str(exc))
 
 
 def _may(
@@ -786,7 +1035,9 @@ def move(
     # ведут, значит, участвуем. Отказ ставится решением, и его не трогаем.
     if card.participation is not Participation.NO:
         card.participation = Participation.YES
-    card.owner_id = user_id
+    # Ведущего перевод больше не перехватывает. Пока полей было два, любой
+    # перевод статуса молча забирал лот на себя; при пяти строках это
+    # переписывало бы «Юриста» на того, кто двинул лот на согласование.
     trace(
         db,
         card_id=card.id,
@@ -934,6 +1185,17 @@ def decide(
     if participation is Participation.NO and not reason.strip():
         raise SpokenError("Укажите причину отказа от участия")
 
+    # «Да» по лоту, который мы сами и закрыли, возвращает его в работу. Иначе
+    # переключатель врёт: участвуем — а лот числится завершённым, и найти его
+    # можно только во вкладке «Завершённые». Протокольные итоги так не
+    # отменяются: выигрыш и проигрыш — не наше решение, и стирать их нажатием
+    # нельзя.
+    if participation is Participation.YES and card.outcome in NEEDS_REASON:
+        card.outcome = LotOutcome.NONE
+        card.finished_at = None
+        if card.status is LotStatus.DONE:
+            card.status = LotStatus.WORK
+
     card.participation = participation
     card.skip_reason = reason.strip()[:2000] if participation is Participation.NO else ""
     if participation is Participation.NO and card.status not in _FINAL:
@@ -1065,6 +1327,63 @@ def submit(
     return card
 
 
+def finish(
+    db: DbSession,
+    *,
+    organization_id: uuid.UUID,
+    card_id: uuid.UUID,
+    role: Role,
+    outcome: LotOutcome,
+    reason: str,
+    user_id: uuid.UUID | None = None,
+    permissions: frozenset[Permission] = frozenset(),
+) -> LotCard:
+    """Закрывает лот без протокола: не участвуем, отменён, не тот код.
+
+    Отдельно от `result`. Тот записывает протокол и потому требует поданной
+    заявки: «выиграли за» у неподанного лота означало бы итоги закупки, в
+    которой мы не участвовали. Здесь наоборот — заявки как раз и не было, и
+    требовать её значило бы не дать закрыть лот, мимо которого прошли.
+
+    Причина обязательна. Через месяц на вопрос «почему прошли мимо этой
+    закупки» отвечать будет некому: тот, кто закрывал, помнит первые три, а
+    закрывают их десятками.
+    """
+    if outcome not in NEEDS_REASON:
+        raise SpokenError("Этот итог записывается вместе с протоколом подачи")
+    if role not in _DECIDES and not _may(Permission.DECIDE, permissions):
+        raise SpokenError("Закрывать лот вам нельзя")
+    clean = reason.strip()
+    if not clean:
+        raise SpokenError(f"Напишите, почему «{OUTCOME_NAMES[outcome]}»")
+
+    card = _required(db, organization_id, card_id)
+    card.outcome = outcome
+    card.status = LotStatus.DONE
+    card.finished_at = card.finished_at or utcnow()
+    # Причина ложится туда же, где живёт причина отказа от участия: это один и
+    # тот же ответ на один и тот же вопрос, и второе поле рядом означало бы
+    # два места, где его ищут.
+    card.skip_reason = clean[:2000]
+    # Не участвуем — при любой из четырёх причин. «Тендер отменён» и «код не
+    # подходит» — это тоже ответ «нет» на вопрос «участвуем ли»: пока отметку
+    # ставил только «не участвуем», человек выбирал «код не подходит», лот
+    # закрывался, а переключатель оставался на «Да» — и нажатие выглядело как
+    # будто ничего не произошло.
+    card.participation = Participation.NO
+    trace(
+        db,
+        card_id=card.id,
+        kind="result",
+        title=f"Закрыл лот: {OUTCOME_NAMES[outcome]}",
+        actor_id=user_id,
+        role=role,
+        detail=clean,
+    )
+    db.flush()
+    return card
+
+
 def result(
     db: DbSession,
     *,
@@ -1128,27 +1447,29 @@ def claim(
     card_id: uuid.UUID,
     user_id: uuid.UUID,
     role: Role,
+    desk: Department = LEAD,
 ) -> LotCard:
-    """Берёт ничей лот на себя.
+    """Садится на свободное место отдела.
 
-    Отдельно от `assign`, и это не то же самое. `assign` — это «поручить
-    другому», право руководящее: менеджер раздаёт работу. А взять свободную
-    работу себе должен любой, кто её делает: тендерщик видит во вкладке «Ничьи»
-    лот, по которому пришло оповещение, и берёт его — бежать за менеджером
-    ради этого значит потерять день из двух, что даёт срок обсуждения.
+    Отдельно от `seat`, и это не то же самое. `seat` — «посадить другого»,
+    право руководящее: менеджер раздаёт работу. А взять свободную работу
+    своего отдела должен любой, кто её делает: бежать за менеджером ради
+    этого значит потерять день из двух, что даёт срок обсуждения.
 
-    Занятый лот не перехватывается. Двое, взявшие один лот, считают его
+    Занятое место не перехватывается. Двое, взявшие один лот, считают его
     дважды, а узнают об этом на согласовании — когда сходятся две разные
-    себестоимости. Освободить его может тот, кто ведёт, или менеджер: для
-    этого есть `assign`.
+    себестоимости. Освободить место может тот, кто вправе назначать.
     """
     card = _required(db, organization_id, card_id)
-    if card.owner_id is not None:
-        if card.owner_id == user_id:
+    place = _seat(card, desk)
+    if place.user_id is not None:
+        if place.user_id == user_id:
             return card
-        raise SpokenError("Лот уже ведёт другой сотрудник")
+        raise SpokenError(f"Место «{DESK_TITLES[desk]}» уже занято")
 
-    card.owner_id = user_id
+    place.user_id = user_id
+    place.by_name = _name_of(db, user_id)
+    place.taken_at = utcnow()
     trace(
         db,
         card_id=card.id,
@@ -1162,28 +1483,31 @@ def claim(
     return card
 
 
-def assign(
+def seat(
     db: DbSession,
     *,
     organization_id: uuid.UUID,
     card_id: uuid.UUID,
-    manager_id: uuid.UUID | None = None,
-    owner_id: uuid.UUID | None = None,
+    desk: Department,
     user_id: uuid.UUID | None = None,
+    by: uuid.UUID | None = None,
     role: Role | None = None,
-    change_manager: bool = False,
-    change_owner: bool = False,
 ) -> LotCard:
-    """Меняет менеджера или текущего ответственного.
+    """Сажает человека в строку отдела или освобождает её.
 
-    Признаки `change_*` нужны, чтобы отличить «снять ответственного» от «не
-    трогать его»: и то и другое приходит пустым значением.
+    Пустой `user_id` освобождает место — отдельного признака «снять» больше не
+    нужно: отдел задан явно, и «поставить никого» ни с чем не путается.
+
+    Кого сажать, не проверяется по роли. Роль — подсказка для автоназначения и
+    для рассылки, а не замок: уволившийся единственный юрист иначе запирает
+    строку до тех пор, пока администратор не выдаст кому-то роль, — а лот к
+    этому времени уже ушёл по сроку.
     """
     card = _required(db, organization_id, card_id)
-    if change_manager:
-        card.manager_id = manager_id
-    if change_owner:
-        card.owner_id = owner_id
+    place = _seat(card, desk)
+    place.user_id = user_id
+    place.by_name = _name_of(db, user_id) if user_id else ""
+    place.taken_at = utcnow() if user_id else None
     trace(
         db,
         card_id=card.id,
@@ -1638,9 +1962,15 @@ def listing(
     if want.amount_to is not None:
         query = query.where(LotCard.amount <= want.amount_to)
     if want.mine:
-        query = query.where((LotCard.manager_id == user_id) | (LotCard.owner_id == user_id))
+        # «Моё» — это любое место в лоте плюс тот, кто его завёл. Вопрос «что
+        # на мне» не различает, в каком именно отделе я сижу.
+        query = query.where(
+            (LotCard.taken_by_id == user_id) | LotCard.seats.any(LotSeat.user_id == user_id)
+        )
     if want.unowned:
-        query = query.where(LotCard.owner_id.is_(None))
+        # «Можно взять»: есть хоть одно свободное место. Слово «ничьи» ушло —
+        # лот целиком ничьим не бывает, свободной бывает строка отдела.
+        query = query.where(LotCard.seats.any(LotSeat.user_id.is_(None)))
 
     rows = list(db.execute(query).scalars())
     if want.search:
@@ -2032,6 +2362,7 @@ def _shown(
     # показа, а правило в нём лестничное и не бесплатное.
     talk_key = talk_stage(talk, talking=talks)
     desk_key = desk_stage(card, talk=talk, to_supply=to_supply)
+    here = work_stage(card, talk=talk, talking=talks, to_supply=to_supply, now=now)
 
     return Card(
         id=str(card.id),
@@ -2051,10 +2382,9 @@ def _shown(
         skip_reason=card.skip_reason,
         outcome=card.outcome.value,
         outcome_name=OUTCOME_NAMES[card.outcome],
-        manager=known.get(card.manager_id, "") if card.manager_id else "",
-        manager_id=str(card.manager_id) if card.manager_id else "",
-        owner=known.get(card.owner_id, "") if card.owner_id else "",
-        owner_id=str(card.owner_id) if card.owner_id else "",
+        taken_by=(known.get(card.taken_by_id) if card.taken_by_id else "") or card.taken_by_name,
+        taken_by_id=str(card.taken_by_id) if card.taken_by_id else "",
+        seats=_seats_out(card, known, role=role, user_id=user_id, permissions=permissions),
         deadline=card.deadline.isoformat() if card.deadline else "",
         left=left,
         burning=burning,
@@ -2081,6 +2411,8 @@ def _shown(
         # этом считается по нему же, и для неё оно и читалось.
         discussion=None if brief else _talk(talk, now),
         desks=desk_marks(card, talk=talk),
+        stage=here,
+        stage_name=WORK_STAGE_NAMES.get(here, ""),
         talk_stage=talk_key,
         talk_stage_name=TALK_STAGE_NAMES.get(talk_key, ""),
         desk_stage=desk_key,
@@ -2205,10 +2537,8 @@ def _can(
         # отвечает отказом, читается как поломка, а не как правило.
         and (status is not LotStatus.SUBMISSION or _all_signed(card))
     ]
-    # «Взять на себя» — у ничьего лота и у всех, кто с лотами работает: право
-    # руководящее здесь не нужно, работу берут себе сами.
-    if card.owner_id is None:
-        allowed.append("claim")
+    # «Беру на себя» переехало на строки отделов: лот целиком ничьим не
+    # бывает, свободной бывает строка. Что можно нажать на каждой — в `Seat.can`.
     if role in _DECIDES or _may(Permission.DECIDE, permissions):
         allowed.append("decide")
     # Назначение — только по праву, без оглядки на имя роли. Набор прав у
@@ -2619,7 +2949,6 @@ __all__ = [
     "Snapshot",
     "add_task",
     "advance",
-    "assign",
     "attach",
     "by_row",
     "close_task",
@@ -2635,6 +2964,7 @@ __all__ = [
     "open_card",
     "people",
     "result",
+    "seat",
     "sign",
     "take_task",
     "task",

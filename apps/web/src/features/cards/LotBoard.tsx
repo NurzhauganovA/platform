@@ -27,7 +27,6 @@ import { Board, Peek, type BoardColumn } from "@/ui/board";
 
 /** Цвет точки у заголовка колонки. Место в процессе, а не важность. */
 const RULE: Record<LotStatus, string> = {
-  new: "bg-baseline",
   work: "bg-series-1",
   approval: "bg-series-4",
   submission: "bg-series-3",
@@ -44,6 +43,12 @@ const COLUMNS: BoardColumn<LotStatus>[] = FLOW.map((step) => ({
   title: step.title,
   rule: RULE[step.key],
 }));
+
+/** Кто ведёт лот — «Поставка». Она же считает себестоимость: у нас это один
+ *  человек, и в строке списка показывают именно его. */
+function lead(lot: Lot): string {
+  return lot.seats.find((place) => place.desk === "analysis")?.name ?? "";
+}
 
 export function LotBoard({ lots }: { lots: Lot[] }) {
   const [openId, setOpenId] = useState<string | null>(null);
@@ -145,9 +150,9 @@ function Face({ lot }: { lot: Lot }) {
         <Left lot={lot} />
         <span
           className="ml-auto truncate text-[11px] text-ink-muted"
-          title={lot.owner ? `Ведёт ${lot.owner}` : "Ответственного нет"}
+          title={lead(lot) ? `Ведёт ${lead(lot)}` : "Место поставки свободно"}
         >
-          {lot.owner || "ничьё"}
+          {lead(lot) || "свободно"}
         </span>
       </div>
     </>
@@ -205,8 +210,8 @@ function LotPeek({ lot, onClose }: { lot: Lot; onClose: () => void }) {
         value={lot.amount === null ? "—" : `${money(lot.amount)} ₸`}
       />
       <Row name="Приём до" value={lot.left || "—"} tone={lot.burning} />
-      <Row name="Ведёт" value={lot.owner || "ничьё"} />
-      <Row name="Менеджер" value={lot.manager || "—"} />
+      <Row name="Поставка" value={lead(lot) || "свободно"} />
+      <Row name="Взял в работу" value={lot.taken_by || "—"} />
       <Row name="Категория" value={lot.category || "—"} />
       <Row name="Код ЕНС ТРУ" value={lot.enstru_code || "—"} />
       <Row name="Номер закупки" value={lot.source_number || lot.row_id} />

@@ -21,6 +21,7 @@ import {
   FLOW,
   offTrack,
   type Card,
+  type Choice,
   type Job,
   type LotStatus,
   type Person,
@@ -28,7 +29,6 @@ import {
 import { LotBoard } from "@/features/cards/LotBoard";
 import { PageHeader } from "@/shell/AppShell";
 import { PeopleFilter, type Load } from "@/ui/people";
-import { FetchByNumber } from "./FetchByNumber";
 import {
   Card as Panel,
   EmptyState,
@@ -41,14 +41,14 @@ import {
   money,
 } from "@/ui";
 import { Passed } from "./kit";
-import { WorkStages, matches, type Picked } from "./WorkStages";
+import { NOTHING, WorkStages, matches, type Picked } from "./WorkStages";
 
 type Tab = "burning" | "mine" | "unowned" | "all" | LotStatus;
 
 const TABS: { key: Tab; title: string }[] = [
   { key: "burning", title: "Горит" },
   { key: "mine", title: "Мои" },
-  { key: "unowned", title: "Ничьи" },
+  { key: "unowned", title: "Можно взять" },
   { key: "work", title: "В работе" },
   { key: "approval", title: "Согласование" },
   { key: "submission", title: "Подача" },
@@ -59,7 +59,6 @@ const TABS: { key: Tab; title: string }[] = [
 
 /** Цвет полосы слева. Отмечает не важность, а место в процессе. */
 const RULE: Record<LotStatus, string> = {
-  new: "bg-baseline",
   work: "bg-series-1",
   approval: "bg-series-4",
   submission: "bg-series-3",
@@ -121,7 +120,7 @@ export function LotsPage() {
   // Подстатусы живут рядом со вкладкой, а не в адресе: их перебирают по
   // десятку раз на планёрке, и адрес, меняющийся от каждого нажатия, засоряет
   // историю браузера.
-  const [stages, setStages] = useState<Picked>({ talk: "", desk: "" });
+  const [stages, setStages] = useState<Picked>(NOTHING);
   // Набор кнопок — тот же запрос, что внутри второго ряда: TanStack отдаёт
   // его из кэша, второго обращения к сети не будет.
   const { data: picks } = useQuery({
@@ -130,6 +129,10 @@ export function LotsPage() {
     staleTime: Infinity,
   });
   const inWork = tab === "work" && !board;
+  // Свой ряд у «Завершённых»: там вопрос другой — не «где застрял», а «чем
+  // кончилось». Семь итогов, и выбрать можно несколько сразу.
+  const inDone = tab === "done" && !board;
+  const [outcomes, setOutcomes] = useState<string[]>([]);
   // Лоты «в работе» целиком — по ним считаются числа на кнопках. От
   // нефильтрованного набора: число должно говорить, сколько там лотов, а не
   // сколько осталось после уже выбранного.
@@ -144,15 +147,38 @@ export function LotsPage() {
       // На доске состояние задают колонки, и вкладка по статусу спорила бы
       // с ними: выбранная «Разбор» оставила бы на доске одну колонку из
       // четырнадцати. Поиск и «Мои» работают на обоих видах.
-      if (who && item.owner_id !== who && item.manager_id !== who) return false;
+      // «На ком» — любое место в лоте плюс тот, кто его завёл: вопрос «что
+      // на нём» не различает, в каком именно отделе человек сидит.
+      if (
+        who &&
+        item.taken_by_id !== who &&
+        !item.seats.some((place) => place.user_id === who)
+      ) {
+        return false;
+      }
       if (!belongs(item, board ? scoped(tab) : tab, me?.id)) return false;
-      if (inWork && !matches(item, stages, picks)) return false;
+      if (inWork && !matches(item, stages, picks?.work ?? [])) return false;
+      if (inDone && outcomes.length && !outcomes.includes(item.outcome)) {
+        return false;
+      }
       if (!needle) return true;
       return `${item.code} ${item.title} ${item.customer} ${item.row_id}`
         .toLowerCase()
         .includes(needle);
     });
-  }, [all, tab, search, me?.id, board, who, inWork, stages, picks]);
+  }, [
+    all,
+    tab,
+    search,
+    me?.id,
+    board,
+    who,
+    inWork,
+    stages,
+    picks,
+    inDone,
+    outcomes,
+  ]);
 
   return (
     <>
@@ -173,19 +199,6 @@ export function LotsPage() {
       />
 
       <Page>
-        {/* Выборка по номеру — над отбором, а не в нём: отбор сужает то, что
-            уже есть, а это добавляет то, чего нет. */}
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-[10px] border border-hairline bg-surface px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-ink">Закупку пропустили?</p>
-            <p className="mt-0.5 max-w-lg text-xs text-ink-muted">
-              Введите код номер - заберём с портала строго по нему и возьмём в
-              работу
-            </p>
-          </div>
-          <FetchByNumber />
-        </div>
-
         <div className="flex flex-wrap items-center justify-between gap-3">
           {board ? (
             <Tabs
@@ -233,6 +246,18 @@ export function LotsPage() {
             из двенадцати кнопок там отвечал бы на незаданный вопрос. */}
         {inWork && (
           <WorkStages cards={working} picked={stages} onChange={setStages} />
+        )}
+
+        {/* Итоги завершённых. Множественный выбор: «выиграли и проиграли» —
+            это вопрос «где мы вообще участвовали», и задают его чаще, чем
+            каждый итог по отдельности. */}
+        {inDone && (
+          <Outcomes
+            cards={all.filter((item) => item.status === "done")}
+            picks={picks?.done ?? []}
+            value={outcomes}
+            onChange={setOutcomes}
+          />
         )}
 
         {isLoading ? (
@@ -387,10 +412,10 @@ function Row({ card }: { card: Card }) {
         </span>
 
         <span className="truncate text-sm">
-          {card.owner ? (
-            <span className="text-ink-secondary">{card.owner}</span>
+          {lead(card) ? (
+            <span className="text-ink-secondary">{lead(card)}</span>
           ) : (
-            <span className="text-ink-muted">ничьё</span>
+            <span className="text-ink-muted">свободно</span>
           )}
         </span>
 
@@ -483,6 +508,72 @@ function Deadline({ card }: { card: Card }) {
 }
 
 /**
+ * Итоги завершённых лотов — ряд отбора на своей вкладке.
+ *
+ * Выбрать можно несколько: «выиграли и проиграли» отвечает на вопрос «где мы
+ * вообще участвовали», и задают его чаще, чем каждый итог по отдельности.
+ *
+ * Пустой итог сюда не попадает: он означает «протокол не пришёл», а не «чем
+ * кончилось». Набор кнопок берётся с сервера — слова у итогов там же, где и
+ * сами итоги.
+ */
+function Outcomes({
+  cards,
+  picks,
+  value,
+  onChange,
+}: {
+  cards: Card[];
+  picks: Choice[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (!picks.length) return null;
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-[10px] border border-hairline bg-plane/40 px-3 py-2.5">
+      <span className="mr-1 text-[11.5px] text-ink-muted">Чем кончилось</span>
+      {picks.map((item) => {
+        const on = value.includes(item.key);
+        const count = cards.filter((card) => card.outcome === item.key).length;
+        return (
+          <button
+            key={item.key}
+            type="button"
+            aria-pressed={on}
+            onClick={() =>
+              onChange(
+                on
+                  ? value.filter((key) => key !== item.key)
+                  : [...value, item.key],
+              )
+            }
+            className={cx(
+              "flex h-[26px] items-center gap-1.5 rounded-[7px] border px-2.5 text-[12px] transition",
+              on
+                ? "border-ink bg-ink text-surface"
+                : "border-hairline text-ink-secondary hover:bg-surface",
+            )}
+          >
+            {item.title}
+            <span className="tabular-nums opacity-70">{count}</span>
+          </button>
+        );
+      })}
+      {value.length > 0 && (
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className="ml-1 text-[11.5px] text-series-1 hover:underline"
+        >
+          Показать все
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * «Горит» — то, что ещё можно успеть.
  *
  * Прошедший срок сюда не идёт. Вкладку открывают, чтобы понять, за что взяться
@@ -490,12 +581,24 @@ function Deadline({ card }: { card: Card }) {
  * в ней неделями и оттеснял вниз то, у чего срок и правда завтра. Никуда он не
  * девается — «Все» и вкладка его этапа показывают его по-прежнему.
  */
+/** Кто ведёт лот — «Поставка». Она же считает себестоимость: у нас это один
+ *  человек, и в строке списка показывают именно его. */
+function lead(card: Card): string {
+  return card.seats.find((place) => place.desk === "analysis")?.name ?? "";
+}
+
 function belongs(item: Card, tab: Tab, me: string | undefined): boolean {
   if (tab === "all") return true;
   if (tab === "burning") return item.burning && !item.overdue;
   if (tab === "mine")
-    return Boolean(me) && (item.owner_id === me || item.manager_id === me);
-  if (tab === "unowned") return !item.owner_id;
+    return (
+      Boolean(me) &&
+      (item.taken_by_id === me ||
+        item.seats.some((place) => place.user_id === me))
+    );
+  // «Можно взять»: есть хоть одно свободное место отдела. Лот целиком ничьим
+  // не бывает — свободной бывает строка.
+  if (tab === "unowned") return item.seats.some((place) => !place.user_id);
   return item.status === tab;
 }
 
@@ -510,7 +613,7 @@ function belongs(item: Card, tab: Tab, me: string | undefined): boolean {
 const SCOPES: { key: Tab; title: string }[] = [
   { key: "burning", title: "Горит" },
   { key: "mine", title: "Мои" },
-  { key: "unowned", title: "Ничьи" },
+  { key: "unowned", title: "Можно взять" },
   { key: "all", title: "Все" },
 ];
 
@@ -539,13 +642,20 @@ function opening(counts: Record<Tab, number>): Tab {
  * нём» этих двух ролей не различает, и лот, который менеджер ведёт, а
  * разбирает другой, висит на обоих.
  */
+/** Считается ли лот «на человеке»: он его завёл или сидит в любом из отделов.
+ *  Вопрос «что на нём» этих случаев не различает. */
+function onPerson(card: Card, who: string): boolean {
+  return (
+    card.taken_by_id === who ||
+    card.seats.some((place) => place.user_id === who)
+  );
+}
+
 function loadOf(people: Person[], all: Card[], jobs: Job[]): Load[] {
   return people.map((person) => ({
     id: person.id,
     name: person.name,
-    rows: all.filter(
-      (item) => item.owner_id === person.id || item.manager_id === person.id,
-    ).length,
+    rows: all.filter((item) => onPerson(item, person.id)).length,
     tasks: jobs.filter((task) => task.assignee_id === person.id).length,
   }));
 }
@@ -557,9 +667,8 @@ function countBy(all: Card[], me: string | undefined): Record<Tab, number> {
   >;
   for (const item of all) {
     if (item.burning && !item.overdue) counts.burning += 1;
-    if (me && (item.owner_id === me || item.manager_id === me))
-      counts.mine += 1;
-    if (!item.owner_id) counts.unowned += 1;
+    if (me && onPerson(item, me)) counts.mine += 1;
+    if (item.seats.some((place) => !place.user_id)) counts.unowned += 1;
     counts[item.status] = (counts[item.status] ?? 0) + 1;
   }
   return counts;

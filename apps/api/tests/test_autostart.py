@@ -228,13 +228,16 @@ def test_фоновая_работа_двигает_статус_вперёд(
     """
     from platform_api.db.models import LotStatus
 
-    assert лот.status is LotStatus.NEW
-
-    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="написано") is True
+    # Взяли в работу — значит в работе: отдельного «Нового» больше нет.
     assert лот.status is LotStatus.WORK
 
-    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="разобрано") is False
+    # Прогон не двигает лот, который уже там: «уже там» — это не работа, а
+    # тишина, и запись в ленте о ней была бы шумом.
+    assert cards.advance(db, card=лот, to=LotStatus.WORK, why="написано") is False
     assert лот.status is LotStatus.WORK
+
+    assert cards.advance(db, card=лот, to=LotStatus.APPROVAL, why="разобрано") is True
+    assert лот.status is LotStatus.APPROVAL
 
 
 def test_назад_статус_не_откатывается(
@@ -282,7 +285,7 @@ def test_перевод_прогоном_помечен_машиной(
     """
     from platform_api.db.models import LotEvent, LotStatus
 
-    cards.advance(db, card=лот, to=LotStatus.WORK, why="написано")
+    cards.advance(db, card=лот, to=LotStatus.APPROVAL, why="разобрано")
 
     запись = (
         db.execute(select(LotEvent).where(LotEvent.card_id == лот.id, LotEvent.kind == "moved"))

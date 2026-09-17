@@ -124,9 +124,7 @@ export function NewTask({
       role="dialog"
       aria-modal="true"
       aria-label="Новая задача"
-      onMouseDown={(event) =>
-        event.target === event.currentTarget && onClose()
-      }
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <div className="max-h-[92vh] w-full max-w-[470px] overflow-auto rounded-[14px] border border-hairline bg-surface shadow-[0_18px_48px_rgba(14,22,32,.24)]">
         <header className="flex items-center justify-between gap-3 px-[18px] pt-[15px]">

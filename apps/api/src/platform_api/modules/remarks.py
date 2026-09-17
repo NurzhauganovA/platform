@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
+from platform_api.auth.permissions import Permission
 from platform_api.config import Settings
 from platform_api.db.base import utcnow
 from platform_api.db.models import (
@@ -39,6 +40,7 @@ from platform_api.db.models import (
     DiscussionOutcome,
     DiscussionStage,
     DiscussionWriting,
+    RemarkEvent,
     Role,
     User,
 )
@@ -105,6 +107,39 @@ ALLOWED: dict[DiscussionStage, frozenset[Role]] = {
 заказчику — не то право, которое даётся заодно с доступом к ценам.
 """
 
+RIGHTS: dict[DiscussionStage, Permission] = {
+    DiscussionStage.DRAFTING: Permission.REMARK_WRITE,
+    DiscussionStage.MODERATION: Permission.REMARK_WRITE,
+    DiscussionStage.WITH_LAWYERS: Permission.REMARK_WRITE,
+    # Отправка заказчику — своё право: это подпись под обращением от имени
+    # компании, и достаётся она не заодно с правом писать текст.
+    DiscussionStage.SENT: Permission.REMARK_SEND,
+    DiscussionStage.NOT_NEEDED: Permission.REMARK_WRITE,
+}
+"""Каким правом делается переход.
+
+Право спрашивается наравне с именем роли, а не вместо него: наборы в
+`ALLOWED` — это те же люди, записанные по-другому, и встроенным ролям ничего
+не меняется.
+
+Нужно это ролям, заведённым администратором. У них встроенная часть намеренно
+самая безопасная — «Наблюдатель», — и сравнение с именем роли отвечало им
+«нельзя» на всё сразу: человек с ролью «Обсуждение», которому выдали и
+`remark.write`, и `remark.send`, не мог ни поправить текст, ни передать его
+юристам.
+"""
+
+
+def _may(right: Permission, permissions: frozenset[Permission]) -> bool:
+    """Есть ли право. Администратор проходит везде — как и в `Identity.can`."""
+    return Permission.ADMIN in permissions or right in permissions
+
+
+def _may_stage(stage: DiscussionStage, role: Role, permissions: frozenset[Permission]) -> bool:
+    """Вправе ли человек перевести замечание в это состояние."""
+    return role in ALLOWED[stage] or _may(RIGHTS[stage], permissions)
+
+
 STAGE_NAMES: dict[DiscussionStage, str] = {
     DiscussionStage.DRAFTING: "Пишется",
     DiscussionStage.MODERATION: "На проверке",
@@ -137,6 +172,24 @@ class Subject:
     enstru_code: str = ""
     category: str = ""
     deadline: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Step:
+    """Строка хронологии обсуждения так, как её показывают."""
+
+    id: str
+    at: str
+    actor: str
+    """Кто: имя человека или «ИИ модель»."""
+
+    role: str
+    """Роль на момент действия, как её видит человек: «Обсуждение», «Юрист»."""
+
+    by_machine: bool
+    kind: str
+    title: str
+    detail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +329,7 @@ def listing(
     amount_to: Decimal | None = None,
     ends: str | None = None,
     now: datetime | None = None,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> list[Remark]:
     """Очередь замечаний.
 
@@ -322,7 +376,10 @@ def listing(
     # момент, но по алфавиту вторая раньше первой — и горящее ушло бы вниз.
     rows.sort(key=lambda row: (row.deadline is None, row.deadline or moment))
     people = _people(db, rows)
-    found = [_shown(row, people, role=role, user_id=user_id, now=moment) for row in rows]
+    found = [
+        _shown(row, people, role=role, user_id=user_id, now=moment, permissions=permissions)
+        for row in rows
+    ]
     if burning:
         found = [item for item in found if item.burning and not item.overdue]
     return found
@@ -336,9 +393,94 @@ def one(
     role: Role,
     user_id: uuid.UUID,
     now: datetime | None = None,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> Remark:
     row = _required(db, organization_id, remark_id)
-    return _shown(row, _people(db, [row]), role=role, user_id=user_id, now=now or utcnow())
+    return _shown(
+        row,
+        _people(db, [row]),
+        role=role,
+        user_id=user_id,
+        now=now or utcnow(),
+        permissions=permissions,
+    )
+
+
+MAX_DETAIL = 400
+"""Сколько текста ложится в строку хронологии.
+
+Лента читается целиком и сверху вниз. Замечание на три тысячи знаков в ней —
+это не хронология, а второй экземпляр текста: сам текст лежит выше, на той же
+вкладке, и повторять его строкой ленты незачем.
+"""
+
+
+def trace(
+    db: DbSession,
+    *,
+    remark_id: uuid.UUID,
+    kind: str,
+    title: str,
+    detail: str = "",
+    actor_id: uuid.UUID | None = None,
+    role_title: str = "",
+    by_machine: bool = False,
+) -> None:
+    """Пишет строку хронологии обсуждения.
+
+    Из службы, а не из обработчика HTTP, — по той же причине, что и лента
+    лота: замечание пишет и человек, и модель, и переход, сделанный прогоном,
+    — тоже работа над ним. Оставленная в обработчике запись второй путь молча
+    пропускает.
+
+    Имя и роль кладутся копиями на момент действия: сотрудник увольняется,
+    ссылка обнуляется, а «кто это написал» спрашивают через полгода — и ответ
+    «Наблюдатель» вместо «Обсуждение» тут неверен вдвойне.
+    """
+    name = ""
+    if actor_id is not None:
+        found = db.get(User, actor_id)
+        name = (found.full_name or found.email) if found else ""
+    db.add(
+        RemarkEvent(
+            discussion_id=remark_id,
+            actor_id=actor_id,
+            actor_name=name,
+            actor_role=role_title,
+            by_machine=by_machine,
+            kind=kind,
+            title=title[:255],
+            detail=markup.plain(detail)[:MAX_DETAIL],
+        )
+    )
+
+
+def history(db: DbSession, *, organization_id: uuid.UUID, remark_id: uuid.UUID) -> list[Step]:
+    """Хронология обсуждения, снизу свежие.
+
+    Сверху вниз, как разговор: первым — что написала модель, дальше правки и
+    переходы. Так её и читают, когда пришёл отказ и надо понять, что именно
+    ушло заказчику и чем оно отличалось от написанного.
+    """
+    _required(db, organization_id, remark_id)
+    rows = db.execute(
+        select(RemarkEvent)
+        .where(RemarkEvent.discussion_id == remark_id)
+        .order_by(RemarkEvent.created_at)
+    ).scalars()
+    return [
+        Step(
+            id=str(row.id),
+            at=row.created_at.isoformat(),
+            actor=row.actor_name or ("ИИ модель" if row.by_machine else "—"),
+            role=row.actor_role,
+            by_machine=row.by_machine,
+            kind=row.kind,
+            title=row.title,
+            detail=row.detail,
+        )
+        for row in rows
+    ]
 
 
 def save_text(
@@ -349,6 +491,8 @@ def save_text(
     role: Role,
     user_id: uuid.UUID,
     text: str,
+    permissions: frozenset[Permission] = frozenset(),
+    role_title: str = "",
 ) -> Discussion:
     """Правка текста замечания.
 
@@ -359,7 +503,7 @@ def save_text(
     row = _required(db, organization_id, remark_id)
     if row.stage is DiscussionStage.SENT:
         raise SpokenError("Замечание уже отправлено, править его нельзя")
-    if role not in ALLOWED[row.stage]:
+    if not _may_stage(row.stage, role, permissions):
         raise SpokenError("Править замечание на этом этапе вам нельзя")
 
     # Разметку вычищаем до проверки длины: из вставленного документа она бывает
@@ -368,9 +512,23 @@ def save_text(
     clean = markup.tidy(text)
     if len(clean) > MAX_TEXT:
         raise SpokenError("Замечание слишком длинное")
+    было = row.text
     row.text = clean
     row.edited_by_id = user_id
     row.edited_at = utcnow()
+    # Пишем только настоящую правку. Поле сохраняют и не тронув текста —
+    # нажали «Сохранить», подумав; лента из десяти одинаковых строк «поправил»
+    # перестаёт отвечать на вопрос, что именно меняли.
+    if clean != было:
+        trace(
+            db,
+            remark_id=row.id,
+            kind="edited" if было.strip() else "written",
+            title="Поправил текст" if было.strip() else "Написал текст",
+            detail=clean,
+            actor_id=user_id,
+            role_title=role_title,
+        )
     db.flush()
     return row
 
@@ -384,6 +542,8 @@ def move(
     user_id: uuid.UUID,
     to: DiscussionStage,
     settings: Settings | None = None,
+    permissions: frozenset[Permission] = frozenset(),
+    role_title: str = "",
 ) -> Discussion:
     """Переводит замечание на следующий этап.
 
@@ -403,7 +563,7 @@ def move(
         raise SpokenError(
             f"Из состояния «{STAGE_NAMES[row.stage]}» нельзя перейти в «{STAGE_NAMES[to]}»"
         )
-    if role not in ALLOWED[to]:
+    if not _may_stage(to, role, permissions):
         raise SpokenError(f"Перевести замечание в «{STAGE_NAMES[to]}» вам нельзя")
     # Пустое замечание не уходит дальше проверки. Исключение — «не требуется»
     # и возврат на доработку: у них текста и не должно быть.
@@ -411,7 +571,20 @@ def move(
     if to not in без_текста and not row.text.strip():
         raise SpokenError("Замечание пустое: сначала напишите текст")
 
+    was = row.stage
     row.stage = to
+    trace(
+        db,
+        remark_id=row.id,
+        kind="sent" if to is DiscussionStage.SENT else "moved",
+        title=(
+            "Отправил заказчику"
+            if to is DiscussionStage.SENT
+            else f"Перевёл: «{STAGE_NAMES[was]}» → «{STAGE_NAMES[to]}»"
+        ),
+        actor_id=user_id,
+        role_title=role_title,
+    )
     if to is DiscussionStage.SENT:
         row.sent_at = utcnow()
         row.outcome = DiscussionOutcome.WAITING
@@ -507,6 +680,9 @@ def resolve(
     role: Role,
     outcome: DiscussionOutcome,
     answer: str = "",
+    permissions: frozenset[Permission] = frozenset(),
+    user_id: uuid.UUID | None = None,
+    role_title: str = "",
 ) -> Discussion:
     """Записывает, чем кончилось у заказчика.
 
@@ -516,7 +692,9 @@ def resolve(
     row = _required(db, organization_id, remark_id)
     if row.stage is not DiscussionStage.SENT:
         raise SpokenError("Итог можно записать только у отправленного замечания")
-    if role not in {Role.ADMIN, Role.ANALYST, Role.LAWYER}:
+    if role not in {Role.ADMIN, Role.ANALYST, Role.LAWYER} and not _may(
+        Permission.REMARK_WRITE, permissions
+    ):
         raise SpokenError("Записывать итог обсуждения вам нельзя")
 
     row.outcome = outcome
@@ -524,6 +702,15 @@ def resolve(
         row.answer = answer.strip()[:MAX_TEXT]
     if outcome is not DiscussionOutcome.WAITING:
         row.answered_at = utcnow()
+    trace(
+        db,
+        remark_id=row.id,
+        kind="answered",
+        title=f"Ответ заказчика: {OUTCOME_NAMES.get(outcome, outcome.value)}",
+        detail=answer,
+        actor_id=user_id,
+        role_title=role_title,
+    )
     db.flush()
     return row
 
@@ -571,11 +758,30 @@ def written(
     row.trouble = trouble
     if trouble and not text:
         row.writing = DiscussionWriting.FAILED
+        trace(
+            db,
+            remark_id=row.id,
+            kind="failed",
+            title="Модель не написала",
+            detail=trouble,
+            by_machine=True,
+        )
         db.flush()
         return
 
     row.ai_text = text[:MAX_TEXT]
     row.writing = DiscussionWriting.READY
+    # Пишем до подстановки: `ai_text` затирается при каждом перезапуске
+    # прогона, и без этой записи предыдущая версия пропадает бесследно — а
+    # сравнивают их ровно тогда, когда пришёл отказ.
+    trace(
+        db,
+        remark_id=row.id,
+        kind="written",
+        title=f"Написала модель ({model})" if model else "Написала модель",
+        detail=row.ai_text,
+        by_machine=True,
+    )
     if not row.text.strip():
         row.text = row.ai_text
         row.stage = DiscussionStage.MODERATION
@@ -629,6 +835,7 @@ def _shown(
     role: Role,
     user_id: uuid.UUID,
     now: datetime,
+    permissions: frozenset[Permission] = frozenset(),
 ) -> Remark:
     left, burning, overdue = _time_left(row, now)
     return Remark(
@@ -659,24 +866,37 @@ def _shown(
         answer=row.answer,
         sent_at=row.sent_at.isoformat() if row.sent_at else "",
         answered_at=row.answered_at.isoformat() if row.answered_at else "",
-        can=_can(row, role=role, user_id=user_id),
+        can=_can(row, role=role, user_id=user_id, permissions=permissions),
     )
 
 
-def _can(row: Discussion, *, role: Role, user_id: uuid.UUID) -> tuple[str, ...]:
-    """Что этому человеку доступно на этом этапе."""
+def _can(
+    row: Discussion,
+    *,
+    role: Role,
+    user_id: uuid.UUID,
+    permissions: frozenset[Permission] = frozenset(),
+) -> tuple[str, ...]:
+    """Что этому человеку доступно на этом этапе.
+
+    Считается теми же условиями, что стоят в службах: кнопка, которую
+    показали, а служба отвергла, — это человек, уверенный, что дело сделано.
+    """
     allowed = [
         stage.value
         for stage in TRANSITIONS[row.stage]
-        if role in ALLOWED[stage]
+        if _may_stage(stage, role, permissions)
         and (
             stage in {DiscussionStage.NOT_NEEDED, DiscussionStage.DRAFTING}
             or bool(row.text.strip())
         )
     ]
-    if row.stage is not DiscussionStage.SENT and role in ALLOWED[row.stage]:
+    if row.stage is not DiscussionStage.SENT and _may_stage(row.stage, role, permissions):
         allowed.append("edit")
-    if row.stage is DiscussionStage.SENT and role in {Role.ADMIN, Role.ANALYST, Role.LAWYER}:
+    if row.stage is DiscussionStage.SENT and (
+        role in {Role.ADMIN, Role.ANALYST, Role.LAWYER}
+        or _may(Permission.REMARK_WRITE, permissions)
+    ):
         allowed.append("resolve")
     return tuple(allowed)
 

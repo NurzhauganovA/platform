@@ -15,7 +15,6 @@ import { FLOW, type Card, type LotStatus } from "@/api/cards";
 import { Input, cx } from "@/ui";
 
 export const STATUS_NAMES: Record<LotStatus, string> = {
-  new: "Новый",
   work: "В работе",
   approval: "На согласовании",
   submission: "Подача",
@@ -24,7 +23,6 @@ export const STATUS_NAMES: Record<LotStatus, string> = {
 };
 
 const ABOUT: Record<LotStatus, string> = {
-  new: "взяли в работу, ещё не смотрели",
   work: "обсуждение, разбор, юрист, технолог, снабжение",
   approval: "собираем пять подписей",
   submission: "подписи собраны, готовим и подаём заявку",
@@ -35,7 +33,7 @@ const ABOUT: Record<LotStatus, string> = {
 // Группы остались, хотя состояний шесть: они отвечают на «до подачи или
 // после», и человек ищет нужное глазами по этой границе, а не по алфавиту.
 const GROUPS: { title: string; keys: LotStatus[] }[] = [
-  { title: "До подачи", keys: ["new", "work", "approval"] },
+  { title: "До подачи", keys: ["work", "approval"] },
   { title: "Подача и итоги", keys: ["submission", "waiting", "done"] },
 ];
 

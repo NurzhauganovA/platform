@@ -118,6 +118,19 @@ class TalkOut(BaseModel):
     """Как идёт написание моделью: `queued`, `running`, `ready`, `failed`."""
 
 
+class SeatOut(BaseModel):
+    """Строка отдела в карточке: кто им занимается."""
+
+    desk: str
+    title: str
+    name: str = ""
+    user_id: str = ""
+    taken_at: str = ""
+
+    can: list[str] = []
+    """Что можно нажать: `take` — сесть самому, `assign` — посадить другого."""
+
+
 class DeskOut(BaseModel):
     """Отработал ли отдел по лоту. Точка в строке списка, галочка в карточке."""
 
@@ -158,10 +171,16 @@ class CardOut(BaseModel):
 
     outcome_name: str
 
-    manager: str
-    manager_id: str
-    owner: str
-    owner_id: str
+    taken_by: str = ""
+    taken_by_id: str = ""
+    """Кто взял закупку в работу. Ставится один раз и не переписывается.
+
+    В правом столбце карточки не показывается: на вопрос «кто это завёл»
+    отвечает раздел «Кто работал», и вторая подпись о том же занимала строку
+    в колонке, где всё остальное — то, на что смотрят постоянно."""
+
+    seats: list[SeatOut] = []
+    """Пять отделов и кто в них."""
 
     deadline: str
     left: str
@@ -194,6 +213,10 @@ class CardOut(BaseModel):
     can: list[str]
     discussion: TalkOut | None = None
     desks: list[DeskOut] = []
+
+    stage: str = ""
+    stage_name: str = ""
+    """Где сейчас мяч: `legal`, `talk`, `desk`, `supply`, `done`."""
 
     talk_stage: str = ""
     talk_stage_name: str = ""
@@ -358,13 +381,11 @@ class SignIn(BaseModel):
     note: str = ""
 
 
-class AssignIn(BaseModel):
-    manager_id: uuid.UUID | None = None
-    owner_id: uuid.UUID | None = None
-    change_manager: bool = False
-    change_owner: bool = False
-    """Признаки нужны, чтобы отличить «снять ответственного» от «не трогать»:
-    и то и другое приходит пустым значением."""
+class SeatIn(BaseModel):
+    """Кого посадить в строку отдела. Пустой человек освобождает место."""
+
+    desk: Department
+    user_id: uuid.UUID | None = None
 
 
 class TaskIn(BaseModel):
@@ -449,6 +470,17 @@ class ResultIn(BaseModel):
 
     won_amount: Decimal | None = None
     winner: str = ""
+
+
+class FinishIn(BaseModel):
+    """Закрытие лота без протокола: не участвуем, отменён, не тот код.
+
+    Причина обязательна и проверяется службой: через месяц на вопрос «почему
+    прошли мимо этой закупки» отвечать будет некому.
+    """
+
+    outcome: LotOutcome
+    reason: str = ""
 
 
 @router.get("", summary="Лоты в работе")
@@ -702,69 +734,144 @@ def _task_state(value: str) -> TaskState:
 # отказ «errands — не идентификатор лота». Ошибка выглядит как поломка списка,
 # а причина в порядке строк в файле.
 class PickOut(BaseModel):
-    """Одна кнопка второго ряда отбора."""
+    """Одна кнопка отбора: верхнего ряда или подпункт."""
 
     key: str
     title: str
     hint: str = ""
-    of: list[str] = []
-    """Из каких подстатусов состоит. Пусто — кнопка сама по себе.
 
-    Составом с сервера, а не списком в браузере: «завершённые» — это три
-    исхода письма, и второе такое же определение на другом языке разойдётся с
-    первым молча. В платформе уже есть `_TALK_DONE`, где завершённым считается
-    совсем другое, — ровно этот случай.
+    field: str = "stage"
+    """Какое поле строки сравнивать: `stage`, `talk_stage`, `desk_stage`,
+    `outcome`. Объявляет сервер — иначе браузер держал бы вторую таблицу
+    соответствий, и она разошлась бы с первой молча."""
+
+    scope: str = "in"
+    """Где ищет подпункт.
+
+    `in` — делит свою кнопку: сумма подпунктов равна числу на ней.
+    `all` — ищет по всему списку «В работе».
+
+    Второе нужно, потому что лот попадает ровно в одну кнопку верхнего ряда, а
+    спросить «по каким письмам уже есть ответ» надо независимо от того, где
+    сейчас мяч: отправленное письмо чаще всего лежит на лоте, который стоит в
+    разборе. Без этого подпункт «письмо отправлено» показывал бы ноль на
+    любом наборе данных — ровно тот случай «Горит 2 в плитке и Горит 6 в
+    легенде», из-за которого порог вынесли на сервер.
     """
+
+    of: list[str] = []
+    """Из каких подпунктов состоит. Пусто — кнопка сама по себе."""
+
+    needs_reason: bool = False
+    """Итог, который нельзя поставить молча: это наше решение, и через месяц
+    на вопрос «почему прошли мимо» отвечать будет нечем. У выигрыша и
+    проигрыша объяснение своё — сам протокол."""
+
+
+class GroupOut(BaseModel):
+    """Кнопка верхнего ряда со своими подпунктами."""
+
+    key: str
+    title: str
+    hint: str = ""
+    subs: list[PickOut] = []
 
 
 class StagesOut(BaseModel):
-    """Подстатусы «В работе»: две независимые оси отбора.
+    """Подстатусы: что показывать под «В работе» и под «Завершёнными».
 
-    Две, а не один список из двенадцати кнопок. У лота два независимых ответа
-    — где его обсуждение и где он сам по отделам, — и «письмо отправлено» с «у
-    снабженцев» бывают верны разом.
+    Набор один на платформу и меняется правкой кода, а не данными, — поэтому
+    отдельным запросом, а не полем в каждой строке.
     """
 
-    talk: list[PickOut]
-    desk: list[PickOut]
+    work: list[GroupOut]
+    done: list[PickOut]
 
 
-@router.get("/stages", summary="Подстатусы «В работе»")
+_HINTS = {
+    "legal": "Письмо у юристов или на них стоит задача",
+    "talk": "Замечание пишут или проверяют, срок ещё идёт",
+    "desk": "Считают себестоимость или переделывают после снабжения",
+    "supply": "Ищут товар, подтверждают цены и сроки",
+    "done": "Снабжение отработало, ждём согласования",
+    "none": "До обсуждения не дошли руки",
+    "running": "Пишется или на проверке",
+    "sent": "Ушло заказчику, ответа пока нет",
+    "accepted": "Заказчик снял требование",
+    "rejected": "Требование осталось: участвуем с ним или жалуемся",
+    "not_needed": "Посмотрели и решили не трогать",
+    "finished": "Письмо ушло заказчику: ждём ответа или он уже есть",
+    "unowned": "Лот взяли в работу, но на себя его никто не взял",
+}
+
+
+@router.get("/stages", summary="Подстатусы отбора")
 def get_stages(identity: CurrentUser, _guard: Guard = None) -> StagesOut:
-    """Из чего собирается второй ряд отбора.
-
-    Отдельным запросом, а не полем в каждой строке: набор один на всю
-    платформу и меняется правкой кода, а не данными. Браузер спрашивает его
-    раз за сессию.
-    """
-    hints = {
-        "none": "До обсуждения не дошли руки",
-        "running": "Пишется, на проверке или у юристов",
-        "sent": "Ушло заказчику, ответа пока нет",
-        "accepted": "Заказчик снял требование",
-        "rejected": "Требование осталось: участвуем с ним или жалуемся",
-        "not_needed": "Посмотрели и решили не трогать: требования не мешают",
-        "finished": "Письмо ушло заказчику: ждём ответа или он уже есть",
-        "unowned": "Лот взяли в работу, но на себя его никто не взял",
-        "legal": "Письмо у юристов или на них стоит задача",
-        "supply": "Таблица передана снабжению, товар ищут",
-        "done": "Снабжение отработало, ждём согласования",
-    }
-    groups = {key: (title, of) for key, title, of in cards.TALK_GROUPS}
-
-    talk: list[PickOut] = []
-    for key, title in cards.TALK_STAGES:
-        # Группа встаёт перед первым из своих: три ответа заказчика читаются
-        # как её продолжение, а не как соседи по ряду.
-        for group, (word, of) in groups.items():
-            if of and of[0] == key:
-                talk.append(PickOut(key=group, title=word, hint=hints.get(group, ""), of=list(of)))
-        talk.append(PickOut(key=key, title=title, hint=hints.get(key, "")))
-
-    desk = [
-        PickOut(key=key, title=title, hint=hints.get(key, "")) for key, title in cards.DESK_STAGES
+    """Из чего собираются ряды отбора под «В работе» и «Завершёнными»."""
+    talk_subs = [
+        PickOut(
+            key="none",
+            title="Не написано",
+            hint=_HINTS["none"],
+            field="talk_stage",
+            scope="in",
+        ),
+        PickOut(
+            key="running",
+            title="В процессе",
+            hint=_HINTS["running"],
+            field="talk_stage",
+            scope="in",
+        ),
+        PickOut(
+            key="finished",
+            title="Завершённые",
+            hint=_HINTS["finished"],
+            field="talk_stage",
+            scope="all",
+            of=["sent", "accepted", "rejected"],
+        ),
+        *(
+            PickOut(key=key, title=title, hint=_HINTS.get(key, ""), field="talk_stage", scope="all")
+            for key, title in cards.TALK_STAGES
+            if key in {"sent", "accepted", "rejected", "not_needed"}
+        ),
     ]
-    return StagesOut(talk=talk, desk=desk)
+    desk_subs = [
+        PickOut(
+            key="unowned",
+            title="Разбор не начат",
+            hint=_HINTS["unowned"],
+            field="desk_stage",
+            scope="in",
+        ),
+        PickOut(
+            key="running",
+            title="Разбор идёт",
+            hint="Считают или переделывают после снабжения",
+            field="desk_stage",
+            scope="in",
+        ),
+    ]
+    subs = {"talk": talk_subs, "desk": desk_subs}
+
+    return StagesOut(
+        work=[
+            GroupOut(key=key, title=title, hint=_HINTS.get(key, ""), subs=subs.get(key, []))
+            for key, title in cards.WORK_STAGES
+        ],
+        done=[
+            PickOut(
+                key=outcome.value,
+                title=name,
+                field="outcome",
+                scope="in",
+                needs_reason=outcome in cards.NEEDS_REASON,
+            )
+            for outcome, name in cards.OUTCOME_NAMES.items()
+            if outcome is not LotOutcome.NONE
+        ],
+    )
 
 
 @router.get("/errands", summary="Поручения вне лота")
@@ -1638,14 +1745,25 @@ def post_sign(
     return _card_out(_one(db, identity, card_id))
 
 
-@router.post("/{card_id}/claim", summary="Взять лот на себя")
-def post_claim(card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard = None) -> CardOut:
-    """Берёт ничей лот на себя.
+class ClaimIn(BaseModel):
+    """Какое место занять. По умолчанию — «Поставка»: она ведёт лот."""
 
-    Отдельно от «поручить другому»: раздавать работу — право руководящее, а
-    взять свободную себе должен любой, кто её делает. Лот с портала берёт
-    госзакупщик, разбор считает тендерщик, и бежать за менеджером ради одной
-    отметки значит потерять день из двух, что даёт срок обсуждения.
+    desk: Department = Department.ANALYSIS
+
+
+@router.post("/{card_id}/claim", summary="Занять место отдела")
+def post_claim(
+    card_id: uuid.UUID,
+    identity: CurrentUser,
+    db: Db,
+    body: ClaimIn | None = None,
+    _guard: Guard = None,
+) -> CardOut:
+    """Садится на свободное место своего отдела.
+
+    Отдельно от «посадить другого»: раздавать работу — право руководящее, а
+    взять свободную себе должен любой, кто её делает. Бежать за менеджером
+    ради одной отметки значит потерять день из двух, что даёт срок обсуждения.
     """
     _act(
         lambda: cards.claim(
@@ -1654,6 +1772,7 @@ def post_claim(card_id: uuid.UUID, identity: CurrentUser, db: Db, _guard: Guard 
             card_id=card_id,
             user_id=identity.user.id,
             role=identity.role,
+            desk=(body or ClaimIn()).desk,
         )
     )
     db.commit()
@@ -1721,30 +1840,59 @@ def post_result(
     return _card_out(_one(db, identity, card_id))
 
 
+@router.post("/{card_id}/finish", summary="Закрыть лот без подачи")
+def post_finish(
+    card_id: uuid.UUID,
+    body: FinishIn,
+    identity: CurrentUser,
+    db: Db,
+    _guard: Guard = None,
+) -> CardOut:
+    """Закрывает закупку, мимо которой прошли, — с причиной.
+
+    Отдельно от «Записать итоги»: тот требует поданной заявки, а здесь её как
+    раз и не было. Требовать подачу значило бы не дать закрыть лот, мимо
+    которого прошли, — и он остался бы висеть в списке живым.
+    """
+    _act(
+        lambda: cards.finish(
+            db,
+            organization_id=identity.organization.id,
+            card_id=card_id,
+            role=identity.role,
+            outcome=body.outcome,
+            reason=body.reason,
+            user_id=identity.user.id,
+            permissions=identity.permissions,
+        )
+    )
+    db.commit()
+    return _card_out(_one(db, identity, card_id))
+
+
 @router.post("/{card_id}/assign", summary="Назначить людей")
 def post_assign(
     card_id: uuid.UUID,
-    body: AssignIn,
+    body: SeatIn,
     identity: CurrentUser,
     db: Db,
     _guard: Guard = None,
     _assigns: Assigns = None,
 ) -> CardOut:
-    """Меняет менеджера и ведущего.
+    """Сажает человека в строку отдела или освобождает её.
 
     Право отдельное: раздавать работу — решение руководящее, и оно не должно
-    доставаться заодно с доступом к карточке лота.
+    доставаться заодно с доступом к карточке лота. Сесть самому — другое
+    действие и другая дверь: `POST /{card_id}/claim`.
     """
     _act(
-        lambda: cards.assign(
+        lambda: cards.seat(
             db,
             organization_id=identity.organization.id,
             card_id=card_id,
-            manager_id=body.manager_id,
-            owner_id=body.owner_id,
-            change_manager=body.change_manager,
-            change_owner=body.change_owner,
-            user_id=identity.user.id,
+            desk=body.desk,
+            user_id=body.user_id,
+            by=identity.user.id,
             role=identity.role,
         )
     )
@@ -2174,6 +2322,7 @@ def _card_out(item: cards.Card) -> CardOut:
     fields = asdict(item)
     fields["can"] = list(item.can)
     fields["approvals"] = [SignOut(**asdict(sign)) for sign in item.approvals]
+    fields["seats"] = [SeatOut(**{**asdict(place), "can": list(place.can)}) for place in item.seats]
     fields["amount"] = float(item.amount) if item.amount is not None else None
     fields["won_amount"] = float(item.won_amount) if item.won_amount is not None else None
     return CardOut(**fields)

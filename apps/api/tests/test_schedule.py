@@ -38,6 +38,10 @@ def test_schedule_is_declared_by_modules() -> None:
         "omarket:sync",
         "goszakup:harvest",
         "work:audit",
+        # Раз в час закрываются лоты, по которым срок приёма истёк, а заявки
+        # не было: признать вслух, что закупку упустили, не успевает никто, и
+        # такие лоты висели в списке живыми месяцами.
+        "work:missed",
         "jobs:sweep",
     }
 

@@ -570,3 +570,99 @@ def test_fail_u_nenuzhnogo_obsuzhdeniya_sroka_net(
     assert карточка.left == ""
     assert карточка.overdue is False
     assert карточка.burning is False
+
+
+def test_fail_svoya_rol_pishet_i_otpravlyaet_zamechanie(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Своя роль «Обсуждение» должна писать, править и отправлять.
+
+    Переходы обсуждения сверялись с именем встроенной роли, а у своей роли
+    встроенная часть намеренно «Наблюдатель» — самое безопасное значение для
+    мест, которые ещё смотрят на роль. Человеку с ролью «Обсуждение», которому
+    выдали и `remark.write`, и `remark.send`, платформа отвечала «Править
+    замечание вашей роли не открыто» — и ни одна галочка этого не меняла.
+    """
+    from platform_api.auth.permissions import Permission
+    from platform_api.db.models import DiscussionStage, Role
+    from platform_api.modules import remarks
+
+    права = frozenset({Permission.REMARKS, Permission.REMARK_WRITE, Permission.REMARK_SEND})
+    remark_id = _завести(db, org)
+
+    # Править текст на этапе «Пишется».
+    remarks.save_text(
+        db,
+        organization_id=org.id,
+        remark_id=remark_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        text="Просим снять требование к бренду",
+        permissions=права,
+    )
+
+    # Передать на проверку, затем юристам, затем отправить заказчику.
+    for этап in (
+        DiscussionStage.MODERATION,
+        DiscussionStage.WITH_LAWYERS,
+        DiscussionStage.SENT,
+    ):
+        remarks.move(
+            db,
+            organization_id=org.id,
+            remark_id=remark_id,
+            role=Role.VIEWER,
+            user_id=кто,
+            to=этап,
+            permissions=права,
+        )
+    one = remarks.one(
+        db, organization_id=org.id, remark_id=remark_id, role=Role.VIEWER, user_id=кто
+    )
+    assert one.stage == DiscussionStage.SENT.value
+
+
+def test_fail_bez_prava_otpravki_zamechanie_ne_uhodit(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Писать — одно право, отправлять — другое.
+
+    Отправка заказчику необратима и идёт от имени компании: она не должна
+    доставаться заодно с правом править текст.
+    """
+    from platform_api.auth.permissions import Permission
+    from platform_api.db.models import DiscussionStage, Role
+    from platform_api.errors import SpokenError
+    from platform_api.modules import remarks
+
+    только_пишет = frozenset({Permission.REMARKS, Permission.REMARK_WRITE})
+    remark_id = _завести(db, org)
+
+    remarks.save_text(
+        db,
+        organization_id=org.id,
+        remark_id=remark_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        text="Просим снять требование",
+        permissions=только_пишет,
+    )
+    remarks.move(
+        db,
+        organization_id=org.id,
+        remark_id=remark_id,
+        role=Role.VIEWER,
+        user_id=кто,
+        to=DiscussionStage.MODERATION,
+        permissions=только_пишет,
+    )
+    with pytest.raises(SpokenError):
+        remarks.move(
+            db,
+            organization_id=org.id,
+            remark_id=remark_id,
+            role=Role.VIEWER,
+            user_id=кто,
+            to=DiscussionStage.SENT,
+            permissions=только_пишет,
+        )

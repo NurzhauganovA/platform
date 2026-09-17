@@ -58,12 +58,13 @@ def lot_opened(db: DbSession, settings: Settings, card: LotCard) -> None:
     for desk in TAKEN_DESKS:
         people.update(people_of(db, card.organization_id, desk))
     # Тому, кто лот и взял, сообщать нечего: он смотрит на него прямо сейчас.
-    # Ведущего у нового лота нет вовсе — его как раз и ищут этой рассылкой, —
-    # поэтому отбрасывается менеджер: лот с портала берёт он.
-    if card.manager_id:
-        people.discard(card.manager_id)
-    if card.owner_id:
-        people.discard(card.owner_id)
+    # И тем, кого правило уже посадило в строку отдела: им ушло своё письмо
+    # «вам назначено», и второе — «нужно взять на себя» — противоречит первому.
+    if card.taken_by_id:
+        people.discard(card.taken_by_id)
+    for place in card.seats:
+        if place.user_id:
+            people.discard(place.user_id)
     if not people:
         return
 
@@ -84,6 +85,46 @@ def lot_opened(db: DbSession, settings: Settings, card: LotCard) -> None:
         group=f"lot:{card.id}",
         idempotency_key=f"lot-opened-{card.id}",
     )
+
+
+def seats_filled(db: DbSession, settings: Settings, card: LotCard) -> None:
+    """Зовёт отделы к новому лоту: по каждому свободному месту — всю роль.
+
+    Никого не сажаем заранее, даже когда в роли один человек. Так было
+    задумано сначала, и на живом лоте это читалось неверно: строка «Обсуждение»
+    оказывалась занятой до того, как человек к лоту притронулся, — а работу он
+    берёт сам, и до этого момента она не его.
+
+    Зовём всю роль, а не одного. Выбрать одного нельзя: он об этом не просил, а
+    остальные решат, что работа занята, — и она простоит до планёрки.
+    """
+    from platform_api.modules.cards import DESK_ROLE_KEYS, DESK_TITLES, people_of_role
+
+    where = f"{card.code} · {card.title}"
+    for place in card.seats:
+        title = DESK_TITLES.get(place.desk)
+        if title is None or place.user_id is not None:
+            continue
+
+        key = DESK_ROLE_KEYS.get(place.desk)
+        people = people_of_role(db, card.organization_id, key) if key else []
+        # Тому, кто лот и завёл, второе письмо ни к чему: он смотрит на него
+        # прямо сейчас.
+        people = [one for one in people if one != card.taken_by_id]
+        if not people:
+            continue
+        notify.about(
+            settings,
+            event="lot.assigned",
+            title=f"Новый лот — нужен {title.lower()}",
+            body_text=f"{where}\n\nМесто свободно: возьмите на себя в карточке лота.",
+            payload={"lot": where, "department": title},
+            users=sorted(people),
+            url=f"/work/lots/{card.id}",
+            deadline=card.deadline.isoformat() if card.deadline else "",
+            group=f"lot:{card.id}",
+            idempotency_key=f"seat-free-{card.id}-{place.desk.value}",
+        )
 
 
 def task_added(db: DbSession, settings: Settings, task: Task, card: LotCard | None) -> None:
@@ -368,6 +409,7 @@ __all__ = [
     "lot_opened",
     "mentioned",
     "mentioned_in_task",
+    "seats_filled",
     "task_added",
     "task_closed",
     "task_taken",

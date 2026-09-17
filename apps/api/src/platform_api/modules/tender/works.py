@@ -28,16 +28,17 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, select
 
+from platform_api.auth.permissions import Permission
 from platform_api.db.base import utcnow
 from platform_api.db.models import (
     OptionSource,
-    Role,
     TenderWork,
     TenderWorkOption,
     TenderWorkPosition,
     WorkStage,
 )
 from platform_api.errors import SpokenError
+from platform_api.modules.table import sees_money
 
 if TYPE_CHECKING:
     import uuid
@@ -402,15 +403,18 @@ def _enumerate(titles: list[str]) -> str:
     return f"{titles[0][:60]}»{more}"
 
 
-def visible_for(work: TenderWork, role: Role) -> bool:
-    """Видит ли эта роль работу вообще.
+def visible_for(work: TenderWork, permissions: frozenset[Permission]) -> bool:
+    """Видит ли человек работу вообще.
 
     Снабжение видит лот, только когда он у него: до передачи там ещё нечего
     смотреть, а после возврата работа снова у разбора.
+
+    Спрашивается то же право, что и у самих цифр (`sees_money`). Пока здесь
+    сравнивалось имя роли, а суммы отдавались по праву, условия разъехались:
+    менеджер проходил проверку на числа, заводил лот в работу — и не находил
+    его в списке, потому что видимость по-прежнему считала его снабжением.
     """
-    if role in (Role.ADMIN, Role.ANALYST):
-        return True
-    return work.stage is WorkStage.SUPPLY
+    return sees_money(permissions) or work.stage is WorkStage.SUPPLY
 
 
 _ANALYSIS_DESK = (WorkStage.ANALYSIS, WorkStage.RETURNED)

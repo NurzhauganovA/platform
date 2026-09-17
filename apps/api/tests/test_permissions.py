@@ -587,8 +587,10 @@ def test_fail_udalennyy_chelovek_ne_unosit_istoriyu(db: DbSession, app_client: T
 
     лента = app_client.get(f"/api/cards/{card.id}/history").json()
     assert any(item["actor"] == "Ушёл Уволившийся" for item in лента["events"])
-    # Лот остался, но стал ничьим: вести его больше некому, и это правда.
-    assert показ["owner"] == ""
+    # Лот остался, но места отделов освободились: вести его больше некому, и
+    # это правда. Имя при этом сохранено копией там, где оно уже было
+    # проставлено, — «кто это одобрил» спрашивают через полгода.
+    assert all(place["user_id"] == "" for place in показ["seats"])
 
 
 def test_fail_poslednego_administratora_ne_udalyayut(db: DbSession, app_client: TestClient) -> None:

@@ -95,7 +95,7 @@ _BY_RIGHT: dict[Visibility, Permission] = {
 """
 
 
-def _allowed(permissions: frozenset[Permission]) -> frozenset[Visibility]:
+def visible_groups(permissions: frozenset[Permission]) -> frozenset[Visibility]:
     """Какие группы колонок видит человек с этими правами.
 
     Общие — всегда: за ними ни цен, ни поставщиков, и закрывать их не от кого.
@@ -276,7 +276,7 @@ def sees_money(permissions: frozenset[Permission]) -> bool:
     считаются по тем же данным, и показывать их закупщику при скрытой колонке
     маржи значило бы отдать то же самое, только крупным шрифтом.
     """
-    return Visibility.MONEY in _allowed(permissions)
+    return Visibility.MONEY in visible_groups(permissions)
 
 
 def visible_columns(
@@ -291,7 +291,7 @@ def visible_columns(
     её видит только тендерщик.
 
     """
-    allowed = _allowed(permissions)
+    allowed = visible_groups(permissions)
     result: list[tuple[int, Column, Visibility]] = []
     for index, column in enumerate(columns):
         access = policy.get(column.title)

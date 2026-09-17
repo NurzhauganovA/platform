@@ -90,11 +90,28 @@ function query(filters: Filters): string {
   return text ? `?${text}` : "";
 }
 
+/** Строка хронологии обсуждения. */
+export interface Step {
+  id: string;
+  at: string;
+  /** Кто: имя человека или «ИИ модель». */
+  actor: string;
+  /** Роль на момент действия: «Обсуждение», «Юрист». */
+  role: string;
+  by_machine: boolean;
+  kind: string;
+  title: string;
+  detail: string;
+}
+
 export const remarks = {
   list: (filters: Filters = {}) =>
     api.get<Remark[]>(`/api/remarks${query(filters)}`),
 
   one: (id: string) => api.get<Remark>(`/api/remarks/${id}`),
+
+  /** Хронология: что делали с замечанием и кто, по порядку. */
+  history: (id: string) => api.get<Step[]>(`/api/remarks/${id}/history`),
 
   saveText: (id: string, text: string) =>
     api.put<Remark>(`/api/remarks/${id}/text`, { text }),

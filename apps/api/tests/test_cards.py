@@ -73,6 +73,18 @@ def _завести(db: DbSession, org: Organization, кто: uuid.UUID) -> uuid
     return card.id
 
 
+def _посадить(card: LotCard, кто: uuid.UUID | None) -> None:
+    """Сажает человека в «Поставку» — отдел, который ведёт лот."""
+    from platform_api.db.models import LotSeat
+    from platform_api.modules.cards import LEAD
+
+    for row in card.seats:
+        if row.desk is LEAD:
+            row.user_id = кто
+            return
+    card.seats.append(LotSeat(card_id=card.id, desk=LEAD, user_id=кто))
+
+
 def _карточка(db: DbSession, org: Organization) -> LotCard:
     found = cards.by_row(db, organization_id=org.id, module="goszakup", row_id="81468165-ЗЦП1")
     assert found is not None
@@ -218,7 +230,7 @@ def test_fail_perevesti_mozhno_kuda_ugodno(
     Проверяется крайний случай: из последнего состояния обратно в первое.
     """
     card_id = _завести(db, org, кто)
-    for to in (LotStatus.DONE, LotStatus.NEW, LotStatus.DONE):
+    for to in (LotStatus.DONE, LotStatus.WORK, LotStatus.DONE):
         card = cards.move(
             db,
             organization_id=org.id,
@@ -750,7 +762,7 @@ def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestCl
         card_id=card_id,
         role=Role.MANAGER,
         user_id=who,
-        to=LotStatus.WORK,
+        to=LotStatus.APPROVAL,
     )
     db.commit()
 
@@ -761,8 +773,8 @@ def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestCl
     assert len(body["events"]) >= 2, "Взятие в работу и перевод обязаны быть в ленте"
 
     moved = next(item for item in body["events"] if item["kind"] == "moved")
-    assert moved["to_status"] == "work"
-    assert moved["from_status"] == "new"
+    assert moved["to_status"] == "approval"
+    assert moved["from_status"] == "work"
     assert moved["by_machine"] is False
 
     # Сводка по людям: по ней делят премию, и считает её сервер.
@@ -770,7 +782,7 @@ def test_fail_istoriya_otdayotsya_s_sobytiyami(db: DbSession, app_client: TestCl
     assert body["workers"][0]["actions"] >= 2
 
     # Этапы: сколько лот простоял на каждом. Без них не видно, где застряло.
-    assert [stage["status"] for stage in body["stages"]] == ["new", "work"]
+    assert [stage["status"] for stage in body["stages"]] == ["work", "approval"]
     assert body["stages"][-1]["running"] is True
 
 
@@ -923,12 +935,12 @@ def test_fail_progon_dvigaet_lot_tolko_vperyod(
     _завести(db, org, кто)
     card = _карточка(db, org)
 
-    assert cards.advance(db, card=card, to=LotStatus.WORK, why="разбор собран") is True
-    assert card.status is LotStatus.WORK
-
-    card.status = LotStatus.APPROVAL
-    assert cards.advance(db, card=card, to=LotStatus.WORK, why="разбор собран") is False
+    assert cards.advance(db, card=card, to=LotStatus.APPROVAL, why="разбор собран") is True
     assert card.status is LotStatus.APPROVAL
+
+    card.status = LotStatus.SUBMISSION
+    assert cards.advance(db, card=card, to=LotStatus.APPROVAL, why="разбор собран") is False
+    assert card.status is LotStatus.SUBMISSION
 
 
 def test_fail_soshedshiy_s_distantsii_progonom_ne_dvigaetsya(
@@ -1643,7 +1655,6 @@ def test_fail_shest_sostoyaniy_i_ni_odnogo_lishnego(
     from platform_api.db.models import LotStatus as Статус
 
     assert [status.value for status in cards.FLOW] == [
-        "new",
         "work",
         "approval",
         "submission",
@@ -1961,8 +1972,8 @@ def test_fail_svoya_rol_podpisyvaet_i_dvigaet_po_pravu(
             permissions=права,
         )
 
-    # «Новый» — не шаг вперёд, а возврат лота в начало: он остаётся за
-    # менеджером и одним правом «двигать лот» не берётся.
+    # Завершение — не «двигать лот»: закупку, мимо которой прошли, закрывает
+    # тот, кто решает об участии, а не тот, кому дали право переводить.
     with pytest.raises(SpokenError):
         cards.move(
             db,
@@ -1970,7 +1981,7 @@ def test_fail_svoya_rol_podpisyvaet_i_dvigaet_po_pravu(
             card_id=card_id,
             role=Role.VIEWER,
             user_id=кто,
-            to=LotStatus.NEW,
+            to=LotStatus.DONE,
             permissions=права,
         )
 
@@ -2037,10 +2048,10 @@ def test_fail_podstatus_razbora_pokazyvaet_gde_myach(
     card = _карточка(db, org)
 
     # Никто не взял на себя — остальное неважно.
-    card.owner_id = None
+    _посадить(card, None)
     assert cards.desk_stage(card, talk=None, to_supply=True) == "unowned"
 
-    card.owner_id = кто
+    _посадить(card, кто)
     assert cards.desk_stage(card, talk=None, to_supply=False) == "running"
 
     # Передали снабжению, задача отдела открыта — мяч у него.
@@ -2073,3 +2084,314 @@ def test_fail_podstatus_razbora_pokazyvaet_gde_myach(
     db.refresh(card)
     assert cards.desk_stage(card, talk=None, to_supply=True) == "done"
     assert all(key in cards.DESK_STAGE_NAMES for key, _ in cards.DESK_STAGES)
+
+
+def test_fail_lot_zakryvaetsya_prichinoy_a_ne_molcha(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Закрыть лот «не участвуем» без причины нельзя.
+
+    Через месяц на вопрос «почему прошли мимо этой закупки» отвечать будет
+    некому: тот, кто закрывал, помнит первые три, а закрывают их десятками.
+    """
+    from platform_api.db.models import LotOutcome
+
+    card_id = _завести(db, org, кто)
+
+    with pytest.raises(SpokenError):
+        cards.finish(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.MANAGER,
+            outcome=LotOutcome.SKIPPED,
+            reason="   ",
+            user_id=кто,
+        )
+
+    закрыт = cards.finish(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        outcome=LotOutcome.SKIPPED,
+        reason="Заказчик требует опыт по этому коду три года",
+        user_id=кто,
+    )
+    assert закрыт.outcome is LotOutcome.SKIPPED
+    assert закрыт.status is LotStatus.DONE
+    assert закрыт.finished_at is not None
+    assert "опыт" in закрыт.skip_reason
+    # «Не участвуем» — это и решение об участии: второго ответа на тот же
+    # вопрос в карточке быть не должно.
+    assert закрыт.participation is Participation.NO
+
+
+def test_fail_itog_protokola_cherez_finish_ne_stavitsya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """«Выиграли» и «проиграли» записываются вместе с протоколом.
+
+    У них объяснение — сам протокол, и рядом цена с победителем. Пустить их
+    сюда значит завести второй способ записать итог, и он разойдётся с первым
+    ровно в сумме, по которой считают маржу.
+    """
+    from platform_api.db.models import LotOutcome
+
+    card_id = _завести(db, org, кто)
+    for итог in (LotOutcome.WON, LotOutcome.LOST, LotOutcome.NOT_SUBMITTED, LotOutcome.NONE):
+        with pytest.raises(SpokenError):
+            cards.finish(
+                db,
+                organization_id=org.id,
+                card_id=card_id,
+                role=Role.MANAGER,
+                outcome=итог,
+                reason="причина есть",
+                user_id=кто,
+            )
+
+
+def test_fail_u_kazhdogo_itoga_est_imya(db: DbSession) -> None:
+    """Имя есть у каждого итога, и причина спрашивается у тех, где её нет.
+
+    Пропущенное имя показало бы человеку «LotOutcome.WRONG_CODE»; пропуск в
+    списке «нужна причина» — закупку, закрытую молча.
+    """
+    from platform_api.db.models import LotOutcome
+
+    assert all(итог in cards.OUTCOME_NAMES for итог in LotOutcome)
+    assert set(LotOutcome) >= cards.NEEDS_REASON
+    # У протокольных итогов объяснение своё — цена и победитель.
+    assert LotOutcome.WON not in cards.NEEDS_REASON
+    assert LotOutcome.LOST not in cards.NEEDS_REASON
+    # У «не успели подать» причину пишет прогон.
+    assert LotOutcome.NOT_SUBMITTED not in cards.NEEDS_REASON
+
+
+def test_fail_lot_popadaet_rovno_v_odnu_knopku(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Верхний ряд отбора — лестница, а не набор признаков.
+
+    В списке у строки одно место, и лот, подходящий под три ответа сразу,
+    должен попасть в тот, который ближе всего к действию. Юристы первыми: у
+    обсуждения срок два рабочих дня, а поиск товара идёт неделями.
+    """
+    from platform_api.db.base import utcnow
+    from platform_api.db.models import Discussion, DiscussionStage
+
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+    now = utcnow()
+
+    def где(**поля: object) -> str:
+        return cards.work_stage(card, now=now, **поля)
+
+    # Никто не взял на себя — мяч у разбора.
+    _посадить(card, None)
+    assert где(talk=None, talking=False, to_supply=False) == "desk"
+
+    _посадить(card, кто)
+    assert где(talk=None, talking=False, to_supply=False) == "desk"
+    assert где(talk=None, talking=False, to_supply=True) == "done"
+
+    # Обсуждение пишется, срок ещё идёт.
+    пишется = Discussion(
+        organization_id=org.id,
+        module="goszakup",
+        row_id="x",
+        text="Просим снять",
+        deadline=now + timedelta(days=1),
+    )
+    пишется.stage = DiscussionStage.MODERATION
+    assert где(talk=пишется, talking=True, to_supply=False) == "talk"
+
+    # Срок обсуждения вышел — мяч там больше не держится: отправлять нечего.
+    просрочено = Discussion(
+        organization_id=org.id,
+        module="goszakup",
+        row_id="x",
+        text="Просим снять",
+        deadline=now - timedelta(days=1),
+    )
+    просрочено.stage = DiscussionStage.MODERATION
+    assert где(talk=просрочено, talking=True, to_supply=False) == "desk"
+
+    # У юристов — раньше обсуждения и раньше снабжения.
+    у_юристов = Discussion(
+        organization_id=org.id,
+        module="goszakup",
+        row_id="x",
+        text="Просим",
+        deadline=now + timedelta(days=1),
+    )
+    у_юристов.stage = DiscussionStage.WITH_LAWYERS
+    assert где(talk=у_юристов, talking=True, to_supply=True) == "legal"
+
+    # Площадка обсуждений не ведёт — мяч там оказаться не может.
+    assert где(talk=пишется, talking=False, to_supply=False) == "desk"
+
+    # У каждой кнопки есть слово: иначе на экране встанет «legal».
+    assert all(key in cards.WORK_STAGE_NAMES for key, _ in cards.WORK_STAGES)
+
+
+def test_fail_pyat_mest_zavodyatsya_srazu(db: DbSession, org: Organization, кто: uuid.UUID) -> None:
+    """Пять строк отделов появляются вместе с лотом, пустыми.
+
+    Иначе «строки нет» и «строка пуста» разъезжаются, и каждому читателю
+    приходится доливать недостающие: список, карточка, подстатус — три места,
+    где это надо помнить.
+    """
+    _завести(db, org, кто)
+    card = _карточка(db, org)
+
+    assert {row.desk for row in card.seats} == {desk for desk, _, _ in cards.DESKS}
+    # Взявший не садится никуда: лот с портала берёт госзакупщик, а разбор
+    # считает не он.
+    assert all(row.user_id is None for row in card.seats)
+    assert card.taken_by_id == кто
+
+
+def test_fail_mesta_ostayutsya_svobodnymi(db: DbSession, org: Organization) -> None:
+    """Никого не сажаем заранее, даже когда в роли один человек.
+
+    Так было задумано сначала, и на живом лоте читалось неверно: строка
+    «Обсуждение» оказывалась занятой до того, как человек к лоту притронулся.
+    Работу берут сами, и до этого момента она не его; уведомление всей роли
+    при этом уходит всё равно.
+    """
+    from platform_api.db.models import CustomRole, Membership, Role, User
+
+    своя = CustomRole(
+        organization_id=org.id, key="discussion", title="Обсуждение", permissions=["crm"]
+    )
+    db.add(своя)
+    db.flush()
+    один = User(email=f"{uuid.uuid4().hex[:8]}@fintend.kz", password_hash="x")
+    db.add(один)
+    db.flush()
+    db.add(
+        Membership(
+            user_id=один.id,
+            organization_id=org.id,
+            role=Role.VIEWER,
+            custom_role_id=своя.id,
+        )
+    )
+    db.flush()
+
+    _завести(db, org, один.id)
+    card = _карточка(db, org)
+    assert all(row.user_id is None for row in card.seats)
+
+
+def test_fail_zanyatoe_mesto_ne_perehvatyvaetsya(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Двое на одном месте считают лот дважды и узнают об этом на согласовании."""
+    from platform_api.db.models import User
+
+    другой = User(email=f"{uuid.uuid4().hex[:8]}@fintend.kz", password_hash="x")
+    db.add(другой)
+    db.flush()
+    card_id = _завести(db, org, кто)
+
+    cards.claim(db, organization_id=org.id, card_id=card_id, user_id=кто, role=Role.ANALYST)
+    # Повторное занятие тем же человеком — не ошибка: кнопку нажимают дважды.
+    cards.claim(db, organization_id=org.id, card_id=card_id, user_id=кто, role=Role.ANALYST)
+    with pytest.raises(SpokenError):
+        cards.claim(
+            db, organization_id=org.id, card_id=card_id, user_id=другой.id, role=Role.ANALYST
+        )
+
+    # Освободить и занять заново может тот, кто вправе назначать.
+    cards.seat(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        desk=cards.LEAD,
+        user_id=None,
+        by=кто,
+        role=Role.MANAGER,
+    )
+    cards.claim(db, organization_id=org.id, card_id=card_id, user_id=другой.id, role=Role.ANALYST)
+    assert cards.seated(_карточка(db, org), cards.LEAD) == другой.id
+    # Кто завёл лот, при этом не меняется: его затирало первое же назначение.
+    assert _карточка(db, org).taken_by_id == кто
+
+
+def test_fail_da_i_net_pereklyuchayutsya_tuda_i_obratno(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Переключатель «Участвуем?» должен работать в обе стороны и не один раз.
+
+    Было так: выбрал «Код ТРУ не подходит» — лот закрылся, а переключатель
+    остался на «Да», потому что отметку ставил только итог «не участвуем».
+    Дальше нажатия выглядели как будто ничего не происходит: лот уже закрыт,
+    причина записана, а на экране по-прежнему «Да».
+    """
+    from platform_api.db.models import LotOutcome
+
+    card_id = _завести(db, org, кто)
+
+    # Любая из четырёх причин — это ответ «нет».
+    for итог in (LotOutcome.WRONG_CODE, LotOutcome.CANCELLED, LotOutcome.NOT_LIQUID):
+        cards.finish(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.MANAGER,
+            outcome=итог,
+            reason="проверка",
+            user_id=кто,
+        )
+        card = _карточка(db, org)
+        assert card.participation is Participation.NO, итог
+        assert card.status is LotStatus.DONE
+        assert card.outcome is итог
+
+        # «Да» возвращает лот в работу: иначе участвуем, а лот числится
+        # завершённым и лежит в чужой вкладке.
+        cards.decide(
+            db,
+            organization_id=org.id,
+            card_id=card_id,
+            role=Role.MANAGER,
+            participation=Participation.YES,
+            user_id=кто,
+        )
+        card = _карточка(db, org)
+        assert card.participation is Participation.YES
+        assert card.outcome is LotOutcome.NONE
+        assert card.status is not LotStatus.DONE
+        assert card.finished_at is None
+
+
+def test_fail_protokolnyy_itog_ne_otmenyaetsya_nazhatiem(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Выигрыш и проигрыш — не наше решение, и стирать их «Да» нельзя.
+
+    Иначе нажатие в карточке отменяет протокол, по которому уже считали
+    премию, и заметят это в отчёте через квартал.
+    """
+    from platform_api.db.models import LotOutcome
+
+    card_id = _завести(db, org, кто)
+    card = _карточка(db, org)
+    card.outcome = LotOutcome.WON
+    card.status = LotStatus.DONE
+    db.flush()
+
+    cards.decide(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        participation=Participation.YES,
+        user_id=кто,
+    )
+    card = _карточка(db, org)
+    assert card.outcome is LotOutcome.WON
+    assert card.status is LotStatus.DONE
