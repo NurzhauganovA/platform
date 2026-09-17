@@ -75,6 +75,18 @@ function Who({ me }: { me: Me }) {
             onChange={(e) => setMail(e.target.value)}
           />
         </Field>
+        {/* Роль — здесь же, а не только подписью в колонке слева. «Какая у
+            меня роль» спрашивают, открыв профиль, и до сих пор ответа тут не
+            было вовсе. Правится администратором: сам себе роль не меняют. */}
+        <Field
+          label="Роль"
+          hint="Меняет администратор. Что роли можно — на экране «Сотрудники и роли»."
+        >
+          <div className="text-[13.5px] text-ink">
+            {me.role_title || me.role}
+          </div>
+        </Field>
+
         <div className="flex items-center gap-2">
           <Button
             variant="primary"

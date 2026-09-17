@@ -16,9 +16,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import type { Role } from "@/api/tender";
 import { worksApi, type WorkListItem, type WorkStage } from "@/api/worklist";
 import { PageHeader } from "@/shell/AppShell";
+import { useCan } from "@/shell/can";
 import { Card, Spinner, cx, money } from "@/ui";
 import { formatDate } from "@/features/worklist/format";
 
@@ -44,8 +44,9 @@ export const STAGES: Record<
   },
 };
 
-export function WorksPage({ role }: { role: Role }) {
-  const analysis = role === "analyst" || role === "admin";
+export function WorksPage() {
+  const can = useCan();
+  const analysis = can("money");
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["works"],
     queryFn: worksApi.list,

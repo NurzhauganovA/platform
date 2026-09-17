@@ -1973,3 +1973,103 @@ def test_fail_svoya_rol_podpisyvaet_i_dvigaet_po_pravu(
             to=LotStatus.NEW,
             permissions=права,
         )
+
+
+def test_fail_podstatus_obsuzhdeniya_razlichaet_otvet_zakazchika(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """«Отправлено», «удовлетворили» и «отклонили» — разные ответы.
+
+    В списке лотов до сих пор был только сам факт обсуждения: исход заказчика
+    туда не приезжал вовсе, и отличить письмо, на которое согласились, от
+    письма, которое отклонили, было нечем — а работа по ним разная.
+    """
+    from platform_api.db.models import Discussion, DiscussionOutcome, DiscussionStage
+
+    def обсуждение(**поля: object) -> Discussion:
+        return Discussion(
+            organization_id=org.id, module="goszakup", row_id="x", text="Просим снять", **поля
+        )
+
+    assert cards.talk_stage(None) == "none"
+    # Есть запись, но текста ещё нет — это «не написано», а не «в процессе».
+    пустое = Discussion(organization_id=org.id, module="goszakup", row_id="x", text="")
+    пустое.stage = DiscussionStage.MODERATION
+    assert cards.talk_stage(пустое) == "none"
+
+    # Площадка обсуждений не ведёт — подстатуса нет вовсе. Иначе весь
+    # тендерный отбор попал бы в «обсуждение не написано».
+    assert cards.talk_stage(None, talking=False) == ""
+
+    случаи = [
+        # Пишется, но текст уже есть: менеджер вернул готовое письмо на
+        # переделку. Это работа, а не «руки не дошли».
+        (DiscussionStage.DRAFTING, DiscussionOutcome.WAITING, "running"),
+        (DiscussionStage.MODERATION, DiscussionOutcome.WAITING, "running"),
+        (DiscussionStage.WITH_LAWYERS, DiscussionOutcome.WAITING, "running"),
+        (DiscussionStage.NOT_NEEDED, DiscussionOutcome.WAITING, "not_needed"),
+        (DiscussionStage.SENT, DiscussionOutcome.WAITING, "sent"),
+        (DiscussionStage.SENT, DiscussionOutcome.ACCEPTED, "accepted"),
+        (DiscussionStage.SENT, DiscussionOutcome.REJECTED, "rejected"),
+        # Закрытое после отказа и ушедшее на жалобу — тоже отказ: требование
+        # заказчик не снял, и участвовать придётся с ним.
+        (DiscussionStage.SENT, DiscussionOutcome.CLOSED, "rejected"),
+        (DiscussionStage.SENT, DiscussionOutcome.COMPLAINT, "rejected"),
+    ]
+    for stage, outcome, ждём in случаи:
+        assert cards.talk_stage(обсуждение(stage=stage, outcome=outcome)) == ждём, stage
+
+    # У каждого ключа есть слово: иначе на кнопке отбора встанет «running».
+    assert all(key in cards.TALK_STAGE_NAMES for key, _ in cards.TALK_STAGES)
+
+
+def test_fail_podstatus_razbora_pokazyvaet_gde_myach(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Лот бывает в двух местах разом, а в списке у него одна строка.
+
+    Разбирается лестницей: ничей — важнее всего, дальше юристы (у обсуждения
+    срок в два рабочих дня), потом снабжение (поиск товара идёт неделями).
+    """
+    from platform_api.db.models import Discussion, DiscussionStage
+
+    card_id = _завести(db, org, кто)
+    card = _карточка(db, org)
+
+    # Никто не взял на себя — остальное неважно.
+    card.owner_id = None
+    assert cards.desk_stage(card, talk=None, to_supply=True) == "unowned"
+
+    card.owner_id = кто
+    assert cards.desk_stage(card, talk=None, to_supply=False) == "running"
+
+    # Передали снабжению, задача отдела открыта — мяч у него.
+    cards.add_task(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        created_by=кто,
+        title="Найти товар",
+        department=Department.SUPPLY,
+    )
+    db.refresh(card)
+    assert cards.desk_stage(card, talk=None, to_supply=True) == "supply"
+
+    # Юристы раньше снабжения: обсуждение у них, и срок там короче.
+    у_юристов = Discussion(organization_id=org.id, module="goszakup", row_id="x", text="Просим")
+    у_юристов.stage = DiscussionStage.WITH_LAWYERS
+    assert cards.desk_stage(card, talk=у_юристов, to_supply=True) == "legal"
+
+    # Задачи снабжения закрыты, таблица заведена — разбор своё отработал.
+    for task in list(card.tasks):
+        cards.close_task(
+            db,
+            organization_id=org.id,
+            task_id=task.id,
+            state=TaskState.DONE,
+            result="Нашли",
+            user_id=кто,
+        )
+    db.refresh(card)
+    assert cards.desk_stage(card, talk=None, to_supply=True) == "done"
+    assert all(key in cards.DESK_STAGE_NAMES for key, _ in cards.DESK_STAGES)

@@ -19,7 +19,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import type { Role } from "@/api/tender";
 import {
   worksApi,
   type Work,
@@ -27,12 +26,14 @@ import {
   type WorkPosition,
 } from "@/api/worklist";
 import { PageHeader } from "@/shell/AppShell";
+import { useCan } from "@/shell/can";
 import { Button, Card, Spinner, cx, money } from "@/ui";
 import { formatDate } from "@/features/worklist/format";
 import { Sourcing } from "./Sourcing";
 import { DocsPanel } from "./DocsPanel";
 
-export function WorkPage({ role }: { role: Role }) {
+export function WorkPage() {
+  const can = useCan();
   const { id = "" } = useParams();
   const client = useQueryClient();
   // Какая позиция открыта в боковой панели. Помнит страница, а не документ:
@@ -44,9 +45,15 @@ export function WorkPage({ role }: { role: Role }) {
   });
 
   const refresh = (work: Work) => client.setQueryData(["works", id], work);
-  // Отдел разбора — тендерщик; снабжение — закупщик. Третьего понятия ролей
-  // не заводим: оно означало бы и третье место, где их надо согласовать.
-  const analysis = role === "analyst" || role === "admin";
+  // Чей это стол — разбора или снабжения. По праву на себестоимость: за
+  // разбором стоят цены, и колонка «Сумма» здесь именно из-за них — сервер
+  // её снабжению вовсе не присылает (`works_router._work_out`).
+  //
+  // Раньше сравнивалось имя встроенной роли, и это врало дважды: менеджер
+  // видел пустой столбец там, где сумма уже пришла, а человек со своей ролью
+  // попадал на стол снабжения, потому что встроенная часть у своей роли —
+  // «Наблюдатель».
+  const analysis = can("money");
 
   if (isLoading) return <Spinner label="Открываем лот…" />;
   if (isError || !data)
@@ -93,7 +100,7 @@ export function WorkPage({ role }: { role: Role }) {
           {mine && (
             <HandOver work={data} analysis={analysis} onDone={refresh} />
           )}
-          {role === "admin" && <Remove work={data} />}
+          {can("admin") && <Remove work={data} />}
         </div>
         {openedPosition && (
           <DocsPanel

@@ -32,6 +32,7 @@ from platform_api.db.models import (
     ApprovalState,
     Department,
     Discussion,
+    DiscussionOutcome,
     DiscussionStage,
     LotCard,
     LotEvent,
@@ -166,6 +167,125 @@ SIGNS: dict[ApprovalKind, frozenset[Role]] = {
     ApprovalKind.TECHNOLOGIST: frozenset({Role.ADMIN, Role.TECHNOLOGIST}),
     ApprovalKind.ASSEMBLER: frozenset({Role.ADMIN, Role.ASSEMBLER}),
 }
+
+TALK_STAGES: tuple[tuple[str, str], ...] = (
+    ("none", "Не написано"),
+    ("running", "В процессе"),
+    ("sent", "Письмо отправлено"),
+    ("accepted", "Письмо удовлетворили"),
+    ("rejected", "Письмо отклонили"),
+    ("not_needed", "Письмо не требуется"),
+)
+"""Где обсуждение по лоту — словами отбора в списке.
+
+Не то же самое, что `DiscussionStage`. Тот отвечает на вопрос «что мы с ним
+делаем» и нужен в самом разделе обсуждений; здесь вопрос другой — «чего по
+этому лоту ждать», и ответов на него меньше. Три этапа написания сходятся в
+«в процессе»: тендерщику, смотрящему список из сотни лотов, разница между
+«пишется» и «на проверке» не меняет ничего, а три колонки вместо одной делают
+отбор нечитаемым.
+"""
+
+DESK_STAGES: tuple[tuple[str, str], ...] = (
+    ("unowned", "Разбор не начат"),
+    ("legal", "У юристов"),
+    ("supply", "У снабженцев"),
+    ("done", "Разбор закончен"),
+    ("running", "Разбор в процессе"),
+)
+"""Где лот внутри «В работе» — по отделам.
+
+Порядок здесь не для показа, а для разбора: лот бывает сразу в двух местах —
+у юристов по обсуждению и у снабжения по задачам, — и показать его надо один
+раз. Юристы идут раньше снабжения намеренно: у обсуждения срок в два рабочих
+дня со дня публикации, а поиск товара идёт неделями. Лот, застрявший у
+юристов, теряется быстрее, и в отборе он должен попасться на глаза первым.
+"""
+
+TALK_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("finished", "Завершённые", ("sent", "accepted", "rejected")),
+)
+"""Кнопки, собирающие несколько подстатусов под одним словом.
+
+Состав здесь, а не в браузере. «По каким письмам уже есть ответ» спрашивают
+чаще, чем «сколько именно удовлетворили», и группа нужна; но второе такое же
+определение на другом языке разойдётся с первым молча — в платформе уже есть
+`_TALK_DONE`, где завершённым считается совсем другое.
+"""
+
+TALK_STAGE_NAMES = dict(TALK_STAGES)
+DESK_STAGE_NAMES = dict(DESK_STAGES)
+
+
+def talk_stage(talk: Discussion | None, *, talking: bool = True) -> str:
+    """Где обсуждение по лоту.
+
+    Нет обсуждения — «не написано», и это не то же самое, что «не требуется»:
+    первое значит, что до лота не дошли руки, второе — что посмотрели и
+    решили не трогать. Смешать их значит потерять ровно ту работу, которую
+    ищут в этом отборе.
+
+    Признак «не написано» — пустой текст, а не этап. Менеджер возвращает
+    готовое письмо на переделку обратно в «Пишется», и по этапу такой лот
+    числился бы ненаписанным при полном тексте — то есть попадал бы в отбор
+    «до него не дошли руки», хотя руки дошли дважды.
+    """
+    if not talking:
+        # Площадка обсуждений не ведёт — в тендерный отбор закупки приходят
+        # папкой по почте, и обсуждать их не с кем. Пусто, а не «не написано»:
+        # иначе весь отбор оказался бы в подстатусе «до него не дошли руки».
+        return ""
+    if talk is None or not talk.text.strip():
+        return "none"
+    if talk.stage is DiscussionStage.NOT_NEEDED:
+        return "not_needed"
+    if talk.stage is not DiscussionStage.SENT:
+        return "running"
+    if talk.outcome is DiscussionOutcome.ACCEPTED:
+        return "accepted"
+    # Закрытое после отказа и ушедшее на жалобу — тоже отказ: заказчик
+    # требование не снял, и участвовать придётся с ним.
+    if talk.outcome in {
+        DiscussionOutcome.REJECTED,
+        DiscussionOutcome.CLOSED,
+        DiscussionOutcome.COMPLAINT,
+    }:
+        return "rejected"
+    return "sent"
+
+
+def desk_stage(card: LotCard, *, talk: Discussion | None, to_supply: bool) -> str:
+    """Где лот по отделам внутри «В работе».
+
+    Лестницей, а не набором признаков: в списке у строки одно место, и лот,
+    подходящий под три подстатуса сразу, должен попасть в тот, который ближе
+    всего к действию.
+
+    «Не начат» — выше всего: пока лот никто не ведёт, остальное не имеет
+    значения, и именно такие лоты и ищут в этом отборе. До сих пор их было
+    видно только по пустой колонке «Ведёт».
+    """
+    if card.owner_id is None:
+        return "unowned"
+
+    live = [task for task in card.tasks if task.state is TaskState.OPEN]
+    if talk is not None and talk.stage is DiscussionStage.WITH_LAWYERS:
+        return "legal"
+    if any(task.department is Department.LEGAL for task in live):
+        return "legal"
+    # Открытая задача разбора — это возврат из снабжения: товара по части
+    # позиций нет или цена не набирается, и таблицу переделывают. Проверяется
+    # раньше снабжения: таблица снабжению уже заведена, и без этой строки
+    # вернувшийся лот числился бы законченным — то есть пропадал бы из
+    # отбора ровно тогда, когда над ним и идёт работа.
+    if any(task.department is Department.ANALYSIS for task in live):
+        return "running"
+    if any(task.department is Department.SUPPLY for task in live):
+        return "supply"
+    # Таблица снабжению ушла, незакрытых задач по ней нет — разбор своё
+    # отработал и ждёт согласования.
+    return "done" if to_supply else "running"
+
 
 SIGN_RIGHTS: dict[ApprovalKind, Permission] = {
     ApprovalKind.MANAGER: Permission.SIGN_MANAGER,
@@ -503,6 +623,24 @@ class Card:
 
     Считает сервер, а не браузер: правила у отделов разные и не выводятся одно
     из другого, а список и карточка должны говорить одно и то же."""
+
+    talk_stage: str = ""
+    talk_stage_name: str = ""
+    """Где обсуждение по лоту — ключ и слово. Пусто у площадок без обсуждений.
+
+    Считает сервер по тем же данным, что и раздел обсуждений. В браузере это
+    развалилось бы на два правила: он видит не все поля — исход заказчика в
+    список не приезжал вовсе, — и «отправлено» от «отклонили» отличить ему
+    нечем."""
+
+    desk_stage: str = ""
+    desk_stage_name: str = ""
+    """Где лот по отделам внутри «В работе»: не начат, у юристов, у
+    снабженцев, закончен, в процессе.
+
+    Полем в ответе, а не выводом в браузере: правило лестничное и опирается на
+    таблицу снабжения, которой в списке нет и быть не должно — это отдельная
+    запись на каждый лот."""
 
 
 def open_card(
@@ -1473,6 +1611,7 @@ def listing(
     filters: Filters | None = None,
     now: datetime | None = None,
     permissions: frozenset[Permission] = frozenset(),
+    talks: frozenset[str] = frozenset(),
 ) -> list[Card]:
     """Карточки под отбором.
 
@@ -1521,7 +1660,12 @@ def listing(
     # строке: без них «Обсуждение» у всех выглядело бы незакрытым. По одному на
     # карточку было бы сто запросов на сто строк — это и есть та секунда, из-за
     # которой список «подтормаживает».
-    talks = _talks_for(db, rows)
+    discussions = _talks_for(db, rows, organization_id=organization_id)
+    # Кому заведена таблица снабжения — одним запросом на весь список. По
+    # запросу на карточку сотня лотов стоила бы сотни обращений к базе.
+    from platform_api.modules import sheets
+
+    to_supply = sheets.handed_many(db, rows, organization_id=organization_id)
     found = [
         _shown(
             row,
@@ -1529,9 +1673,11 @@ def listing(
             role=role,
             user_id=user_id,
             now=moment,
-            talk=talks.get((row.module, row.row_id)),
+            talk=discussions.get((row.module, row.row_id)),
             brief=True,
             permissions=permissions,
+            to_supply=(row.module, row.row_id) in to_supply,
+            talks=row.module in talks,
         )
         for row in rows
     ]
@@ -1549,6 +1695,7 @@ def one(
     user_id: uuid.UUID,
     now: datetime | None = None,
     permissions: frozenset[Permission] = frozenset(),
+    talks: frozenset[str] = frozenset(),
 ) -> Card:
     card = _required(db, organization_id, card_id)
     # Обсуждение читается только для одной карточки. В списке оно не
@@ -1568,7 +1715,18 @@ def one(
         now=now or utcnow(),
         talk=talk,
         permissions=permissions,
+        to_supply=bool(sheets_handed(db, card)),
+        talks=card.module in talks,
     )
+
+
+def sheets_handed(db: DbSession, card: LotCard) -> bool:
+    """Заведена ли лоту таблица снабжения. Через ленивый импорт: таблицы знают
+    о карточке, карточка о них — только здесь, и общий импорт свёл бы их в
+    кольцо."""
+    from platform_api.modules import sheets
+
+    return sheets.handed(db, card)
 
 
 def by_row(
@@ -1815,7 +1973,9 @@ def desk_marks(card: LotCard, *, talk: Discussion | None = None) -> tuple[DeskMa
     return tuple(marks)
 
 
-def _talks_for(db: DbSession, rows: Sequence[LotCard]) -> dict[tuple[str, str], Discussion]:
+def _talks_for(
+    db: DbSession, rows: Sequence[LotCard], *, organization_id: uuid.UUID
+) -> dict[tuple[str, str], Discussion]:
     """Обсуждения списка лотов — одним запросом.
 
     Ключ тот же, что у карточки: площадка плюс строка. Берётся последнее по
@@ -1828,6 +1988,10 @@ def _talks_for(db: DbSession, rows: Sequence[LotCard]) -> dict[tuple[str, str], 
     found = db.execute(
         select(Discussion)
         .where(
+            # Организация обязательна: ключ «площадка плюс строка» между
+            # организациями не уникален, и без неё в список одной компании
+            # приехало бы обсуждение другой.
+            Discussion.organization_id == organization_id,
             Discussion.module.in_({module for module, _ in keys}),
             Discussion.row_id.in_({row_id for _, row_id in keys}),
         )
@@ -1846,6 +2010,8 @@ def _shown(
     talk: Discussion | None = None,
     brief: bool = False,
     permissions: frozenset[Permission] = frozenset(),
+    to_supply: bool = False,
+    talks: bool = True,
 ) -> Card:
     # Срок считается только пока лот в игре. У завершённого «осталось 3 дня»
     # означало бы, что по нему ещё что-то нужно сделать.
@@ -1862,6 +2028,10 @@ def _shown(
         _sign(item, known, role=role, permissions=permissions) for item in _ordered(card.approvals)
     )
     open_tasks = sum(1 for task in card.tasks if task.state is TaskState.OPEN)
+    # Считаем по разу: подстатус нужен и ключом для отбора, и словом для
+    # показа, а правило в нём лестничное и не бесплатное.
+    talk_key = talk_stage(talk, talking=talks)
+    desk_key = desk_stage(card, talk=talk, to_supply=to_supply)
 
     return Card(
         id=str(card.id),
@@ -1911,6 +2081,10 @@ def _shown(
         # этом считается по нему же, и для неё оно и читалось.
         discussion=None if brief else _talk(talk, now),
         desks=desk_marks(card, talk=talk),
+        talk_stage=talk_key,
+        talk_stage_name=TALK_STAGE_NAMES.get(talk_key, ""),
+        desk_stage=desk_key,
+        desk_stage_name=DESK_STAGE_NAMES.get(desk_key, ""),
     )
 
 

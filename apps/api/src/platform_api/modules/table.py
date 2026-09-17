@@ -30,7 +30,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Protocol
 
-from platform_api.db.models import Role
+from platform_api.auth.permissions import Permission
 from platform_api.logging import get_logger
 
 logger = get_logger(__name__)
@@ -76,12 +76,35 @@ class Visibility(StrEnum):
     работы это не нужно, а уходит вместе с ним."""
 
 
-_ROLE_ACCESS: dict[Role, frozenset[Visibility]] = {
-    Role.ADMIN: frozenset(Visibility),
-    Role.ANALYST: frozenset(Visibility),
-    Role.BUYER: frozenset({Visibility.ALL, Visibility.SOURCING}),
-    Role.VIEWER: frozenset({Visibility.ALL}),
+_BY_RIGHT: dict[Visibility, Permission] = {
+    Visibility.MONEY: Permission.MONEY,
+    Visibility.SOURCING: Permission.SOURCING,
 }
+"""Какое право открывает какую группу колонок.
+
+Раньше здесь стоял список ролей на четыре имени, и он спорил с остальной
+платформой: право «Себестоимость и маржа» выдано ещё менеджеру, руководителю
+и коммерческому — так записано и в правах ролей, и в проверке на эндпоинтах
+(`dependencies.MONEY`), — а таблица показывала цены только тендерщику. То есть
+человек проходил проверку на числа и не находил их на экране.
+
+Хуже другое: у человека со своей ролью встроенная часть — «Наблюдатель», и
+список имён отвечал ему «только общие колонки», сколько прав ему ни выдай.
+Право теперь спрашивается напрямую, и роль, собранная администратором,
+работает.
+"""
+
+
+def _allowed(permissions: frozenset[Permission]) -> frozenset[Visibility]:
+    """Какие группы колонок видит человек с этими правами.
+
+    Общие — всегда: за ними ни цен, ни поставщиков, и закрывать их не от кого.
+    """
+    seen = {Visibility.ALL}
+    for group, right in _BY_RIGHT.items():
+        if Permission.ADMIN in permissions or right in permissions:
+            seen.add(group)
+    return frozenset(seen)
 
 
 # Числовые форматы Excel в то, что понимает браузер. Формат остаётся форматом,
@@ -246,20 +269,20 @@ def is_past(value: datetime | None) -> bool:
     return at is not None and at < datetime.now(UTC)
 
 
-def sees_money(role: Role) -> bool:
-    """Видит ли эта роль себестоимость и маржу.
+def sees_money(permissions: frozenset[Permission]) -> bool:
+    """Видит ли человек себестоимость и маржу.
 
     Нужно не только таблице: итоговые плитки над ней («заработаем столько-то»)
     считаются по тем же данным, и показывать их закупщику при скрытой колонке
     маржи значило бы отдать то же самое, только крупным шрифтом.
     """
-    return Visibility.MONEY in _ROLE_ACCESS.get(role, frozenset({Visibility.ALL}))
+    return Visibility.MONEY in _allowed(permissions)
 
 
 def visible_columns(
     columns: Sequence[Column],
     policy: dict[str, Visibility],
-    role: Role,
+    permissions: frozenset[Permission],
 ) -> list[tuple[int, Column, Visibility]]:
     """Отбирает колонки, которые эта роль имеет право видеть.
 
@@ -268,7 +291,7 @@ def visible_columns(
     её видит только тендерщик.
 
     """
-    allowed = _ROLE_ACCESS.get(role, frozenset({Visibility.ALL}))
+    allowed = _allowed(permissions)
     result: list[tuple[int, Column, Visibility]] = []
     for index, column in enumerate(columns):
         access = policy.get(column.title)
@@ -288,7 +311,7 @@ def build_table(
     rows: Iterable[Any],
     *,
     policy: dict[str, Visibility],
-    role: Role,
+    permissions: frozenset[Permission],
     tone: Callable[[Any], str] | None = None,
     focus: Callable[[Any], bool] | None = None,
     identity: Callable[[Any], str] | None = None,
@@ -315,7 +338,7 @@ def build_table(
     («Маржа ₸», «Заработок всего, ₸», «заработок»), и угадывание ломается на
     той площадке, которую добавят следующей.
     """
-    chosen = visible_columns(columns, policy, role)
+    chosen = visible_columns(columns, policy, permissions)
     key_columns = frozenset(essential)
     icon_columns = frozenset(compact)
     materialized = list(rows)

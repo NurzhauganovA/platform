@@ -41,6 +41,7 @@ import {
   money,
 } from "@/ui";
 import { Passed } from "./kit";
+import { WorkStages, matches, type Picked } from "./WorkStages";
 
 type Tab = "burning" | "mine" | "unowned" | "all" | LotStatus;
 
@@ -117,6 +118,25 @@ export function LotsPage() {
     [people, all, jobs],
   );
   const tab = picked ?? opening(counts);
+  // Подстатусы живут рядом со вкладкой, а не в адресе: их перебирают по
+  // десятку раз на планёрке, и адрес, меняющийся от каждого нажатия, засоряет
+  // историю браузера.
+  const [stages, setStages] = useState<Picked>({ talk: "", desk: "" });
+  // Набор кнопок — тот же запрос, что внутри второго ряда: TanStack отдаёт
+  // его из кэша, второго обращения к сети не будет.
+  const { data: picks } = useQuery({
+    queryKey: ["card-stages"],
+    queryFn: cardsApi.stages,
+    staleTime: Infinity,
+  });
+  const inWork = tab === "work" && !board;
+  // Лоты «в работе» целиком — по ним считаются числа на кнопках. От
+  // нефильтрованного набора: число должно говорить, сколько там лотов, а не
+  // сколько осталось после уже выбранного.
+  const working = useMemo(
+    () => all.filter((item) => item.status === "work"),
+    [all],
+  );
 
   const shown = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -126,12 +146,13 @@ export function LotsPage() {
       // четырнадцати. Поиск и «Мои» работают на обоих видах.
       if (who && item.owner_id !== who && item.manager_id !== who) return false;
       if (!belongs(item, board ? scoped(tab) : tab, me?.id)) return false;
+      if (inWork && !matches(item, stages, picks)) return false;
       if (!needle) return true;
       return `${item.code} ${item.title} ${item.customer} ${item.row_id}`
         .toLowerCase()
         .includes(needle);
     });
-  }, [all, tab, search, me?.id, board, who]);
+  }, [all, tab, search, me?.id, board, who, inWork, stages, picks]);
 
   return (
     <>
@@ -206,6 +227,13 @@ export function LotsPage() {
             />
           </div>
         </div>
+
+        {/* Второй ряд — только на «В работе». На остальных этапах отделов уже
+            нет: лот на согласовании ждёт подписей, на подаче — заявки, и ряд
+            из двенадцати кнопок там отвечал бы на незаданный вопрос. */}
+        {inWork && (
+          <WorkStages cards={working} picked={stages} onChange={setStages} />
+        )}
 
         {isLoading ? (
           <Panel className="px-5 py-4">

@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from platform_api.auth.permissions import BUILT_IN
 from platform_api.db.models import Role
 from sqlalchemy.orm import Session as DbSession
 from tests.conftest import sign_in
@@ -225,7 +226,7 @@ def test_neznakomaya_kolonka_schitaetsya_denezhnoy() -> None:
         hyperlink: Any = None
 
     for role in (Role.BUYER, Role.VIEWER):
-        assert visible_columns([_Unknown()], policy=POLICY, role=role) == []
+        assert visible_columns([_Unknown()], policy=POLICY, permissions=BUILT_IN[role]) == []
     assert POLICY["себестоимость"] is Visibility.MONEY
 
 
@@ -1094,13 +1095,13 @@ def test_fail_snabzhenie_ne_vidit_summ_zakupki(db: Any, organization: Any) -> No
     works.choose(db, work, work.positions[1].options[0].id)
     works.hand_over(db, work, "проверьте")
 
-    for_supply = _work_out(work, Role.BUYER)
+    for_supply = _work_out(work, BUILT_IN[Role.BUYER])
     assert for_supply.total is None and for_supply.cost is None
     assert all(position.total is None for position in for_supply.positions)
     # А «где купить» — уходит: без него работать нечем.
     assert all(position.options for position in for_supply.positions)
 
-    for_analysis = _work_out(work, Role.ANALYST)
+    for_analysis = _work_out(work, BUILT_IN[Role.ANALYST])
     assert for_analysis.total is not None and for_analysis.cost is not None
 
 
@@ -1255,7 +1256,7 @@ def test_fail_snabzhenie_ne_vidit_ishodnyh_dokumentov(db: Any, organization: Any
 
     work = _work(db, organization)
 
-    for_supply = _work_out(work, Role.BUYER)
+    for_supply = _work_out(work, BUILT_IN[Role.BUYER])
     assert all(not position.documents for position in for_supply.positions)
     assert all("ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in position.spec for position in for_supply.positions)
 
@@ -1765,8 +1766,8 @@ def test_fail_snabzhenie_ne_vidit_zakazchika(db: Any, organization: Any) -> None
 
     work = _work(db, organization)
 
-    assert _work_out(work, Role.ANALYST).customer == "АО «Волковгеология»"
-    for_supply = _work_out(work, Role.BUYER)
+    assert _work_out(work, BUILT_IN[Role.ANALYST]).customer == "АО «Волковгеология»"
+    for_supply = _work_out(work, BUILT_IN[Role.BUYER])
     assert for_supply.customer == ""
     # Имя исходного файла тоже говорящее: «ТЗ ПНА. Западный Мынкудук.pdf».
     assert all(position.spec_source == "" for position in for_supply.positions)

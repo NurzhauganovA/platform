@@ -729,3 +729,54 @@ def test_fail_menyu_sobiraetsya_po_pravam(db: DbSession, app_client: TestClient)
     я = app_client.get("/api/auth/me").json()
     assert "admin" in я["permissions"]
     assert я["role_title"] == "Администратор"
+
+
+def test_fail_svoya_rol_nazyvaetsya_svoim_imenem(db: DbSession, app_client: TestClient) -> None:
+    """Человек со своей ролью должен видеть её название, а не «Наблюдатель».
+
+    Встроенная часть у своей роли намеренно самая безопасная — наблюдатель:
+    место, которое ещё смотрит на роль, а не на права, даст меньше доступа, а
+    не больше. Но показывать это человеку нельзя: он заходит под ролью
+    «Обсуждение» и читает, что он наблюдатель, — и первое, что он делает,
+    это идёт спрашивать, почему у него отобрали доступ.
+    """
+    from platform_api.auth import passwords
+    from platform_api.auth.service import open_session
+    from platform_api.db.models import CustomRole, Membership, Organization, Role, User
+
+    org = Organization(name="Fintend", slug=f"fintend-{uuid.uuid4().hex[:6]}")
+    человек = User(
+        email=f"{uuid.uuid4().hex[:8]}@fintend.kz",
+        password_hash=passwords.hash_password("закупки-2026-каратау"),
+    )
+    db.add_all([org, человек])
+    db.flush()
+    роль = CustomRole(
+        organization_id=org.id,
+        key="discussion",
+        title="Обсуждение",
+        description="Пишет замечание заказчику",
+        permissions=["crm", "page.lots", "remarks"],
+    )
+    db.add(роль)
+    db.flush()
+    db.add(
+        Membership(
+            user_id=человек.id,
+            organization_id=org.id,
+            role=Role.VIEWER,
+            custom_role_id=роль.id,
+        )
+    )
+    db.flush()
+    _, token = open_session(db, человек, org, ttl_hours=12)
+    db.commit()
+    app_client.cookies.set(Settings().auth.session_cookie, token)
+
+    me = app_client.get("/api/auth/me").json()
+    assert me["role_title"] == "Обсуждение"
+    # Права — из своей роли, а не из наблюдателя.
+    assert "remarks" in me["permissions"]
+    # Встроенная часть остаётся самой безопасной: на неё смотрят места,
+    # которые ещё не переведены на права.
+    assert me["role"] == "viewer"

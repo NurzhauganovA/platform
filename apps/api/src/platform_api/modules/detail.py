@@ -28,7 +28,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from platform_api.db.models import Role
+from platform_api.auth.permissions import Permission
 from platform_api.modules.table import Visibility, sees_money, to_utc
 
 
@@ -137,13 +137,13 @@ class Detail:
     """
 
 
-def for_role(detail: Detail, role: Role) -> Detail:
+def for_role(detail: Detail, permissions: frozenset[Permission]) -> Detail:
     """Убирает разделы, которых эта роль видеть не должна.
 
     Считает убранное, чтобы интерфейс мог сказать об этом словами: молча
     урезанный разбор выглядит как недоделанный.
     """
-    money = sees_money(role)
+    money = sees_money(permissions)
     allowed = tuple(
         section for section in detail.sections if section.access is not Visibility.MONEY or money
     )

@@ -19,6 +19,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Response, status
 
 from platform_api.auth.dependencies import CurrentUser, Db, requires_read
+from platform_api.auth.permissions import Permission
 from platform_api.db.base import utcnow
 from platform_api.db.models import Role, TenderWork, TenderWorkOption, WorkStage
 from platform_api.errors import SpokenError, unavailable
@@ -58,7 +59,7 @@ def list_works(
         .where(TenderWork.organization_id == identity.organization.id)
         .order_by(TenderWork.created_at.desc())
     ).scalars()
-    money = sees_money(identity.role)
+    money = sees_money(identity.permissions)
     return [
         WorkListItemOut(
             id=str(work.id),
@@ -93,7 +94,7 @@ def take_into_work(
     """
     from platform_api.modules.tender import lots, worklist
 
-    if not sees_money(identity.role):
+    if not sees_money(identity.permissions):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Брать лоты в работу может отдел разбора",
@@ -133,7 +134,7 @@ def take_into_work(
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.get("/works/{work_id}", summary="Лот в работе")
@@ -144,7 +145,7 @@ def get_work(
     _guard: Annotated[None, requires_read] = None,
 ) -> WorkOut:
     work = _mine(db, identity, work_id)
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.post("/works/{work_id}/options/{option_id}/choose", summary="Подтвердить поставщика")
@@ -162,7 +163,7 @@ def choose_option(
     work = _mine(db, identity, work_id)
     _do(lambda: works.choose(db, work, option_id))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.post("/works/{work_id}/positions/{position_id}/ask", summary="Заказать поиск снабжению")
@@ -177,7 +178,7 @@ def ask_supply(
     work = _mine(db, identity, work_id)
     _do(lambda: works.ask(db, work, position_id, body.name))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.post("/works/{work_id}/positions/{position_id}/options", summary="Добавить вариант")
@@ -192,7 +193,7 @@ def add_option(
     work = _mine(db, identity, work_id)
     _do(lambda: works.add(db, work, position_id, identity.user.id, **body.model_dump()))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.patch("/works/{work_id}/options/{option_id}", summary="Поправить вариант")
@@ -212,7 +213,7 @@ def edit_option(
     work = _mine(db, identity, work_id)
     _do(lambda: works.edit(db, work, option_id, identity.user.id, **body.model_dump()))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.delete("/works/{work_id}/options/{option_id}", summary="Убрать вариант")
@@ -226,7 +227,7 @@ def drop_option(
     work = _mine(db, identity, work_id)
     _do(lambda: works.drop(db, work, option_id))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.delete("/works/{work_id}", summary="Убрать лот из работы", status_code=204)
@@ -274,7 +275,7 @@ def edit_spec(
     work = _mine(db, identity, work_id)
     _do(lambda: works.set_spec(db, work, position_id, body.spec))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.patch("/works/{work_id}/positions/{position_id}/note", summary="Заметка по позиции")
@@ -292,14 +293,14 @@ def edit_note(
     объяснять приходится позицию — в общем это теряется.
     """
     work = _mine(db, identity, work_id)
-    if not works.visible_for(work, identity.role) or not _at_desk(work, identity.role):
+    if not works.visible_for(work, identity.role) or not _at_desk(work, identity.permissions):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Писать заметку может тот отдел, у которого лот",
         )
     works.set_note(db, work, position_id, body.note)
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 @router.get("/works/{work_id}/positions/{position_id}/spec.docx", summary="Задание файлом")
@@ -374,7 +375,7 @@ def hand_over(
     work = _mine(db, identity, work_id)
     _do(lambda: works.hand_over(db, work, body.note))
     db.commit()
-    return _work_out(work, identity.role)
+    return _work_out(work, identity.permissions)
 
 
 # ---------------------------------------------------------------------------
@@ -396,13 +397,13 @@ def _as_docx(name: str, content: bytes) -> Response:
     )
 
 
-def _at_desk(work: TenderWork, role: Role) -> bool:
+def _at_desk(work: TenderWork, permissions: frozenset[Permission]) -> bool:
     """У этого ли отдела лот сейчас на столе.
 
     Возврат от снабжения — снова стол разбора: цены пришли, и подтверждённый
     поставщик вполне может оказаться дороже соседнего.
     """
-    if sees_money(role):
+    if sees_money(permissions):
         return work.stage is not WorkStage.SUPPLY
     return work.stage is WorkStage.SUPPLY
 
@@ -468,8 +469,8 @@ def _codes(db: Db, rows: Any) -> dict[str, str]:
     return codes.assign(db, "tender", CODE_PREFIX, [row_id(item) for item in rows])
 
 
-def _work_out(work: TenderWork, role: Role) -> WorkOut:
-    money = sees_money(role)
+def _work_out(work: TenderWork, permissions: frozenset[Permission]) -> WorkOut:
+    money = sees_money(permissions)
     positions = sorted(work.positions, key=lambda position: position.ordering)
     return WorkOut(
         id=str(work.id),

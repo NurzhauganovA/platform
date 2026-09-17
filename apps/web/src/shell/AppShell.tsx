@@ -29,13 +29,6 @@ import {
 import { Badge, Button, cx } from "@/ui";
 import { NavIcon } from "./icons";
 
-const ROLE_TITLES: Record<string, string> = {
-  admin: "Администратор",
-  analyst: "Тендерщик",
-  buyer: "Закупщик",
-  viewer: "Наблюдатель",
-};
-
 /** Сложена колонка или нет. Решение человека, а не страницы. */
 const FOLDED = "fintend:nav-folded";
 
@@ -273,7 +266,15 @@ export function AppShell({ me }: { me: Me }) {
                     {me.full_name || me.email}
                   </span>
                   <span className="mt-0.5 block">
-                    <Badge tone="info">{ROLE_TITLES[me.role] ?? me.role}</Badge>
+                    {/* Название роли берём с сервера, а не собираем здесь.
+                        Список имён держался рядом и знал четыре роли из
+                        десяти: технолог, сборщик и юрист видели в подписи
+                        английский ключ. Хуже другое — у человека со своей
+                        ролью здесь стояло «Наблюдатель»: `me.role` это
+                        встроенная часть, и у своей роли она намеренно самая
+                        безопасная. Человек заходил под ролью «Обсуждение» и
+                        читал, что он наблюдатель. */}
+                    <Badge tone="info">{me.role_title || me.role}</Badge>
                   </span>
                 </span>
               </NavLink>

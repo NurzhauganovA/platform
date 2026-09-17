@@ -82,7 +82,7 @@ def get_worklist(
         core.focus_columns(),
         data.rows,
         policy=POLICY,
-        role=identity.role,
+        permissions=identity.permissions,
         tone=core.tone_of,
         focus=core.in_focus,
         identity=core.row_id,
@@ -91,7 +91,7 @@ def get_worklist(
         compact=COMPACT,
         roles=ROLES,
     )
-    money = sees_money(identity.role)
+    money = sees_money(identity.permissions)
 
     # Собранные строки нужны дважды: отобранные уезжают, полное число
     # показывается плиткой «Показано 28 из 184».
@@ -146,7 +146,7 @@ def get_detail(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Такого предзаказа нет среди актуальных",
         )
-    return DetailOut.model_validate(asdict(for_role(found, identity.role)))
+    return DetailOut.model_validate(asdict(for_role(found, identity.permissions)))
 
 
 @router.post("/sync", summary="Обновить данные с площадки", status_code=status.HTTP_202_ACCEPTED)

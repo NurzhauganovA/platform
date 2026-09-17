@@ -194,6 +194,16 @@ class CardOut(BaseModel):
     can: list[str]
     discussion: TalkOut | None = None
     desks: list[DeskOut] = []
+
+    talk_stage: str = ""
+    talk_stage_name: str = ""
+    """Где обсуждение: `none`, `running`, `sent`, `accepted`, `rejected`,
+    `not_needed`. По ключу идёт отбор, слово стоит на кнопке."""
+
+    desk_stage: str = ""
+    desk_stage_name: str = ""
+    """Где лот по отделам внутри «В работе»: `unowned`, `legal`, `supply`,
+    `done`, `running`."""
     """Ход по отделам. Считает сервер: правила у отделов разные, и второй
     расчёт в браузере разошёлся бы с первым на первом же правиле."""
 
@@ -445,6 +455,7 @@ class ResultIn(BaseModel):
 def get_cards(
     identity: CurrentUser,
     db: Db,
+    request: Request,
     module: Annotated[str | None, Query(description="Площадка")] = None,
     lot_status: Annotated[LotStatus | None, Query(alias="status")] = None,
     participation: Annotated[Participation | None, Query()] = None,
@@ -466,6 +477,7 @@ def get_cards(
         role=identity.role,
         user_id=identity.user.id,
         permissions=identity.permissions,
+        talks=_talking(request),
         filters=cards.Filters(
             module=module,
             status=lot_status,
@@ -522,6 +534,18 @@ def post_card(
     db.commit()
     _autostart(db, card, identity=identity, request=request)
     return _card_out(_one(db, identity, card.id))
+
+
+def _talking(request: Request) -> frozenset[str]:
+    """Площадки, которые ведут обсуждение с заказчиком.
+
+    Спрашиваем у самих модулей, а не списком имён: тендерный отбор обсуждений
+    не ведёт — туда закупки приходят папкой по почте, и обсуждать их не с кем.
+    Без этого весь отбор числился бы в подстатусе «обсуждение не написано», то
+    есть в списке «до этих лотов не дошли руки».
+    """
+    registry: ModuleRegistry = request.app.state.modules
+    return frozenset(module.slug for module in registry.all() if module.on_take is not None)
 
 
 def _autostart(db: Db, card: LotCard, *, identity: CurrentUser, request: Request) -> None:
@@ -677,6 +701,72 @@ def _task_state(value: str) -> TaskState:
 # любой первый кусок пути, и объявленный после него `/cards/errands` получал бы
 # отказ «errands — не идентификатор лота». Ошибка выглядит как поломка списка,
 # а причина в порядке строк в файле.
+class PickOut(BaseModel):
+    """Одна кнопка второго ряда отбора."""
+
+    key: str
+    title: str
+    hint: str = ""
+    of: list[str] = []
+    """Из каких подстатусов состоит. Пусто — кнопка сама по себе.
+
+    Составом с сервера, а не списком в браузере: «завершённые» — это три
+    исхода письма, и второе такое же определение на другом языке разойдётся с
+    первым молча. В платформе уже есть `_TALK_DONE`, где завершённым считается
+    совсем другое, — ровно этот случай.
+    """
+
+
+class StagesOut(BaseModel):
+    """Подстатусы «В работе»: две независимые оси отбора.
+
+    Две, а не один список из двенадцати кнопок. У лота два независимых ответа
+    — где его обсуждение и где он сам по отделам, — и «письмо отправлено» с «у
+    снабженцев» бывают верны разом.
+    """
+
+    talk: list[PickOut]
+    desk: list[PickOut]
+
+
+@router.get("/stages", summary="Подстатусы «В работе»")
+def get_stages(identity: CurrentUser, _guard: Guard = None) -> StagesOut:
+    """Из чего собирается второй ряд отбора.
+
+    Отдельным запросом, а не полем в каждой строке: набор один на всю
+    платформу и меняется правкой кода, а не данными. Браузер спрашивает его
+    раз за сессию.
+    """
+    hints = {
+        "none": "До обсуждения не дошли руки",
+        "running": "Пишется, на проверке или у юристов",
+        "sent": "Ушло заказчику, ответа пока нет",
+        "accepted": "Заказчик снял требование",
+        "rejected": "Требование осталось: участвуем с ним или жалуемся",
+        "not_needed": "Посмотрели и решили не трогать: требования не мешают",
+        "finished": "Письмо ушло заказчику: ждём ответа или он уже есть",
+        "unowned": "Лот взяли в работу, но на себя его никто не взял",
+        "legal": "Письмо у юристов или на них стоит задача",
+        "supply": "Таблица передана снабжению, товар ищут",
+        "done": "Снабжение отработало, ждём согласования",
+    }
+    groups = {key: (title, of) for key, title, of in cards.TALK_GROUPS}
+
+    talk: list[PickOut] = []
+    for key, title in cards.TALK_STAGES:
+        # Группа встаёт перед первым из своих: три ответа заказчика читаются
+        # как её продолжение, а не как соседи по ряду.
+        for group, (word, of) in groups.items():
+            if of and of[0] == key:
+                talk.append(PickOut(key=group, title=word, hint=hints.get(group, ""), of=list(of)))
+        talk.append(PickOut(key=key, title=title, hint=hints.get(key, "")))
+
+    desk = [
+        PickOut(key=key, title=title, hint=hints.get(key, "")) for key, title in cards.DESK_STAGES
+    ]
+    return StagesOut(talk=talk, desk=desk)
+
+
 @router.get("/errands", summary="Поручения вне лота")
 def get_errands(
     identity: CurrentUser,
@@ -2043,7 +2133,9 @@ def _sheet_out(
     )
 
 
-def _one(db: Db, identity: CurrentUser, card_id: uuid.UUID) -> cards.Card:
+def _one(
+    db: Db, identity: CurrentUser, card_id: uuid.UUID, *, request: Request | None = None
+) -> cards.Card:
     try:
         return cards.one(
             db,
@@ -2052,6 +2144,7 @@ def _one(db: Db, identity: CurrentUser, card_id: uuid.UUID) -> cards.Card:
             role=identity.role,
             user_id=identity.user.id,
             permissions=identity.permissions,
+            talks=_talking(request) if request is not None else frozenset(),
         )
     except SpokenError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from platform_api.auth.permissions import BUILT_IN
 from platform_api.db.models import Role
 from platform_api.modules.omarket.columns import POLICY as OMARKET_POLICY
 from platform_api.modules.skstore.columns import POLICY as SKSTORE_POLICY
@@ -79,7 +80,7 @@ def test_v_pravah_net_lishnih_kolonok(module: str, policy: dict[str, Any]) -> No
 def test_tendershchik_vidit_knigu_celikom(module: str, policy: dict[str, Any]) -> None:
     """Порядок и состав колонок для тендерщика совпадают с листом книги."""
     columns = focus_columns(module)
-    chosen = visible_columns(columns, policy, Role.ANALYST)
+    chosen = visible_columns(columns, policy, BUILT_IN[Role.ANALYST])
 
     assert [column.title for _index, column, _access in chosen] == [
         column.title for column in columns
@@ -92,7 +93,7 @@ def test_tendershchik_vidit_knigu_celikom(module: str, policy: dict[str, Any]) -
 @pytest.mark.parametrize(("module", "policy"), MODULES)
 def test_zakupshchik_ne_vidit_deneg(module: str, policy: dict[str, Any]) -> None:
     """Ни себестоимости, ни маржи — ни в колонке, ни в пояснении к ней."""
-    chosen = visible_columns(focus_columns(module), policy, Role.BUYER)
+    chosen = visible_columns(focus_columns(module), policy, BUILT_IN[Role.BUYER])
     titles = [column.title for _index, column, _access in chosen]
 
     assert not any("ебестоимост" in title for title in titles)
@@ -105,7 +106,7 @@ def test_zakupshchik_ne_vidit_deneg(module: str, policy: dict[str, Any]) -> None
 @pytest.mark.parametrize(("module", "policy"), MODULES)
 def test_zakupshchik_vidit_gde_kupit(module: str, policy: dict[str, Any]) -> None:
     """Забрать у закупщика «Где купить» значит забрать у него работу."""
-    chosen = visible_columns(focus_columns(module), policy, Role.BUYER)
+    chosen = visible_columns(focus_columns(module), policy, BUILT_IN[Role.BUYER])
 
     assert "Где купить" in [column.title for _index, column, _access in chosen]
 
@@ -113,19 +114,19 @@ def test_zakupshchik_vidit_gde_kupit(module: str, policy: dict[str, Any]) -> Non
 @pytest.mark.parametrize(("module", "policy"), MODULES)
 def test_nablyudatel_vidit_tolko_ploshchadku(module: str, policy: dict[str, Any]) -> None:
     """Наблюдателю — то, что и так открыто любому участнику закупа."""
-    chosen = visible_columns(focus_columns(module), policy, Role.VIEWER)
+    chosen = visible_columns(focus_columns(module), policy, BUILT_IN[Role.VIEWER])
 
     assert {access for _index, _column, access in chosen} <= {Visibility.ALL}
 
 
 @pytest.mark.parametrize("role", [Role.ADMIN, Role.ANALYST])
 def test_dengi_vidyat_tolko_te_komu_polozheno(role: Role) -> None:
-    assert sees_money(role) is True
+    assert sees_money(BUILT_IN[role]) is True
 
 
 @pytest.mark.parametrize("role", [Role.BUYER, Role.VIEWER])
 def test_ostalnye_deneg_ne_vidyat(role: Role) -> None:
-    assert sees_money(role) is False
+    assert sees_money(BUILT_IN[role]) is False
 
 
 def test_neizvestnaya_kolonka_schitaetsya_denezhnoy() -> None:
@@ -133,8 +134,8 @@ def test_neizvestnaya_kolonka_schitaetsya_denezhnoy() -> None:
     однажды отдать себестоимость и узнать об этом от заказчика."""
     columns = [_column("Новая колонка")]
 
-    assert visible_columns(columns, {}, Role.BUYER) == []
-    assert len(visible_columns(columns, {}, Role.ANALYST)) == 1
+    assert visible_columns(columns, {}, BUILT_IN[Role.BUYER]) == []
+    assert len(visible_columns(columns, {}, BUILT_IN[Role.ANALYST])) == 1
 
 
 # --- сборка таблицы --------------------------------------------------------
@@ -158,7 +159,9 @@ def test_chisla_ostayutsya_chislami() -> None:
     from decimal import Decimal
 
     columns = [_Column("Маржа ₸", getter=lambda _r: Decimal("1234.56"), number_format="#,##0.00")]
-    table = build_table(columns, [object()], policy={"Маржа ₸": Visibility.ALL}, role=Role.ANALYST)
+    table = build_table(
+        columns, [object()], policy={"Маржа ₸": Visibility.ALL}, permissions=BUILT_IN[Role.ANALYST]
+    )
 
     assert table.rows[0].cells[0].number == pytest.approx(1234.56)
     assert table.rows[0].cells[0].text == ""
@@ -170,7 +173,9 @@ def test_ssylka_edet_vmeste_so_znacheniem() -> None:
     columns = [
         _Column("Торг", getter=lambda _r: "Открыть", hyperlink=lambda _r: "https://skstore.kz/1")
     ]
-    table = build_table(columns, [object()], policy={"Торг": Visibility.ALL}, role=Role.VIEWER)
+    table = build_table(
+        columns, [object()], policy={"Торг": Visibility.ALL}, permissions=BUILT_IN[Role.VIEWER]
+    )
 
     assert table.rows[0].cells[0].link == "https://skstore.kz/1"
 
@@ -183,7 +188,9 @@ def test_slomannaya_yacheyka_ne_ronyaet_tablicu() -> None:
         raise ValueError("в ядре что-то поменяли")
 
     columns = [_Column("Цена", getter=explode)]
-    table = build_table(columns, [object()], policy={"Цена": Visibility.ALL}, role=Role.ANALYST)
+    table = build_table(
+        columns, [object()], policy={"Цена": Visibility.ALL}, permissions=BUILT_IN[Role.ANALYST]
+    )
 
     assert table.rows[0].cells[0].text == "—"
 
@@ -193,7 +200,7 @@ def test_skrytye_kolonki_schitayutsya() -> None:
     columns = [_column("Товар"), _column("Себестоимость")]
     policy = {"Товар": Visibility.ALL, "Себестоимость": Visibility.MONEY}
 
-    table = build_table(columns, [object()], policy=policy, role=Role.BUYER)
+    table = build_table(columns, [object()], policy=policy, permissions=BUILT_IN[Role.BUYER])
 
     assert len(table.columns) == 1
     assert table.hidden_columns == 1
@@ -207,7 +214,7 @@ def test_podsvetka_stroki_doezzhaet_do_brauzera() -> None:
         columns,
         [object()],
         policy={"Решение": Visibility.ALL},
-        role=Role.ANALYST,
+        permissions=BUILT_IN[Role.ANALYST],
         tone=lambda _row: "good",
     )
 
@@ -216,7 +223,9 @@ def test_podsvetka_stroki_doezzhaet_do_brauzera() -> None:
 
 def test_bez_podsvetki_stroka_ostayotsya_pustoy() -> None:
     columns = [_column("Решение")]
-    table = build_table(columns, [object()], policy={"Решение": Visibility.ALL}, role=Role.ANALYST)
+    table = build_table(
+        columns, [object()], policy={"Решение": Visibility.ALL}, permissions=BUILT_IN[Role.ANALYST]
+    )
 
     assert table.rows[0].tone == ""
 
@@ -226,7 +235,7 @@ def test_klyuchi_kolonok_razlichny_i_chitaemy() -> None:
     columns = [_column("Маржа %"), _column("Маржа ₸")]
     policy = {"Маржа %": Visibility.ALL, "Маржа ₸": Visibility.ALL}
 
-    table = build_table(columns, [object()], policy=policy, role=Role.ANALYST)
+    table = build_table(columns, [object()], policy=policy, permissions=BUILT_IN[Role.ANALYST])
     keys = [column.key for column in table.columns]
 
     assert keys == ["marzha_percent", "marzha_kzt"]
@@ -235,7 +244,9 @@ def test_klyuchi_kolonok_razlichny_i_chitaemy() -> None:
 def test_odinakovye_zagolovki_ne_dayut_odinakovyh_klyuchey() -> None:
     """Два одинаковых ключа — и браузер перепутает колонки при перерисовке."""
     columns = [_column("Цена"), _column("Цена")]
-    table = build_table(columns, [object()], policy={"Цена": Visibility.ALL}, role=Role.ANALYST)
+    table = build_table(
+        columns, [object()], policy={"Цена": Visibility.ALL}, permissions=BUILT_IN[Role.ANALYST]
+    )
 
     assert len({column.key for column in table.columns}) == 2
 
@@ -305,7 +316,7 @@ def test_znachok_dohodit_do_brauzera() -> None:
         columns,
         [object()],
         policy=policy,
-        role=Role.ANALYST,
+        permissions=BUILT_IN[Role.ANALYST],
         compact={"Где купить"},
     )
 
@@ -330,7 +341,9 @@ def test_vremya_uezzhaet_so_smescheniem() -> None:
     naive = datetime(2026, 8, 17, 14, 34)  # noqa: DTZ001
     columns = [_Column("Приём до", getter=lambda _r: naive, number_format="DD.MM.YYYY HH:MM")]
 
-    table = build_table(columns, [object()], policy={"Приём до": Visibility.ALL}, role=Role.ANALYST)
+    table = build_table(
+        columns, [object()], policy={"Приём до": Visibility.ALL}, permissions=BUILT_IN[Role.ANALYST]
+    )
 
     assert table.rows[0].cells[0].text.endswith("+00:00")
     assert to_utc(naive) == naive.replace(tzinfo=UTC)
@@ -422,3 +435,55 @@ def test_fail_kolonka_nazvaniya_obyavlena_v_kazhdom_razdele() -> None:
     for name, roles in (("тендеры", TENDER), ("skstore", SKSTORE), ("omarket", OMARKET)):
         found_titles = [column for column, role in roles.items() if role == "title"]
         assert len(found_titles) == 1, f"{name}: колонок с ролью «title» должно быть ровно одна"
+
+
+def test_fail_dengi_otkryvayutsya_pravom_a_ne_imenem_roli() -> None:
+    """Себестоимость показывается по праву, и оно у всех одно.
+
+    Раньше здесь стоял список имён на четыре роли, и он спорил с остальной
+    платформой: право «Себестоимость и маржа» выдано ещё менеджеру,
+    руководителю и коммерческому — так записано и в правах ролей, и в проверке
+    на эндпоинтах, — а таблица показывала цены только тендерщику. Человек
+    проходил проверку на числа и не находил их на экране.
+
+    Тест держит один источник: кто проходит `requires_money`, тот и видит
+    колонки. Разойдутся — здесь и станет видно.
+    """
+    from platform_api.auth.dependencies import MONEY, SOURCING
+    from platform_api.auth.permissions import BUILT_IN
+
+    видят = {role for role in Role if sees_money(BUILT_IN[role])}
+    assert видят == set(MONEY), f"деньги разошлись: {видят} против {set(MONEY)}"
+
+    # И задание закупщику — тем же способом.
+    задание = {
+        role
+        for role in Role
+        if Visibility.SOURCING
+        in {
+            access
+            for _, _, access in visible_columns(
+                [_column("Поставщик")], {"Поставщик": Visibility.SOURCING}, BUILT_IN[role]
+            )
+        }
+    }
+    assert задание == set(SOURCING), f"задание разошлось: {задание} против {set(SOURCING)}"
+
+
+def test_fail_svoya_rol_vidit_dengi_esli_ih_vydali() -> None:
+    """Своя роль с правом на себестоимость видит её.
+
+    Встроенная часть у своей роли — «Наблюдатель», и список имён отвечал ей
+    «только общие колонки», сколько прав ни выдай. Ровно из-за этого
+    администратор ставил галочку и ничего не менялось.
+    """
+    from platform_api.auth.permissions import Permission
+
+    своя = frozenset({Permission.READ, Permission.MONEY})
+    assert sees_money(своя) is True
+
+    без_денег = frozenset({Permission.READ, Permission.SOURCING})
+    assert sees_money(без_денег) is False
+    # Общие колонки видны всегда: за ними ни цен, ни поставщиков.
+    видно = visible_columns([_column("Название")], {"Название": Visibility.ALL}, frozenset())
+    assert len(видно) == 1

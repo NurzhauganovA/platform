@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -33,6 +33,9 @@ from platform_api.db.models import LotCard, SpecSheet
 from platform_api.errors import SpokenError
 from platform_api.logging import get_logger
 from platform_api.modules import markup, sheeting
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = get_logger(__name__)
 
@@ -282,6 +285,32 @@ def handed(db: DbSession, card: LotCard) -> bool:
         )
         is not None
     )
+
+
+def handed_many(
+    db: DbSession, rows: Sequence[LotCard], *, organization_id: uuid.UUID
+) -> set[tuple[str, str]]:
+    """Кому из списка уже заведена таблица снабжения — одним запросом.
+
+    Отдельно от `handed`, хотя вопрос тот же. По запросу на карточку список из
+    сотни лотов стоил бы сотни обращений к базе — ровно та секунда, из-за
+    которой страницу называют подтормаживающей.
+    """
+    if not rows:
+        return set()
+    keys = {(card.module, card.row_id) for card in rows}
+    found = db.execute(
+        select(SpecSheet.module, SpecSheet.row_id).where(
+            # Организация обязательна: «площадка плюс строка» между
+            # организациями не уникальны, и чужая таблица снабжения пометила
+            # бы наш лот переданным.
+            SpecSheet.organization_id == organization_id,
+            SpecSheet.kind == SUPPLY,
+            SpecSheet.module.in_({module for module, _ in keys}),
+            SpecSheet.row_id.in_({row_id for _, row_id in keys}),
+        )
+    ).all()
+    return {(module, row_id) for module, row_id in found if (module, row_id) in keys}
 
 
 def drop(db: DbSession, card: LotCard, variant: str, kind: str = ANALYSIS) -> None:

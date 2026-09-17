@@ -32,6 +32,26 @@ export type LotOutcome = "none" | "won" | "lost";
 
 export type Participation = "maybe" | "yes" | "no";
 
+/** Где обсуждение по лоту — подстатус отбора внутри «В работе». */
+export type TalkStage =
+  "" | "none" | "running" | "sent" | "accepted" | "rejected" | "not_needed";
+
+/** Одна кнопка второго ряда отбора. */
+export type Pick = {
+  key: string;
+  title: string;
+  hint: string;
+  /** Из каких подстатусов состоит. Пусто — кнопка сама по себе. */
+  of: string[];
+};
+
+/** Две независимые оси отбора внутри «В работе». */
+export type Stages = { talk: Pick[]; desk: Pick[] };
+
+/** Где лот по отделам внутри «В работе». */
+export type DeskStage =
+  "" | "unowned" | "legal" | "supply" | "done" | "running";
+
 export type Department =
   | "discussion"
   | "analysis"
@@ -133,6 +153,16 @@ export type Card = {
   discussion: Talk | null;
   /** Ход по отделам: четыре точки в строке списка и галочки в карточке. */
   desks: Desk[];
+
+  /** Где обсуждение по лоту. Считает сервер: исход заказчика в браузер иначе
+   *  не приезжает, и «отправлено» от «отклонили» отличить нечем. */
+  talk_stage: TalkStage;
+  talk_stage_name: string;
+
+  /** Где лот по отделам внутри «В работе». Лестница: лот бывает в двух местах
+   *  разом, а строка в списке у него одна. */
+  desk_stage: DeskStage;
+  desk_stage_name: string;
 };
 
 /**
@@ -365,6 +395,10 @@ export const cardsApi = {
   ) => api.post<Card>(`/api/cards/${id}/assign`, body),
 
   people: () => api.get<Person[]>("/api/cards/people"),
+
+  /** Из чего собирается второй ряд отбора «В работе». Набор один на
+   *  платформу и меняется правкой кода — спрашиваем раз за сессию. */
+  stages: () => api.get<Stages>("/api/cards/stages"),
 
   tasks: (
     filters: {

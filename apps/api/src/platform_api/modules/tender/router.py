@@ -124,7 +124,7 @@ def get_worklist(
         worklist.columns(),
         ordered,
         policy=POLICY,
-        role=identity.role,
+        permissions=identity.permissions,
         tone=worklist.tone_of,
         focus=worklist.in_focus,
         identity=worklist.row_id,
@@ -134,7 +134,7 @@ def get_worklist(
         compact=COMPACT,
         roles=ROLES,
     )
-    money = sees_money(identity.role)
+    money = sees_money(identity.permissions)
 
     # Собранные строки нужны дважды: отобранные уезжают, полное число
     # показывается плиткой «Показано 28 из 184».
@@ -367,7 +367,7 @@ def _lot_out(item_id: str, identity: Any, db: Db, *, missing_ok: bool = False) -
     found = worklist.detail(
         item_id,
         members=lots.positions_of(db, identity.organization.id, _position_or_404(item_id)),
-        money=sees_money(identity.role),
+        money=sees_money(identity.permissions),
     )
     if found is None or found.lot is None:
         if missing_ok:
@@ -400,7 +400,7 @@ def get_worklist_item(
     срок неподъёмным. Считает при этом всё равно ядро — тем же кодом, которым
     считается книга.
     """
-    money = sees_money(identity.role)
+    money = sees_money(identity.permissions)
     group = lots.positions_of(db, identity.organization.id, _position_or_404(item_id))
     try:
         found = worklist.detail(item_id, pick, members=group, money=money)
@@ -412,7 +412,7 @@ def get_worklist_item(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Такой закупки нет в отборе",
         )
-    return DetailOut.model_validate(asdict(for_role(found, identity.role)))
+    return DetailOut.model_validate(asdict(for_role(found, identity.permissions)))
 
 
 @router.get("/item/{item_id}/file/{sha256}/view", summary="Показать документ в платформе")

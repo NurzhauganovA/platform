@@ -117,8 +117,8 @@ function Routing() {
         <Route path="goszakup/codes" element={<CodesPage />} />
         <Route path="goszakup/remarks" element={<RemarksPage />} />
         <Route path="goszakup/remarks/:id" element={<RemarkPage />} />
-        <Route path="tender/works" element={<WorksPage role={me.role} />} />
-        <Route path="tender/works/:id" element={<WorkPage role={me.role} />} />
+        <Route path="tender/works" element={<WorksPage />} />
+        <Route path="tender/works/:id" element={<WorkPage />} />
         {/*
           Заведение закупки папкой убрано с глаз, а не удалено: страницы
           (`features/tender/CasesPage` и соседние) и эндпоинты

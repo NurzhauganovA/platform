@@ -84,7 +84,7 @@ def get_worklist(
         core.columns(),
         data.rows,
         policy=POLICY,
-        role=identity.role,
+        permissions=identity.permissions,
         tone=core.tone_of,
         focus=core.in_focus,
         identity=core.row_id,
