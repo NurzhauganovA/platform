@@ -40,6 +40,24 @@ class WatchedCodeOut(BaseModel):
     platform: str = "goszakup"
 
 
+class WatchedMethodOut(BaseModel):
+    """Способ закупки в списке отбора обхода."""
+
+    method_id: int
+    name: str = ""
+    active: bool = True
+    note: str = ""
+    lots: int = 0
+    """Сколько лотов этим способом уже выгружено. По нему и решают, включать
+    ли: способ, которым за год пришёл один лот, держать в отборе незачем."""
+
+
+class MethodActiveIn(BaseModel):
+    """Включить способ в отбор или убрать из него."""
+
+    active: bool
+
+
 class WatchedCodeIn(BaseModel):
     """Что добавляют в список."""
 

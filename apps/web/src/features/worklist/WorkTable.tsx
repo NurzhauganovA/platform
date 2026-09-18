@@ -335,6 +335,15 @@ export function WorkTable({
             ) : (
               render(row.cells[index], column)
             )}
+            {/* Подпись к отметке. Без неё закрашенная ячейка ничего не
+                сообщает: при дальтонизме она неотличима от обычной, а
+                спрашивать «что значит красный код» ходили и те, кто цвет
+                видит. Что стоит за словом — в разборе строки. */}
+            {row.cells[index]?.note && (
+              <span className="ml-1.5 rounded-sm border border-hairline px-1 py-px align-middle text-[10px] font-semibold text-ink-secondary">
+                {row.cells[index].note}
+              </span>
+            )}
           </td>
         ))}
       </tr>

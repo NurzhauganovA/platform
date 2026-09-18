@@ -266,6 +266,19 @@ def test_fail_vklyuchit_kod_mozhet_tolko_administrator(
     assert ответ.status_code == 403
 
 
+def test_fail_sposob_zakupki_pereklyuchayet_tolko_administrator(
+    db: DbSession, app_client: TestClient
+) -> None:
+    """Способ закупки — та же настройка обхода, что и коды ЕНС ТРУ.
+
+    Открытая половина обходит закрытую: не имея права на коды, можно было бы
+    выключить все способы кроме одного и получить тот же пустой раздел.
+    """
+    _login(db, app_client, Role.MANAGER)
+    ответ = app_client.put("/api/goszakup/methods/2/active", json={"active": True})
+    assert ответ.status_code == 403
+
+
 def _без_servisa(client: TestClient) -> None:
     """Гасит адрес сервиса у собранного приложения.
 

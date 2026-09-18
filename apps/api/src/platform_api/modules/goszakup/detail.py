@@ -219,8 +219,34 @@ def _about(lot: Any) -> DetailSection:
                 note="Столько конкурентов уже видно" if lot.applications else "",
             ),
             DetailField(label="Опубликовано", text=_moment(lot.published_at), format="datetime"),
+            *_discussion(lot),
         ],
     )
+
+
+def _discussion(lot: Any) -> list[DetailField]:
+    """Срок обсуждения — когда портал его назвал.
+
+    Строка списка лотов его не содержит, он есть только в карточке объявления
+    и только у тех способов, где обсуждение вообще предусмотрено: у конкурсов
+    заполнен, у запроса ценовых предложений пуст. Поэтому поля нет вовсе, когда
+    срока нет: пустое «Обсуждение до» читается как «обсуждать уже поздно».
+
+    Расчётный срок замечания к спецификации сюда не попадает намеренно — он
+    показан там, где по нему работают, в самом обсуждении. Здесь стоит то, что
+    сказал портал, и только оно.
+    """
+    until = getattr(lot, "discussion_end", None)
+    if until is None:
+        return []
+    return [
+        DetailField(
+            label="Обсуждение до",
+            text=_moment(until),
+            format="datetime",
+            note="Срок с портала: до этого момента заказчику подают замечания",
+        )
+    ]
 
 
 def _what(lot: Any) -> DetailSection:
@@ -233,7 +259,7 @@ def _what(lot: Any) -> DetailSection:
         title="Что покупают",
         fields=[
             DetailField(label="Наименование", text=lot.name),
-            DetailField(label="Код ЕНС ТРУ", text=lot.enstru_code),
+            _ens(lot),
             DetailField(label="Наименование ТРУ", text=lot.enstru_name),
             DetailField(label="Краткая характеристика", text=lot.brief),
             DetailField(
@@ -259,6 +285,33 @@ def _what(lot: Any) -> DetailSection:
             DetailField(label="Срок поставки", text=lot.delivery_term),
             DetailField(label="Условия ИНКОТЕРМС", text=lot.incoterms),
         ],
+    )
+
+
+def _ens(lot: Any) -> DetailField:
+    """Код ЕНС ТРУ, и красный — когда товар изъят из национального режима.
+
+    Оговорка стоит здесь, потому что сюда и приходят за объяснением: цвет в
+    списке ничего не объясняет, а разбор открывают ровно тогда, когда в строке
+    что-то непонятно.
+
+    «КТП» — то слово, которым это названо на портале и в отделе. Что оно
+    значит, написано рядом: участвовать могут только те, кто в реестре
+    казахстанских товаропроизводителей, и заявка со стороны будет отклонена.
+    """
+    from platform_api.modules.goszakup.core import is_ktp
+
+    if not is_ktp(lot):
+        return DetailField(label="Код ЕНС ТРУ", text=lot.enstru_code)
+    return DetailField(
+        label="Код ЕНС ТРУ",
+        text=lot.enstru_code,
+        tone="critical",
+        note=(
+            "КТП: товар изъят из национального режима приказом Минпрома. "
+            "Участвуют только те, кто в реестре казахстанских "
+            "товаропроизводителей"
+        ),
     )
 
 

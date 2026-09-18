@@ -32,11 +32,13 @@ from platform_api.modules.goszakup.columns import (
 from platform_api.modules.goszakup.health import check as check_health
 from platform_api.modules.goszakup.schemas import (
     CategoryIn,
+    MethodActiveIn,
     ModuleHealth,
     PlatformIn,
     RemarkStartedOut,
     WatchedCodeIn,
     WatchedCodeOut,
+    WatchedMethodOut,
 )
 from platform_api.modules.schemas import (
     ColumnOut,
@@ -89,6 +91,8 @@ def get_worklist(
         focus=core.in_focus,
         identity=core.row_id,
         deadline=core.row_deadline,
+        mark=core.mark_cell,
+        note=core.note_cell,
         essential=tuple(ESSENTIAL),
         compact=COMPACT,
         roles=ROLES,
@@ -730,11 +734,92 @@ def revive_code(
     return WatchedCodeOut.model_validate(asdict(back))
 
 
+@router.get("/methods", summary="Способы закупки, по которым идёт обход")
+def list_methods(
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_read] = None,
+) -> list[WatchedMethodOut]:
+    """Список способов закупки вместе с выключенными.
+
+    Наполняется сам: справочника способов открытое API портала не отдаёт, и
+    каждый способ попадает сюда из встреченного в обходе лота. Поэтому пустой
+    список означает «обход ещё не проходил», а не «отбора нет».
+    """
+    from goszakup.application import catalog
+
+    with core.session() as db:
+        found = catalog.methods(db, only_active=False)
+    return [WatchedMethodOut(**asdict(item)) for item in found]
+
+
+@router.post("/methods/refresh", summary="Перечитать справочник способов")
+def refresh_methods(
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_read] = None,
+) -> list[WatchedMethodOut]:
+    """Забирает справочник способов закупки с портала. Только администратору.
+
+    Обход делает это сам раз в прогон, но список нужен и до первого прогона:
+    без него нечем отличить «этот способ мы не берём» от «мы о нём ещё не
+    знаем». Запросом, а не задачей: справочник — один ответ портала на восемь
+    десятков строк, без страниц и без карточек.
+
+    Новые способы приходят выключенными: обновление справочника не должно
+    расширять отбор само.
+    """
+    from goszakup.application import catalog
+    from goszakup.application.harvest import HarvestService
+    from goszakup.exceptions import GoszakupError
+
+    _only_admin(identity)
+    try:
+        with core.session() as db:
+            HarvestService(core.core_settings()).refresh_methods(db)
+            db.commit()
+            found = catalog.methods(db, only_active=False)
+    except GoszakupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Портал не отдал справочник способов: {exc}",
+        ) from exc
+    return [WatchedMethodOut(**asdict(item)) for item in found]
+
+
+@router.put("/methods/{method_id}/active", summary="Включить или выключить способ")
+def switch_method(
+    method_id: int,
+    body: MethodActiveIn,
+    identity: CurrentUser,
+    _guard: Annotated[None, requires_read] = None,
+) -> WatchedMethodOut:
+    """Включает способ в отбор или убирает из него. Только администратору.
+
+    Ни один включённый способ означает «берём все»: отбор по способу — это
+    сужение, и пустой список сужать нечем. С кодами ЕНС ТРУ наоборот — там
+    пустой список означает пустой раздел, потому что без кодов обход стал бы
+    чужой лентой на сотни тысяч лотов.
+    """
+    from goszakup.application import catalog
+
+    _only_admin(identity)
+    with core.session() as db:
+        if not catalog.switch_method(db, method_id, active=body.active):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Такого способа закупки в списке нет",
+            )
+        db.commit()
+        found = next(
+            item for item in catalog.methods(db, only_active=False) if item.method_id == method_id
+        )
+    return WatchedMethodOut(**asdict(found))
+
+
 def _only_admin(identity: CurrentUser) -> None:
     if identity.role is not Role.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Менять список кодов ЕНС ТРУ может только администратор",
+            detail="Менять настройки обхода портала может только администратор",
         )
 
 

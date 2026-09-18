@@ -44,6 +44,9 @@ export interface WorklistCell {
   /** Отметка на самой ячейке: заливка строки занята вердиктом, а выделить
    *  надо значение — код ЕНС, по которому есть отечественный производитель. */
   tone: Tone;
+  /** Слово при отметке: «КТП». Цвет без подписи смысла не несёт — при
+   *  дальтонизме закрашенная ячейка неотличима от обычной. */
+  note: string;
 }
 
 /** Подсветка по вердикту — та же, что заливка строки в книге. */
@@ -582,7 +585,12 @@ export const discussionApi = {
 
   /** Пишет реплику. `mentions` — кого позвать: идентификаторы сотрудников и
    *  `all`. Сервер сверяет их со своим составом заново. */
-  write: (module: string, rowId: string, body: string, mentions: string[] = []) =>
+  write: (
+    module: string,
+    rowId: string,
+    body: string,
+    mentions: string[] = [],
+  ) =>
     api.post<Message>(
       `/api/discussion/${module}/${encodeURIComponent(rowId)}`,
       { body, mentions },

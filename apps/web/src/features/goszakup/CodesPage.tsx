@@ -1,5 +1,6 @@
 /**
- * Настройка обхода портала: номенклатура, по которой ищутся лоты.
+ * Настройка обхода портала: номенклатура и способы закупки, по которым
+ * ищутся лоты.
  *
  * Экрана не было вовсе, хотя эндпоинты есть с самого модуля: список кодов
  * вели запросами к API. Пока код заводит тот, кто пишет эти запросы, это
@@ -17,6 +18,7 @@ import {
   goszakup,
   type Purge as PurgeCounts,
   type WatchedCode,
+  type WatchedMethod,
 } from "@/api/goszakup";
 import { auth } from "@/api/tender";
 import { ApiError } from "@/api/client";
@@ -131,7 +133,7 @@ export function CodesPage() {
     <>
       <PageHeader
         title="Обход портала"
-        subtitle="Коды ЕНС ТРУ, по которым собираются лоты zakup.gov.kz"
+        subtitle="Коды ЕНС ТРУ и способы закупки, по которым собираются лоты zakup.gov.kz"
         action={
           <span className="text-sm text-ink-secondary">
             в обходе <b className="font-semibold text-ink">{counts.active}</b>{" "}
@@ -351,8 +353,152 @@ export function CodesPage() {
             </table>
           </Card>
         )}
+
+        <Methods admin={admin} />
       </Page>
     </>
+  );
+}
+
+/**
+ * Способы закупки: второе сужение обхода, рядом с кодами ЕНС ТРУ.
+ *
+ * Список наполняется сам, из того, что приходит с портала: справочника
+ * способов открытое API не отдаёт, и десяток кодов, введённых руками, — это
+ * десяток опечаток. Новый способ появляется выключенным.
+ *
+ * Пустой отбор здесь означает «берём все» — в отличие от кодов, где пустой
+ * список означает пустой раздел. Способов десяток, и не выбрать ни одного
+ * значит «не сужаем»; не выбрать ни одного кода значит «ищем во всём портале»,
+ * то есть в сотнях тысяч чужих лотов.
+ */
+function Methods({ admin }: { admin: boolean }) {
+  const client = useQueryClient();
+  const [trouble, setTrouble] = useState("");
+  const { data, isLoading } = useQuery({
+    queryKey: ["goszakup-methods"],
+    queryFn: goszakup.methods,
+  });
+
+  const refreshing = useMutation({
+    mutationFn: goszakup.refreshMethods,
+    onSuccess: () =>
+      void client.invalidateQueries({ queryKey: ["goszakup-methods"] }),
+    onError: (err: unknown) =>
+      setTrouble(err instanceof ApiError ? err.message : "Портал не ответил"),
+  });
+
+  const switching = useMutation({
+    mutationFn: (next: { method: WatchedMethod; active: boolean }) =>
+      goszakup.switchMethod(next.method.method_id, next.active),
+    onSuccess: () =>
+      void client.invalidateQueries({ queryKey: ["goszakup-methods"] }),
+  });
+
+  const rows = useMemo(
+    () =>
+      // Сначала те, которыми лотов приходит больше: по этому числу и решают,
+      // включать ли способ в отбор.
+      [...(data ?? [])].sort(
+        (a, b) => b.lots - a.lots || a.name.localeCompare(b.name),
+      ),
+    [data],
+  );
+  const picked = rows.filter((item) => item.active).length;
+
+  return (
+    <Card
+      title="Способы закупки"
+      action={
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-ink-secondary">
+            {picked === 0 ? (
+              "берём все"
+            ) : (
+              <>
+                выбрано <b className="font-semibold text-ink">{picked}</b> из{" "}
+                {rows.length}
+              </>
+            )}
+          </span>
+          {admin && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setTrouble("");
+                refreshing.mutate();
+              }}
+              disabled={refreshing.isPending}
+              title="Забрать справочник способов с портала. Новые способы придут выключенными."
+            >
+              {refreshing.isPending ? "Читаем портал…" : "Обновить с портала"}
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {isLoading && (
+        <div className="px-5 py-6">
+          <Spinner label="Читаем способы…" />
+        </div>
+      )}
+
+      {trouble && <p className="px-5 pt-4 text-sm text-critical">{trouble}</p>}
+
+      {!isLoading && rows.length === 0 && (
+        <p className="px-5 py-4 text-sm text-ink-muted">
+          Список пуст: способы приходят справочником портала при обходе.
+          {admin
+            ? " Нажмите «Обновить с портала», чтобы не ждать ближайшего прогона."
+            : " После ближайшего прогона они появятся здесь сами."}
+        </p>
+      )}
+
+      {rows.length > 0 && (
+        <>
+          <p className="px-5 pt-4 text-xs text-ink-muted">
+            {picked === 0
+              ? "Ни один не выбран — в обход идут лоты любым способом закупки. Отметьте нужные, чтобы сузить."
+              : "В обход идут только отмеченные способы. Снимите все отметки, чтобы брать любые."}
+          </p>
+          <ul className="divide-y divide-hairline px-5 py-2">
+            {rows.map((item) => (
+              <li
+                key={item.method_id}
+                className="flex items-center gap-3 py-2 text-sm"
+              >
+                <input
+                  type="checkbox"
+                  id={`method-${item.method_id}`}
+                  checked={item.active}
+                  disabled={!admin || switching.isPending}
+                  onChange={(event) =>
+                    switching.mutate({
+                      method: item,
+                      active: event.target.checked,
+                    })
+                  }
+                  className="size-4 shrink-0 disabled:opacity-40"
+                />
+                <label
+                  htmlFor={`method-${item.method_id}`}
+                  className={cx(
+                    "flex-1",
+                    admin && "cursor-pointer",
+                    !item.active && "text-ink-muted",
+                  )}
+                >
+                  {item.name || `Способ ${item.method_id}`}
+                </label>
+                <span className="text-xs text-ink-muted tabular-nums">
+                  {item.lots > 0 ? `${item.lots} лот.` : "ни одного"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Card>
   );
 }
 

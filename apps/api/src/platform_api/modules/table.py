@@ -172,6 +172,12 @@ class CellOut:
     number: float | None = None
     link: str | None = None
 
+    note: str = ""
+    """Слово при отметке: «КТП». Цвет сам по себе смысла не несёт — при
+    дальтонизме красная ячейка неотличима от обычной, а спрашивать, что
+    значит закрашенный код, ходили и люди с обычным зрением: цвет в списке не
+    объясняет ничего, а разбор для этого надо открыть."""
+
     tone: str = ""
     """Отметка на самой ячейке, а не на строке.
 
@@ -317,6 +323,7 @@ def build_table(
     identity: Callable[[Any], str] | None = None,
     deadline: Callable[[Any], str | None] | None = None,
     mark: Callable[[str, Any], str] | None = None,
+    note: Callable[[str, Any], str] | None = None,
     compact: Collection[str] = (),
     essential: Sequence[str] = (),
     roles: dict[str, str] | None = None,
@@ -330,7 +337,8 @@ def build_table(
     `mark` отмечает отдельные ячейки: получает заголовок колонки и строку,
     возвращает тон или пустое. Нужно там, где значение важнее строки целиком —
     код ЕНС с казахстанским производителем закрашивается сам, а вердикт
-    строки остаётся при ней.
+    строки остаётся при ней. `note` даёт к отметке слово: закрашенная ячейка
+    без подписи отправляет человека спрашивать, что значит красный код.
 
     `roles` подписывает колонки по смыслу: где сумма, где себестоимость, где
     заработок. Без этого браузеру, который считает итоги по отобранному,
@@ -363,7 +371,12 @@ def build_table(
         RowOut(
             number=position,
             cells=tuple(
-                _cell(column, item, mark(column.title, item) if mark else "")
+                _cell(
+                    column,
+                    item,
+                    mark(column.title, item) if mark else "",
+                    note(column.title, item) if note else "",
+                )
                 for _index, column, _access in chosen
             ),
             id=identity(item) if identity is not None else "",
@@ -384,7 +397,7 @@ _NUMERIC = frozenset({"#,##0.00", "#,##0.###", "0.0%"})
 разряду, и разнобой по левому краю сравнивать мешает."""
 
 
-def _cell(column: Column, item: Any, tone: str = "") -> CellOut:
+def _cell(column: Column, item: Any, tone: str = "", note: str = "") -> CellOut:
     """Одна ячейка: значение и, если есть, ссылка.
 
     Ошибка в `getter` не роняет таблицу целиком. Строк несколько сотен, и одна
@@ -405,7 +418,9 @@ def _cell(column: Column, item: Any, tone: str = "") -> CellOut:
             link = None
 
     cell = _value(value, link)
-    return replace(cell, tone=tone) if tone else cell
+    if tone or note:
+        return replace(cell, tone=tone, note=note)
+    return cell
 
 
 def _value(value: Any, link: str | None) -> CellOut:

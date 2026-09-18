@@ -487,3 +487,39 @@ def test_fail_chuzhiye_loty_obyavleniya_otlichayutsya_ot_nashih() -> None:
 
     assert {item.number: item.ours for item in found} == {"A-1": True, "A-2": False}
     assert "под нашими кодами" not in detail._note(2, 1)
+
+
+def test_fail_ktp_schitayetsya_po_prikazu_a_ne_po_obyedineniyu() -> None:
+    """Изъятие из национального режима — приказ Минпрома, а не оба перечня.
+
+    Тендерный отбор красит код объединением: там вопрос «есть ли казахстанский
+    производитель», и ответ «да» хотя бы от одного перечня — уже ответ. Портал
+    государственных закупок спрашивает другое, и код из реестра Электронного
+    магазина, в приказ не попавший, значится там «Нет»: закупка идёт на общих
+    правилах, участвовать можно.
+
+    Разница стоит денег в одну сторону: помеченный лишний лот сотрудник
+    пропустит как заведомо чужой — это упущенная закупка, а не лишняя строка.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from platform_api.modules.goszakup import core
+
+    приказ = frozenset({"262013.000.000011"})
+    with patch("platform_api.modules.tender.core.withdrawn_codes", return_value=приказ):
+        изъят = SimpleNamespace(enstru_code="262013.000.000011")
+        общий = SimpleNamespace(enstru_code="262011.100.000001")
+        пустой = SimpleNamespace(enstru_code="")
+
+        assert core.is_ktp(изъят)
+        assert not core.is_ktp(общий)
+        assert not core.is_ktp(пустой)
+
+        # Цвет всегда вместе со словом: закрашенная ячейка без подписи при
+        # дальтонизме неотличима от обычной, а спрашивать «что значит красный
+        # код» ходили и те, кто цвет видит.
+        assert core.mark_cell("Код ЕНС ТРУ", изъят) == "critical"
+        assert core.note_cell("Код ЕНС ТРУ", изъят) == "КТП"
+        assert core.mark_cell("Наименование", изъят) == ""
+        assert core.note_cell("Наименование", изъят) == ""

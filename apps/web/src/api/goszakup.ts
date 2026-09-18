@@ -47,6 +47,18 @@ export type Fetched = {
   codes: string[];
 };
 
+export type WatchedMethod = {
+  method_id: number;
+  name: string;
+  /** Выключенный способ остаётся строкой: по ней видно, что лоты этим
+   *  способом не приходят по нашему решению, а не потому, что их нет. */
+  active: boolean;
+  note: string;
+  /** Сколько лотов этим способом уже выгружено — по нему и решают, включать
+   *  ли способ в отбор. */
+  lots: number;
+};
+
 export const goszakup = {
   /**
    * Забрать закупку по номеру, мимо списка кодов ЕНС ТРУ.
@@ -94,4 +106,25 @@ export const goszakup = {
 
   drop: (code: string) =>
     api.delete<void>(`/api/goszakup/codes/${encodeURIComponent(code)}`),
+
+  /**
+   * Способы закупки. Список наполняется обходом: справочника способов
+   * открытое API портала не отдаёт.
+   */
+  methods: () => api.get<WatchedMethod[]>("/api/goszakup/methods"),
+
+  /**
+   * Перечитать справочник способов с портала.
+   *
+   * Обход делает это сам раз в прогон; кнопка нужна до первого прогона —
+   * иначе список пуст, и «не берём» не отличить от «не знаем о таком».
+   */
+  refreshMethods: () =>
+    api.post<WatchedMethod[]>("/api/goszakup/methods/refresh", {}),
+
+  /** Включить способ в отбор или убрать из него. */
+  switchMethod: (methodId: number, active: boolean) =>
+    api.put<WatchedMethod>(`/api/goszakup/methods/${methodId}/active`, {
+      active,
+    }),
 };
