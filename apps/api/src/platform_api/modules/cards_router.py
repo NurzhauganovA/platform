@@ -196,6 +196,9 @@ class CardOut(BaseModel):
     won_amount: float | None
     winner: str
     started_at: str
+    status_at: str = ""
+    """Когда статус менялся последний раз. По нему список и отсортирован."""
+
     bid_amount: float | None = None
     """За сколько подали заявку. Пусто — не подавали."""
 
@@ -767,6 +770,11 @@ class PickOut(BaseModel):
     на вопрос «почему прошли мимо» отвечать будет нечем. У выигрыша и
     проигрыша объяснение своё — сам протокол."""
 
+    by_decision: bool = False
+    """Ставится человеком, а не протоколом. Выигрыш и проигрыш приходят с
+    протоколом и вместе с ценой: у них своя дверь, и она требует поданной
+    заявки."""
+
 
 class GroupOut(BaseModel):
     """Кнопка верхнего ряда со своими подпунктами."""
@@ -867,6 +875,7 @@ def get_stages(identity: CurrentUser, _guard: Guard = None) -> StagesOut:
                 field="outcome",
                 scope="in",
                 needs_reason=outcome in cards.NEEDS_REASON,
+                by_decision=outcome in cards.BY_DECISION,
             )
             for outcome, name in cards.OUTCOME_NAMES.items()
             if outcome is not LotOutcome.NONE

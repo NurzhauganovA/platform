@@ -2139,7 +2139,9 @@ def test_fail_itog_protokola_cherez_finish_ne_stavitsya(
     from platform_api.db.models import LotOutcome
 
     card_id = _завести(db, org, кто)
-    for итог in (LotOutcome.WON, LotOutcome.LOST, LotOutcome.NOT_SUBMITTED, LotOutcome.NONE):
+    # «Не успели подать» этой дверью как раз и ставится: заявки по нему не
+    # было, и требовать её значило бы не дать закрыть упущенный лот.
+    for итог in (LotOutcome.WON, LotOutcome.LOST, LotOutcome.NONE):
         with pytest.raises(SpokenError):
             cards.finish(
                 db,
@@ -2395,3 +2397,112 @@ def test_fail_protokolnyy_itog_ne_otmenyaetsya_nazhatiem(
     card = _карточка(db, org)
     assert card.outcome is LotOutcome.WON
     assert card.status is LotStatus.DONE
+
+
+def test_fail_ne_uspeli_podat_stavitsya_i_rukami(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """«Не успели подать» ставит и прогон, и человек.
+
+    Прогон закрывает такие лоты раз в час, но срок истекает в любую минуту, и
+    человек, увидевший это раньше, должен уметь закрыть лот сам. Причину у
+    этого итога не спрашиваем: она одна на все случаи — срок истёк, заявки не
+    было.
+    """
+    from platform_api.db.models import LotOutcome
+
+    card_id = _завести(db, org, кто)
+    закрыт = cards.finish(
+        db,
+        organization_id=org.id,
+        card_id=card_id,
+        role=Role.MANAGER,
+        outcome=LotOutcome.NOT_SUBMITTED,
+        reason="",
+        user_id=кто,
+    )
+    assert закрыт.outcome is LotOutcome.NOT_SUBMITTED
+    assert закрыт.status is LotStatus.DONE
+    assert "Срок приёма" in закрыт.skip_reason
+
+    # Протокольные итоги этой дверью по-прежнему не ставятся: у них своя, и
+    # она требует поданной заявки.
+    for итог in (LotOutcome.WON, LotOutcome.LOST, LotOutcome.NONE):
+        with pytest.raises(SpokenError):
+            cards.finish(
+                db,
+                organization_id=org.id,
+                card_id=card_id,
+                role=Role.MANAGER,
+                outcome=итог,
+                reason="причина есть",
+                user_id=кто,
+            )
+
+
+def test_fail_svezhee_sverhu_po_smene_statusa(
+    db: DbSession, org: Organization, кто: uuid.UUID
+) -> None:
+    """Список сортируется по времени последней смены статуса, свежее сверху.
+
+    Раньше сортировали по сроку приёма заявок, и на вопрос «что нового» список
+    отвечал «что горит»: лот, который вчера перевели на согласование, лежал в
+    середине между теми, к которым никто не прикасался.
+
+    Сошедшие с дистанции всё равно внизу: у завершённого статус менялся только
+    что, и без этого он занимал бы весь верх.
+    """
+    from platform_api.db.base import utcnow
+
+    старый = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="старый",
+        snapshot=cards.Snapshot(
+            code="GZ000001", title="Старый", deadline=utcnow() + timedelta(days=1)
+        ),
+        by=кто,
+    )
+    свежий = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="свежий",
+        snapshot=cards.Snapshot(
+            code="GZ000002", title="Свежий", deadline=utcnow() + timedelta(days=9)
+        ),
+        by=кто,
+    )
+    закрытый = cards.open_card(
+        db,
+        organization_id=org.id,
+        module="goszakup",
+        row_id="закрытый",
+        snapshot=cards.Snapshot(
+            code="GZ000003", title="Закрытый", deadline=utcnow() + timedelta(days=2)
+        ),
+        by=кто,
+    )
+    # Старый двигали раньше всех, закрытый — только что.
+    старый.status_at = utcnow() - timedelta(days=3)
+    свежий.status_at = utcnow() - timedelta(hours=1)
+    cards.finish(
+        db,
+        organization_id=org.id,
+        card_id=закрытый.id,
+        role=Role.MANAGER,
+        outcome=__import__("platform_api.db.models", fromlist=["LotOutcome"]).LotOutcome.SKIPPED,
+        reason="проверка порядка",
+        user_id=кто,
+    )
+    db.flush()
+
+    порядок = [
+        item.code
+        for item in cards.listing(db, organization_id=org.id, role=Role.ADMIN, user_id=кто)
+    ]
+    # Свежий выше старого — хотя срок у него дальше.
+    assert порядок.index("GZ000002") < порядок.index("GZ000001")
+    # Завершённый внизу, несмотря на то что его двигали позже всех.
+    assert порядок[-1] == "GZ000003"

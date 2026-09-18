@@ -90,6 +90,22 @@ OUTCOME_NAMES: dict[LotOutcome, str] = {
     LotOutcome.SKIPPED: "Не участвуем",
 }
 
+BY_DECISION: frozenset[LotOutcome] = frozenset(
+    {
+        LotOutcome.NOT_SUBMITTED,
+        LotOutcome.NOT_LIQUID,
+        LotOutcome.WRONG_CODE,
+        LotOutcome.CANCELLED,
+        LotOutcome.SKIPPED,
+    }
+)
+"""Итоги, которые ставит человек, а не протокол.
+
+Выигрыш и проигрыш приходят с протоколом и вместе с ценой: у них своя дверь
+(`result`), и она требует поданной заявки. Остальные пять — это наше решение
+или наша оплошность, и заявки по ним как раз и не было.
+"""
+
 NEEDS_REASON: frozenset[LotOutcome] = frozenset(
     {
         LotOutcome.NOT_LIQUID,
@@ -817,6 +833,10 @@ class Card:
     started_at: str
     """Когда лот взяли в работу. Первый вопрос к залежавшейся карточке."""
 
+    status_at: str
+    """Когда статус менялся последний раз. По нему список и отсортирован —
+    свежее сверху."""
+
     bid_amount: Decimal | None
     """За сколько подали заявку. Пусто — не подавали или подали до того, как
     сумму стали спрашивать."""
@@ -915,6 +935,7 @@ def open_card(
         # заводится тем, кто уже посмотрел. Лишний шаг, который все пролистывали
         # не глядя, и первый вопрос по нему был «а что с ним делать».
         status=LotStatus.WORK,
+        status_at=utcnow(),
         participation=Participation.MAYBE,
         # Взявший не становится ответственным ни за что. Лот с портала берёт
         # госзакупщик — он его нашёл, — но разбор считает не он. Пока взявший
@@ -1024,6 +1045,8 @@ def move(
     # принимается само решение.
 
     card.status = to
+
+    card.status_at = utcnow()
     if to is LotStatus.WAITING and card.submitted_at is None:
         # Подачу отмечают кнопкой с суммой (`submit`), но лот переводят и
         # руками. Отметку ставим и здесь: «ждём протокол» без поданной заявки
@@ -1093,6 +1116,7 @@ def advance(
 
     was = card.status
     card.status = to
+    card.status_at = utcnow()
     trace(
         db,
         card_id=card.id,
@@ -1195,6 +1219,7 @@ def decide(
         card.finished_at = None
         if card.status is LotStatus.DONE:
             card.status = LotStatus.WORK
+            card.status_at = utcnow()
 
     card.participation = participation
     card.skip_reason = reason.strip()[:2000] if participation is Participation.NO else ""
@@ -1204,6 +1229,7 @@ def decide(
         # протокола по нам не будет. Отличает такие лоты само решение
         # (`participation`) и причина рядом с ним.
         card.status = LotStatus.DONE
+        card.status_at = utcnow()
         card.finished_at = utcnow()
     trace(
         db,
@@ -1313,6 +1339,7 @@ def submit(
     order = {status: place for place, status in enumerate(FLOW)}
     if order.get(card.status, -1) < order[LotStatus.WAITING]:
         card.status = LotStatus.WAITING
+        card.status_at = utcnow()
     trace(
         db,
         card_id=card.id,
@@ -1349,17 +1376,22 @@ def finish(
     закупки» отвечать будет некому: тот, кто закрывал, помнит первые три, а
     закрывают их десятками.
     """
-    if outcome not in NEEDS_REASON:
+    if outcome not in BY_DECISION:
         raise SpokenError("Этот итог записывается вместе с протоколом подачи")
     if role not in _DECIDES and not _may(Permission.DECIDE, permissions):
         raise SpokenError("Закрывать лот вам нельзя")
     clean = reason.strip()
-    if not clean:
+    if not clean and outcome in NEEDS_REASON:
         raise SpokenError(f"Напишите, почему «{OUTCOME_NAMES[outcome]}»")
+    if not clean:
+        # У «не успели подать» причина одна на все случаи, и спрашивать её у
+        # человека нечего: срок истёк, заявки не было.
+        clean = "Срок приёма заявок истёк, заявки не было"
 
     card = _required(db, organization_id, card_id)
     card.outcome = outcome
     card.status = LotStatus.DONE
+    card.status_at = utcnow()
     card.finished_at = card.finished_at or utcnow()
     # Причина ложится туда же, где живёт причина отказа от участия: это один и
     # тот же ответ на один и тот же вопрос, и второе поле рядом означало бы
@@ -1418,6 +1450,7 @@ def result(
         card.outcome = outcome
         if outcome is not LotOutcome.NONE:
             card.status = LotStatus.DONE
+            card.status_at = utcnow()
             card.finished_at = card.finished_at or utcnow()
     if won_amount is not None:
         card.won_amount = won_amount
@@ -1981,10 +2014,24 @@ def listing(
             if needle in f"{row.code} {row.title} {row.customer} {row.row_id}".lower()
         ]
 
-    # Сортировка в памяти: строк здесь сотни, а «без срока в конец» на стороне
-    # базы пишется по-разному в SQLite и PostgreSQL и однажды разъезжается
-    # между проверочной средой и рабочей.
-    rows.sort(key=lambda row: (row.status in _FINAL, row.deadline is None, row.deadline or moment))
+    # Сортировка в памяти: строк здесь сотни, а «без времени в конец» на
+    # стороне базы пишется по-разному в SQLite и PostgreSQL и однажды
+    # разъезжается между проверочной средой и рабочей.
+    #
+    # Свежее сверху — по времени последней смены статуса. Раньше сортировали по
+    # сроку приёма, и на вопрос «что нового» список отвечал «что горит»: лот,
+    # который вчера перевели на согласование, лежал в середине между теми, к
+    # которым никто не прикасался. Срок при этом никуда не делся — он в строке
+    # и красным, когда горит.
+    #
+    # Сошедшие с дистанции по-прежнему внизу: у завершённого статус менялся
+    # только что, и без этого он занимал бы весь верх списка.
+    rows.sort(
+        key=lambda row: (
+            row.status in _FINAL,
+            -(row.status_at or row.created_at).timestamp(),
+        )
+    )
     known = people(db, rows)
     # Обсуждения — одним запросом на весь список. Их читают ради точки хода в
     # строке: без них «Обсуждение» у всех выглядело бы незакрытым. По одному на
@@ -2397,6 +2444,7 @@ def _shown(
         won_amount=card.won_amount,
         winner=card.winner,
         started_at=card.created_at.isoformat() if card.created_at else "",
+        status_at=card.status_at.isoformat() if card.status_at else "",
         bid_amount=card.bid_amount,
         submitted_at=card.submitted_at.isoformat() if card.submitted_at else "",
         submitted=submitted(card),

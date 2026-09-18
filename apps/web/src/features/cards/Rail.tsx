@@ -18,7 +18,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { auth } from "@/api/tender";
-import { cardsApi, type Card, type Choice, type Person } from "@/api/cards";
+import { cardsApi, type Card, type Person } from "@/api/cards";
 import { ApiError } from "@/api/client";
 import { Card as Panel, cx } from "@/ui";
 import { Steps } from "./Steps";
@@ -76,50 +76,6 @@ function People({
       setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
   });
 
-  // Причина отказа спрашивается до нажатия, а не подставляется строкой.
-  // Раньше сюда уезжало «решили не брать» — через месяц на вопрос «почему
-  // прошли мимо этой закупки» отвечала эта строка, то есть никто.
-  const [why, setWhy] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState("");
-
-  // Набор причин — тот же, что у вкладки «Завершённые»: запрос уже в кэше
-  // страницы, второй раз по сети за ним никто не идёт.
-  const { data: picks } = useQuery({
-    queryKey: ["card-stages"],
-    queryFn: cardsApi.stages,
-    staleTime: Infinity,
-  });
-
-  // «Нет» закрывает лот с итогом, а не просто помечает решение: закупка, мимо
-  // которой прошли, для нас кончилась, и держать её в работе значит каждое
-  // утро открывать лот, чтобы убедиться, что там ничего нового.
-  const finish = useMutation({
-    mutationFn: (what: { outcome: string; reason: string }) =>
-      cardsApi.finish(card.id, what.outcome, what.reason),
-    onSuccess: (fresh) => {
-      setWhy(null);
-      setOutcome("");
-      onDone(fresh);
-    },
-    onError: (error) =>
-      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
-  });
-
-  // «Да» — только решение: лот остаётся в работе, и объяснять тут нечего.
-  // «Нет» идёт другим путём (`finish`): оно закупку закрывает.
-  const decide = useMutation({
-    mutationFn: () => cardsApi.decide(card.id, "yes", ""),
-    onSuccess: (fresh) => {
-      setWhy(null);
-      setOutcome("");
-      onDone(fresh);
-    },
-    onError: (error) =>
-      setTrouble(error instanceof ApiError ? error.message : "Не получилось"),
-  });
-
-  const decides = card.can.includes("decide");
-
   return (
     <Panel className="overflow-hidden">
       {/* Пять отделов, у каждого своя строка. Вместо прежних «Ведёт лот» и
@@ -151,155 +107,17 @@ function People({
         </Kv>
       ))}
 
-      {decides && (
-        <Kv label="Участвуем?">
-          {/* Двумя кнопками в одной рамке, а не переключателем: у решения три
-              состояния — «да», «нет» и «ещё не решали», — и ползунок третьего
-              показать не умеет. */}
-          <span className="inline-flex overflow-hidden rounded-[8px] border border-hairline">
-            <button
-              type="button"
-              onClick={() => {
-                setWhy(null);
-                setOutcome("");
-                decide.mutate();
-              }}
-              disabled={decide.isPending}
-              aria-pressed={card.participation === "yes"}
-              className={cx(
-                "h-[29px] px-3 text-[12.5px] transition",
-                card.participation === "yes"
-                  ? "bg-good font-medium text-white"
-                  : "bg-surface text-ink-secondary hover:bg-plane",
-              )}
-            >
-              Да
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setWhy(card.skip_reason || "");
-                setOutcome(card.outcome !== "none" ? card.outcome : "");
-              }}
-              disabled={decide.isPending}
-              aria-pressed={card.participation === "no"}
-              className={cx(
-                "h-[29px] border-l border-hairline px-3 text-[12.5px] transition",
-                card.participation === "no"
-                  ? "bg-ink-secondary font-medium text-surface"
-                  : "bg-surface text-ink-secondary hover:bg-plane",
-              )}
-            >
-              Нет
-            </button>
-          </span>
-        </Kv>
-      )}
-
-      {/* Почему не участвуем — спрашиваем до нажатия, а не после. Окно с
-          вопросом поверх уже нажатой кнопки человек закрывает крестиком, и в
-          истории остаётся отказ без причины.
-
-          Готовые причины — те же, что у завершённых лотов, и это один и тот
-          же ответ: «не участвуем» закрывает закупку, и через месяц её ищут по
-          той причине, которую здесь выбрали. Свой список рядом означал бы два
-          набора слов об одном, и в отчёте они не сошлись бы. */}
-      {why !== null && (
-        <div className="border-t border-hairline/70 px-[13px] py-2.5">
-          <label className="mb-1.5 block text-[11.5px] text-ink-muted">
-            Почему не участвуем
-          </label>
-
-          <div className="mb-1.5 flex flex-wrap gap-1">
-            {(picks?.done ?? [])
-              .filter((item) => item.needs_reason)
-              .map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  aria-pressed={outcome === item.key}
-                  onClick={() => {
-                    setOutcome(item.key);
-                    // Слово сразу ложится в поле: его дописывают, а не
-                    // заменяют — «Код ТРУ не подходит» само по себе ответ
-                    // неполный, и человек тут же добавляет, чем именно.
-                    // Написанное своими руками не затираем: нажатие по
-                    // соседней причине не должно стирать абзац.
-                    setWhy((был) =>
-                      !был || isWord(picks?.done, был)
-                        ? word(picks?.done, item.key)
-                        : был,
-                    );
-                  }}
-                  className={cx(
-                    "rounded-[6px] border px-2 py-0.5 text-[11.5px] transition",
-                    outcome === item.key
-                      ? "border-ink bg-ink text-surface"
-                      : "border-hairline text-ink-secondary hover:bg-plane",
-                  )}
-                >
-                  {item.title}
-                </button>
-              ))}
-          </div>
-
-          <textarea
-            value={why}
-            onChange={(event) => setWhy(event.target.value)}
-            rows={2}
-            placeholder="Выберите причину выше или напишите свою"
-            className={cx(
-              "w-full resize-y rounded-[8px] border border-baseline bg-surface px-2 py-1.5",
-              "text-[12.5px] leading-relaxed text-ink placeholder:text-ink-muted",
-              "focus:border-series-1 focus:outline-none",
-            )}
-          />
-          <div className="mt-1.5 flex gap-2">
-            <button
-              type="button"
-              disabled={!why.trim() || finish.isPending}
-              onClick={() =>
-                finish.mutate({
-                  // Ничего не выбрали, но написали своими словами — это
-                  // «не участвуем»: решение наше, объяснение своё.
-                  outcome: outcome || "skipped",
-                  // Причина — что написали; не написали ничего, значит ею и
-                  // служит выбранное слово. Пустой она быть не может: служба
-                  // такой отказ не примет, и правильно.
-                  reason: why.trim(),
-                })
-              }
-              title={
-                why.trim() || outcome
-                  ? undefined
-                  : "Выберите причину или напишите свою"
-              }
-              className={cx(
-                "rounded-[7px] bg-ink px-2.5 py-1 text-[12px] font-medium text-surface",
-                "transition disabled:opacity-40",
-              )}
-            >
-              {finish.isPending ? "Сохраняем…" : "Не участвуем"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setWhy(null);
-                setOutcome("");
-              }}
-              className="rounded-[7px] px-2 py-1 text-[12px] text-ink-secondary hover:bg-plane"
-            >
-              Отмена
-            </button>
-          </div>
-        </div>
-      )}
-
-      {why === null && card.participation === "no" && card.skip_reason && (
-        <p className="px-[13px] py-2.5 text-[11.5px] text-ink-muted">
+      {/* Переключателя «Участвуем? Да/Нет» здесь больше нет. Он стоял в
+          самом низу столбца и упирался в плавающую кнопку переписки — нажать
+          его было делом удачи. А вопрос у него был тот же, что у перевода в
+          «Завершённый»: закупка кончилась, и надо сказать чем. Теперь ответ
+          спрашивается там, одним окном и с ценой, если заявку подавали. */}
+      {card.participation === "no" && card.skip_reason && (
+        <p className="border-t border-hairline/70 px-[13px] py-2.5 text-[11.5px] text-ink-muted">
           Не участвуем: {card.skip_reason}
         </p>
       )}
+
       {trouble && (
         <p className="px-[13px] py-2.5 text-[12.5px] text-critical">
           {trouble}
@@ -310,19 +128,6 @@ function People({
 }
 
 /** Строка «подпись — значение». Подпись слева мелким, значение справа. */
-/** Слово выбранной причины — им и объясняем отказ, если своими словами не
- *  написали. Пустой причины служба не примет, и правильно: через месяц на
- *  вопрос «почему прошли мимо» отвечать будет некому. */
-function word(picks: Choice[] | undefined, key: string): string {
-  return picks?.find((item) => item.key === key)?.title ?? "Не участвуем";
-}
-
-/** Стоит ли в поле ровно готовая причина и ничего больше. По этому и решаем,
- *  можно ли её заменить: дописанное человеком затирать нельзя. */
-function isWord(picks: Choice[] | undefined, text: string): boolean {
-  return (picks ?? []).some((item) => item.title === text.trim());
-}
-
 function Kv({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 border-b border-hairline/70 px-[13px] py-2 last:border-b-0">

@@ -18,8 +18,7 @@ import type { Message, Preview } from "@/api/worklist";
  * который движется по ним по очереди, врёт ровно в тот момент, когда юрист
  * пишет замечание, а снабжение уже ищет товар.
  */
-export type LotStatus =
-  "work" | "approval" | "submission" | "waiting" | "done";
+export type LotStatus = "work" | "approval" | "submission" | "waiting" | "done";
 
 /**
  * Чем кончилась закупка по протоколу итогов.
@@ -50,6 +49,8 @@ export type Choice = {
   of: string[];
   /** Итог, который нельзя поставить молча: нужна причина. */
   needs_reason?: boolean;
+  /** Ставится человеком, а не протоколом: заявки по нему не было. */
+  by_decision?: boolean;
 };
 
 /** Кнопка верхнего ряда со своими подпунктами. */
@@ -159,6 +160,9 @@ export type Card = {
   winner: string;
   /** Когда лот взяли в работу. Первый вопрос к залежавшейся карточке. */
   started_at: string;
+  /** Когда статус менялся последний раз. По нему список и отсортирован —
+   *  свежее сверху; порядок задаёт сервер, браузер не пересортировывает. */
+  status_at: string;
   submitted_at: string;
   /**
    * Подана ли заявка.
